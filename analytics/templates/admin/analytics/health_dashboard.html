@@ -1,0 +1,126 @@
+<!-- templates/admin/analytics/health_dashboard.html -->
+{% extends "admin/base_site.html" %}
+{% load static %}
+
+{% block title %}Analytics Health Dashboard{% endblock %}
+
+{% block extrastyle %}
+  {{ block.super }}
+  <link rel="stylesheet" href="{% static 'analytics/css/analytics_admin.css' %}">
+{% endblock %}
+
+{% block breadcrumbs %}
+<div class="breadcrumbs">
+    <a href="{% url 'admin:index' %}">Home</a>
+    &rsaquo; <a href="{% url 'admin:analytics_monthlyoverviewsummary_changelist' %}">Monthly Overview Summaries</a>
+    &rsaquo; Health Dashboard
+</div>
+{% endblock %}
+
+{% block content %}
+<h1>Analytics Health Dashboard</h1>
+
+<div class="module health-score-box">
+    <h2>Overall Health Status</h2>
+    <div class="health-metrics">
+        <div class="score-box {% if health_status.health_score >= 80 %}good{% elif health_status.health_score >= 60 %}average{% else %}poor{% endif %}">
+            <strong>Health Score: {{ health_status.health_score }}%</strong>
+        </div>
+        <div class="neutral-box">
+            <strong>Total Summaries:</strong> {{ health_status.total_summaries }}
+        </div>
+        <div class="neutral-box">
+            <strong>Incomplete Data:</strong> {{ health_status.incomplete_summaries }}
+        </div>
+        <div class="neutral-box">
+            <strong>Stale Summaries:</strong> {{ health_status.stale_summaries_count }}
+        </div>
+    </div>
+</div>
+
+<div class="status-section">
+    <div class="module half">
+        <h2>Current Month Status</h2>
+        <div class="module-body">
+            {% if health_status.current_month_status == 'exists' %}
+                <div class="status-success">
+                    ✅ <strong>Current month summary exists</strong><br>
+                    Last updated: {{ health_status.current_month_last_update|date:"M d, Y H:i" }}
+                </div>
+            {% else %}
+                <div class="status-fail">
+                    ❌ <strong>Current month summary missing</strong><br>
+                    <a href="{% url 'admin:analytics_refresh_summary' %}?month={{ "now"|date:"Y-m" }}" class="button">Create Now</a>
+                </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="module half">
+        <h2>Missing Months</h2>
+        <div class="module-body">
+            {% if missing_months %}
+                <ul class="missing-months">
+                    {% for month in missing_months %}
+                        <li>{{ month|date:"F Y" }} 
+                            <a href="{% url 'admin:analytics_refresh_summary' %}?month={{ month|date:"Y-m" }}" class="small-link">[Create]</a>
+                        </li>
+                    {% endfor %}
+                </ul>
+            {% else %}
+                <div class="status-success">✅ No missing months</div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<div class="module">
+    <h2>Recent Summaries</h2>
+    <table class="summary-table">
+        <thead>
+            <tr>
+                <th>Month</th>
+                <th>Last Updated</th>
+                <th>Complete Data</th>
+                <th>Calc Time</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for summary in recent_summaries %}
+            <tr>
+                <td>
+                    <a href="{% url 'admin:analytics_monthlyoverviewsummary_change' summary.id %}">
+                        {{ summary.month|date:"F Y" }}
+                    </a>
+                </td>
+                <td>{{ summary.calculated_at|timesince }} ago</td>
+                <td>
+                    {% if summary.has_complete_data %}
+                        <span class="status-success">✅ Complete</span>
+                    {% else %}
+                        <span class="status-fail">❌ Incomplete</span>
+                    {% endif %}
+                </td>
+                <td>
+                    {% if summary.calculation_duration_ms %}
+                        {{ summary.calculation_duration_ms }}ms
+                    {% else %}
+                        -
+                    {% endif %}
+                </td>
+                <td>
+                    <a href="{% url 'admin:analytics_refresh_summary' %}?month={{ summary.month|date:"Y-m" }}" 
+                       class="button small-button">Refresh</a>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<div class="bottom-buttons">
+    <a href="{% url 'admin:analytics_bulk_operations' %}" class="button default">Bulk Operations</a>
+    <a href="{% url 'admin:analytics_monthlyoverviewsummary_changelist' %}" class="button">Back to Summaries</a>
+</div>
+{% endblock %}
