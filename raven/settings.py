@@ -47,6 +47,7 @@ INSTALLED_APPS = [
     'hr',
     'regulatory',
     'corsheaders',
+    'analytics',
 ]
 
 MIDDLEWARE = [
