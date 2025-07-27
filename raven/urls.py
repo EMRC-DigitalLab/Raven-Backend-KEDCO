@@ -91,6 +91,7 @@ from regulatory.views import (
 
 from hr.views import DepartmentViewSet, RoleViewSet, StaffViewSet
 from hr.views import StaffSummaryView
+import analytics
 
 
 
@@ -146,9 +147,17 @@ router.register(r'hr/staff', StaffViewSet, basename='hr-staff')
 
 
 urlpatterns = [
+    path('api/', include('analytics.urls')),
     path('admin/', admin.site.urls),
     path('api/', include(router.urls)),
-    path('api/overview/', OverviewAPIView.as_view(), name='overview'),
+
+
+
+
+
+
+    
+    # path('api/overview/', OverviewAPIView.as_view(), name='overview'),
     path('api/metrics/feeder/', FeederMetricsView.as_view(), name='feeder-metrics'),
     path('api/metrics/technical-summary/', TechnicalMetricsView.as_view(), name='technical-summary'),
     path('api/metrics/technical-monthly/', TechnicalMonthlySummaryView.as_view(), name='technical-monthly-summary'),
