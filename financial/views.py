@@ -1418,6 +1418,7 @@ def sales_rep_performance_view(request, rep_id):
     mode = request.GET.get("mode", "monthly")
     year = int(request.GET.get("year", datetime.now().year))
     month = int(request.GET.get("month", datetime.now().month))
+    transformer_name = request.GET.get("transformer")  # New parameter
 
     start_date = datetime(year, month, 1)
     end_date = (start_date + relativedelta(months=1)) - timedelta(days=1)
@@ -1426,9 +1427,30 @@ def sales_rep_performance_view(request, rep_id):
     prev_month_start = start_date - relativedelta(months=1)
     prev_month_end = (prev_month_start + relativedelta(months=1)) - timedelta(days=1)
 
+    # Base query filter for sales rep
+    base_filter = {"sales_rep": rep}
+    
+    # If transformer is specified, add it to the filter
+    transformer_obj = None
+    if transformer_name:
+        try:
+            transformer_obj = DistributionTransformer.objects.get(
+                name__iexact=transformer_name,
+                id__in=rep.assigned_transformers.values_list('id', flat=True)
+            )
+            base_filter["transformer"] = transformer_obj
+        except DistributionTransformer.DoesNotExist:
+            return Response({
+                "error": f"Transformer '{transformer_name}' not found or not assigned to this sales rep."
+            }, status=status.HTTP_404_NOT_FOUND)
+        except DistributionTransformer.MultipleObjectsReturned:
+            return Response({
+                "error": f"Multiple transformers found with name '{transformer_name}'. Please be more specific."
+            }, status=status.HTTP_400_BAD_REQUEST)
+
     # Current month summary
     current_summary = MonthlyCommercialSummary.objects.filter(
-        sales_rep=rep,
+        **base_filter,
         month__range=(start_date, end_date)
     ).aggregate(
         revenue_billed=Sum("revenue_billed"),
@@ -1439,7 +1461,7 @@ def sales_rep_performance_view(request, rep_id):
 
     # Previous month summary for delta calculations
     previous_summary = MonthlyCommercialSummary.objects.filter(
-        sales_rep=rep,
+        **base_filter,
         month__range=(prev_month_start, prev_month_end)
     ).aggregate(
         revenue_billed=Sum("revenue_billed"),
@@ -1489,8 +1511,8 @@ def sales_rep_performance_view(request, rep_id):
     active_accounts_delta = calculate_percentage_change(active_accounts, prev_active_accounts)
     suspended_accounts_delta = calculate_percentage_change(suspended_accounts, prev_suspended_accounts)
 
-    # All-time summary
-    all_time_summary = MonthlyCommercialSummary.objects.filter(sales_rep=rep).aggregate(
+    # All-time summary (filtered by transformer if specified)
+    all_time_summary = MonthlyCommercialSummary.objects.filter(**base_filter).aggregate(
         all_time_billed=Sum("revenue_billed"),
         all_time_collected=Sum("revenue_collected")
     )
@@ -1504,7 +1526,7 @@ def sales_rep_performance_view(request, rep_id):
         month_end = (month_start + relativedelta(months=1)) - timedelta(days=1)
 
         summary = MonthlyCommercialSummary.objects.filter(
-            sales_rep=rep,
+            **base_filter,
             month__range=(month_start, month_end)
         ).aggregate(
             revenue_billed=Sum("revenue_billed") or 0,
@@ -1524,7 +1546,8 @@ def sales_rep_performance_view(request, rep_id):
 
     monthly_summaries.reverse()  # Reverse to show oldest to newest
 
-    return Response({
+    # Prepare response data
+    response_data = {
         "sales_rep": {
             "id": str(rep.id),
             "name": rep.name
@@ -1561,7 +1584,21 @@ def sales_rep_performance_view(request, rep_id):
         },
         "outstanding_all_time": outstanding_all_time,
         "previous_months": monthly_summaries
-    })
+    }
+
+    # Add transformer info to response if filtered
+    if transformer_obj:
+        response_data["filtered_by_transformer"] = {
+            "id": str(transformer_obj.id),
+            "name": transformer_obj.name,
+            "feeder": transformer_obj.feeder.name if transformer_obj.feeder else None,
+            "business_district": transformer_obj.feeder.business_district.name if transformer_obj.feeder and transformer_obj.feeder.business_district else None,
+            "state": transformer_obj.feeder.business_district.state.name if transformer_obj.feeder and transformer_obj.feeder.business_district and transformer_obj.feeder.business_district.state else None
+        }
+    else:
+        response_data["filtered_by_transformer"] = None
+
+    return Response(response_data)
 
 @api_view(["GET"])
 def list_sales_reps(request):

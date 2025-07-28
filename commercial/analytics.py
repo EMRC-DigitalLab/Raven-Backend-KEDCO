@@ -151,7 +151,7 @@ def get_commercial_overview_data(mode, year=None, month=None, week=None, from_da
 
         append_with_delta(data["energy_delivered"], energy_delivered, label)
         append_with_delta(data["energy_billed"], energy_billed, label)
-        append_with_delta(data["energy_collected"], revenue_collected, label)
+        append_with_delta(data["energy_collected"], (revenue_collected * 1000) / 60, label)
 
         data["billing_efficiency"].append({"period": label, "value": float(billing_eff_pct)})
         data["collection_efficiency"].append({"period": label, "value": float(collection_eff_pct)})
