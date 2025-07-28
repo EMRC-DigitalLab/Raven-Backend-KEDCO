@@ -56,7 +56,7 @@ from technical.views import (
     all_business_districts_technical_summary,
     business_district_technical_summary,
     FeederAvailabilityOverview,
-    service_band_technical_metrics,
+    technical_service_band_summary,
     TransformerAvailabilityOverview
 )
 
@@ -204,7 +204,7 @@ urlpatterns = [
     path('api/technical/overview/business-district/', business_district_technical_summary, name='business-district-technical-summary'),
     path('api/technical/feeder/', FeederAvailabilityOverview.as_view(), name='feeder-availability-overview'),
     path("api/technical/transformer/", TransformerAvailabilityOverview.as_view(), name="transformer-availability"),
-    path('api/technical/service-band-technical-metrics/', service_band_technical_metrics, name='service-band-technical-metrics'),
+    path('api/technical/service-band-technical-metrics/', technical_service_band_summary, name='service-band-technical-metrics'),
 
 
 
