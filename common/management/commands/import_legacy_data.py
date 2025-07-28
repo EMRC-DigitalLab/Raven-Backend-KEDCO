@@ -37,7 +37,7 @@ class Command(BaseCommand):
             # self.import_districts(conn)
             # self.import_injection_stations(conn)
             # self.import_feeders(conn)
-            # self.import_feeder_interruptions(conn)
+            self.import_feeder_interruptions(conn)
             # self.import_expenses_with_breakdowns(conn)
             # self.import_hourly_load(conn)
             # self.import_staff(conn)
@@ -45,7 +45,7 @@ class Command(BaseCommand):
             # self.import_sales_reps(conn)
             # self.import_daily_collections(conn)
             # self.import_energy_delivered(conn)
-            self.import_monthly_commercial_summary(conn)
+            # self.import_monthly_commercial_summary(conn)
 
 
         self.stdout.write(self.style.SUCCESS('Legacy data imported successfully.'))
@@ -351,7 +351,6 @@ class Command(BaseCommand):
                 self.stdout.write(f"  - {row['reason']} for feeder {row['feeder_id']}")
 
 
-
     def import_staff(self, conn):
         from tqdm import tqdm # type: ignore
         self.stdout.write(self.style.HTTP_INFO("\nImporting HR Staff..."))
@@ -446,25 +445,118 @@ class Command(BaseCommand):
 
         count = 0
         skipped = 0
+        batch_size = 1000
 
+        # Comprehensive fault type mapping
         FAULT_TYPE_MAP = {
-            "Earth Fault": "E/F",
-            "Overcurrent Fault": "O/C",
-            "Overcurrent & Earth Fault": "O/C & E/F",
-            "E/F": "E/F",
-            "O/C": "O/C",
-            "O/C & E/F": "O/C & E/F",
-            None: "N/A",
-            "": "N/A",
+        # Original mappings
+        "Earth Fault": "E/F",
+        "Overcurrent Fault": "O/C",
+        "Overcurrent & Earth Fault": "O/C & E/F",
+        "E/F": "E/F",
+        "O/C": "O/C",
+        "O/C & E/F": "O/C & E/F",
+        
+        # Extended mappings for new types
+        "No RI": "NO RI",
+        "Load Shedding": "L/S",
+        "Load Shedding (L/S)": "L/S",
+        "Overload": "O/S",
+        "Overcurrent (O/S)": "O/S",
+        "Transformer Fault": "T/F",
+        "Transformer Fault (T/F)": "T/F",
+        "Bus Fault": "B/F",
+        "Breakdown Fault": "B/F",
+        "Bus/Breakdown Fault (B/F)": "B/F",
+        "Overheating": "O/N",
+        "Overtemp": "O/N",
+        "Overheating/Overtemp (O/N)": "O/N",
+        "Open Earth": "O/E",
+        "Open Earth (O/E)": "O/E",
+        "Phase Open": "P/O",
+        "Phase Open (P/O)": "P/O",
+        "Over Frequency": "O/F",
+        "Over Frequency (O/F)": "O/F",
+        "Phase Missing": "P/M",
+        "Phase Metering": "P/M",
+        "Phase Missing/Phase Metering (P/M)": "P/M",
+        "Other Faults": "O",
+        "Operational Fault": "O",
+        "Other Faults/Operational Fault (O)": "O",
+        "Trip Fault": "T/S",
+        "Surge Fault": "T/S",
+        "Trip/Surge Fault (T/S)": "T/S",
+        "Load Shedding – General Supply": "L/S GS",
+        "Load Shedding General Supply": "L/S GS",
+        "Maintenance": "MTNC",
+        "Maintenance (MTNC)": "MTNC",
+        "MTCE": "MTCE",
+        "Open Circuit & Earth Fault": "OC & E/F",
+        "OC & E/F": "OC & E/F",
+        "Emergency": "EM/D",
+        "Device": "EM/D",
+        "Emergency/Device (EM/D)": "EM/D",
+        "330 kV Line Fault": "330KV L/F",
+        "330KV L/F": "330KV L/F",
+        "Switch Off": "OFF",
+        "Feeder Off": "OFF",
+        "Switch Off/Feeder Off (OFF)": "OFF",
+        "Short Circuit": "S/C",
+        "Short Circuit (S/C)": "S/C",
+        "132 kV Earth Fault": "132KV E/F",
+        "132KV E/F": "132KV E/F",
+        "132 kV Line Fault": "132KV L/F",
+        "132KV L/F": "132KV L/F",
+        "330 kV Line Shelving": "330KV L/S",
+        "330 kV Load Shedding": "330KV L/S",
+        "330KV L/S": "330KV L/S",
+        "132 kV Circuit Breaker Failure": "132KV CB/F",
+        "132KV CB/F": "132KV CB/F",
+        "Double Circuit": "D/C",
+        "Direct Current": "D/C",
+        "Double Circuit/Direct Current (D/C)": "D/C",
+        "Incoming Over Current": "IN O/C",
+        "Infeeder OC": "IN O/C",
+        "Incoming Over Current/Infeeder OC (IN O/C)": "IN O/C",
+        "Thermal Load Shedding": "T/LS",
+        "Thermal Load Shedding (T/LS)": "T/LS",
+        "132 kV Maintenance": "132KV MTCE",
+        "132KV MTCE": "132KV MTCE",
+        "Lightning Impulse": "LIM",
+        "Limit": "LIM",
+        "Lightning Impulse/Limit (LIM)": "LIM",
+        "tcn": "tcn",
+        "fault": "fault",
+        "permit": "permit",
+        
+        # Default cases
+        None: "N/A",
+        "": "N/A",
         }
 
         # Fault types to skip completely (lowercase match)
         SKIP_VALUES = {
-            "fault",
-            "ls",
-            "tcn",
             "there is nothing here since the feeder was opened on planned outage( check g43 for detail)"
         }
+
+        # Pre-load all feeders into memory for fast lookup
+        self.stdout.write(self.style.HTTP_INFO("Pre-loading feeders..."))
+        feeder_lookup = {feeder.slug: feeder for feeder in Feeder.objects.all()}
+        self.stdout.write(self.style.HTTP_INFO(f"Loaded {len(feeder_lookup)} feeders"))
+
+        # Pre-load existing interruptions to avoid duplicates
+        self.stdout.write(self.style.HTTP_INFO("Pre-loading existing interruptions..."))
+        existing_interruptions = set()
+        for interruption in FeederInterruption.objects.select_related('feeder').values(
+            'feeder__slug', 'occurred_at', 'interruption_type'
+        ):
+            key = (
+                interruption['feeder__slug'],
+                interruption['occurred_at'],
+                interruption['interruption_type']
+            )
+            existing_interruptions.add(key)
+        self.stdout.write(self.style.HTTP_INFO(f"Loaded {len(existing_interruptions)} existing interruptions"))
 
         with conn.cursor() as cursor:
             cursor.execute("""
@@ -474,11 +566,14 @@ class Command(BaseCommand):
             """)
 
             rows = cursor.fetchall()
+            new_interruptions = []
+            processed_keys = set()  # Track what we've already processed in this batch
 
             for row in tqdm(rows, desc="Processing Fault Records", unit="row"):
                 feeder_slug = row["feeder_id"].strip()
-                feeder = Feeder.objects.filter(slug=feeder_slug).first()
-
+            
+                # Fast feeder lookup
+                feeder = feeder_lookup.get(feeder_slug)
                 if not feeder:
                     self.stdout.write(self.style.WARNING(f"Feeder not found: {feeder_slug}"))
                     skipped += 1
@@ -487,18 +582,31 @@ class Command(BaseCommand):
                 raw_fault_type = (row.get("fault_type") or "").strip()
                 fault_type_lower = raw_fault_type.lower()
 
+                # Skip invalid fault types
                 if fault_type_lower in SKIP_VALUES or len(raw_fault_type) > 100:
                     self.stdout.write(self.style.WARNING(f"Skipped invalid fault type: '{raw_fault_type}'"))
                     skipped += 1
                     continue
 
-                # Map fault type to internal code (or default to "N/A")
-                interruption_type = FAULT_TYPE_MAP.get(raw_fault_type, "N/A")[:50]
+                # Map fault type with fuzzy matching for better coverage
+                interruption_type = FAULT_TYPE_MAP.get(raw_fault_type)
+                if not interruption_type:
+                    # Try case-insensitive matching
+                    for key, value in FAULT_TYPE_MAP.items():
+                        if key and raw_fault_type.lower() == key.lower():
+                            interruption_type = value
+                            break
+                
+                    # If still not found, default to "N/A" but truncate
+                    if not interruption_type:
+                        interruption_type = "N/A"
+            
+                # Ensure max length
+                interruption_type = interruption_type[:100]
 
                 occurred_at = row["time_of_occurrence"]
                 restored_at = row.get("time_of_restoration")
                 description = parse_nullable(row.get("description"), "").strip()
-                load_interrupted = row.get("load_interrupted_mw") or 0.0
 
                 # Ensure datetimes are timezone-aware
                 if occurred_at and occurred_at.tzinfo is None:
@@ -506,22 +614,41 @@ class Command(BaseCommand):
                 if restored_at and restored_at.tzinfo is None:
                     restored_at = make_aware(restored_at)
 
-                # Avoid duplicates
-                exists = FeederInterruption.objects.filter(
-                    feeder=feeder,
-                    occurred_at=occurred_at,
-                    interruption_type=interruption_type,
-                ).exists()
-
-                if not exists:
-                    FeederInterruption.objects.create(
-                        feeder=feeder,
-                        occurred_at=occurred_at,
-                        restored_at=restored_at,
-                        interruption_type=interruption_type,
-                        description=description,
+                # Create unique key for duplicate checking
+                unique_key = (feeder_slug, occurred_at, interruption_type)
+            
+                # Check if already exists (in DB or current batch)
+                if unique_key not in existing_interruptions and unique_key not in processed_keys:
+                    new_interruptions.append(
+                        FeederInterruption(
+                            feeder=feeder,
+                            occurred_at=occurred_at,
+                            restored_at=restored_at,
+                            interruption_type=interruption_type,
+                            description=description,
+                        )
                     )
+                    processed_keys.add(unique_key)
                     count += 1
+
+                    # Batch insert when we reach batch_size
+                    if len(new_interruptions) >= batch_size:
+                        FeederInterruption.objects.bulk_create(
+                            new_interruptions, 
+                            batch_size=batch_size,
+                            ignore_conflicts=True
+                        )
+                        self.stdout.write(self.style.HTTP_INFO(f"Inserted batch of {len(new_interruptions)} records"))
+                        new_interruptions = []
+
+            # Insert remaining records
+            if new_interruptions:
+                FeederInterruption.objects.bulk_create(
+                    new_interruptions, 
+                    batch_size=batch_size,
+                    ignore_conflicts=True
+                )
+                self.stdout.write(self.style.HTTP_INFO(f"Inserted final batch of {len(new_interruptions)} records"))
 
         self.stdout.write(self.style.SUCCESS(f"\nFeeder interruptions imported: {count} entries."))
         self.stdout.write(self.style.WARNING(f"Skipped: {skipped} rows (e.g., missing feeder or invalid fault type)"))

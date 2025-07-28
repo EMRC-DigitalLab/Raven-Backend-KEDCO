@@ -212,3 +212,236 @@ class MonthlyOverviewSummary(UUIDModel, models.Model):
         if self.is_current_month:
             return datetime.now() - self.calculated_at > timedelta(hours=max_age_hours)
         return False
+    
+
+
+
+class MonthlyTechnicalSummary(UUIDModel, models.Model):
+    """
+    Pre-calculated monthly technical metrics for fast dashboard loading.
+    Supports filtering by state, business district, and individual feeders.
+    """
+    month = models.DateField(
+        db_index=True,
+        help_text="First day of the month (e.g., 2025-01-01)"
+    )
+    
+    # Filtering dimensions - nullable for aggregated views
+    state = models.ForeignKey(
+        'common.State', 
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        help_text="State filter (null = all states)"
+    )
+    business_district = models.ForeignKey(
+        'common.BusinessDistrict',
+        on_delete=models.CASCADE, 
+        null=True,
+        blank=True,
+        help_text="Business district filter (null = all districts)"
+    )
+    feeder = models.ForeignKey(
+        'common.Feeder',
+        on_delete=models.CASCADE,
+        null=True, 
+        blank=True,
+        help_text="Specific feeder filter (null = all feeders)"
+    )
+    
+    # === ENERGY METRICS ===
+    total_energy_delivered = models.DecimalField(
+        max_digits=15,
+        decimal_places=4,
+        default=0,
+        help_text="Total energy delivered in MWh"
+    )
+    
+    # === LOAD METRICS ===
+    avg_peak_load = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        default=0,
+        help_text="Average peak load in MW"
+    )
+    max_peak_load = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        default=0,
+        help_text="Maximum peak load in MW"
+    )
+    
+    # === SUPPLY QUALITY METRICS ===
+    avg_hours_of_supply = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=0,
+        validators=[MinValueValidator(0), MaxValueValidator(24)],
+        help_text="Average hours of electricity supply per day"
+    )
+    total_supply_hours = models.DecimalField(
+        max_digits=8,
+        decimal_places=2,
+        default=0,
+        help_text="Total hours of supply in the month"
+    )
+    
+    # === INTERRUPTION METRICS ===
+    total_interruptions = models.PositiveIntegerField(
+        default=0,
+        help_text="Total number of interruptions"
+    )
+    avg_daily_interruptions = models.DecimalField(
+        max_digits=6,
+        decimal_places=2,
+        default=0,
+        help_text="Average interruptions per day"
+    )
+    avg_interruption_duration = models.DecimalField(
+        max_digits=6,
+        decimal_places=2,
+        default=0,
+        help_text="Average duration of interruptions in hours"
+    )
+    total_interruption_hours = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        default=0,
+        help_text="Total hours of interruptions"
+    )
+    avg_turnaround_time = models.DecimalField(
+        max_digits=6,
+        decimal_places=2,
+        default=0,
+        help_text="Average restoration time in hours"
+    )
+    
+    # === INFRASTRUCTURE METRICS ===
+    active_feeder_count = models.PositiveIntegerField(
+        default=0,
+        help_text="Number of active feeders"
+    )
+    total_customer_count = models.PositiveIntegerField(
+        default=0,
+        help_text="Total customers served"
+    )
+    
+    # === INTERRUPTION BREAKDOWN BY TYPE ===
+    # Store detailed breakdown as JSON for maximum flexibility
+    interruption_breakdown_json = models.JSONField(
+        default=dict,
+        help_text="Detailed breakdown of interruption hours by specific fault type"
+    )
+    
+    # Keep summary categories for high-level reporting
+    load_shedding_hours = models.DecimalField(max_digits=8, decimal_places=2, default=0)
+    equipment_fault_hours = models.DecimalField(max_digits=8, decimal_places=2, default=0)
+    line_fault_hours = models.DecimalField(max_digits=8, decimal_places=2, default=0)
+    maintenance_hours = models.DecimalField(max_digits=8, decimal_places=2, default=0)
+    other_fault_hours = models.DecimalField(max_digits=8, decimal_places=2, default=0)
+    
+    # Separate turnaround time (excluding load shedding)
+    avg_fault_turnaround_time = models.DecimalField(
+        max_digits=6,
+        decimal_places=2,
+        default=0,
+        help_text="Average restoration time for actual faults (excluding load shedding)"
+    )
+    
+    # === RELIABILITY INDICES ===
+    saifi = models.DecimalField(
+        max_digits=8,
+        decimal_places=4,
+        default=0,
+        help_text="System Average Interruption Frequency Index"
+    )
+    saidi = models.DecimalField(
+        max_digits=8,
+        decimal_places=4,
+        default=0,
+        help_text="System Average Interruption Duration Index"
+    )
+    
+    # === METADATA ===
+    calculated_at = models.DateTimeField(auto_now=True)
+    calculation_duration = models.DurationField(null=True, blank=True)
+    has_complete_data = models.BooleanField(default=True)
+    
+    class Meta:
+        ordering = ['-month', 'state', 'business_district', 'feeder']
+        verbose_name = "Monthly Technical Summary"
+        verbose_name_plural = "Monthly Technical Summaries"
+        
+        # Ensure uniqueness across filtering dimensions
+        unique_together = [
+            ('month', 'state', 'business_district', 'feeder')
+        ]
+        
+        indexes = [
+            models.Index(fields=['month']),
+            models.Index(fields=['-month']),
+            models.Index(fields=['month', 'state']),
+            models.Index(fields=['month', 'business_district']),
+            models.Index(fields=['month', 'feeder']),
+            models.Index(fields=['calculated_at']),
+            models.Index(fields=['has_complete_data', 'month']),
+        ]
+    
+    def __str__(self):
+        filter_desc = "All"
+        if self.feeder:
+            filter_desc = f"Feeder: {self.feeder.name}"
+        elif self.business_district:
+            filter_desc = f"District: {self.business_district.name}"
+        elif self.state:
+            filter_desc = f"State: {self.state.name}"
+        
+        return f"Technical Summary - {self.month.strftime('%Y-%m')} - {filter_desc}"
+    
+    @property
+    def filter_level(self):
+        """Return the filtering level for this summary"""
+        if self.feeder:
+            return 'feeder'
+        elif self.business_district:
+            return 'district'
+        elif self.state:
+            return 'state'
+        else:
+            return 'national'
+    
+    @property
+    def availability_percentage(self):
+        """Calculate system availability percentage"""
+        total_possible_hours = 24 * 30  # Approximate month hours
+        if total_possible_hours > 0:
+            return round((float(self.avg_hours_of_supply) / 24) * 100, 2)
+        return 0
+    
+    @property
+    def interruption_breakdown_dict(self):
+        """Return detailed interruption breakdown from JSON"""
+        return self.interruption_breakdown_json or {}
+    
+    @property
+    def summary_breakdown_dict(self):
+        """Return high-level summary breakdown categories"""
+        return {
+            'Load Shedding': float(self.load_shedding_hours),
+            'Equipment Fault': float(self.equipment_fault_hours),
+            'Line Fault': float(self.line_fault_hours),
+            'Maintenance': float(self.maintenance_hours),
+            'Other': float(self.other_fault_hours),
+        }
+    
+    def get_efficiency_metrics(self):
+        """Get key efficiency metrics as a dictionary"""
+        return {
+            'avg_hours_of_supply': float(self.avg_hours_of_supply),
+            'avg_interruption_duration': float(self.avg_interruption_duration),
+            'avg_turnaround_time': float(self.avg_turnaround_time),
+            'availability_percentage': self.availability_percentage,
+            'total_interruptions': self.total_interruptions,
+            'saifi': float(self.saifi),
+            'saidi': float(self.saidi),
+        }

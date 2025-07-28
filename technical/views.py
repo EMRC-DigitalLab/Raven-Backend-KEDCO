@@ -730,44 +730,329 @@ def calculate_avg_interruption_duration(from_date, to_date, feeder_ids):
     return round(total_hours / count, 2) if count else 0
 
 
+# technical/views.py (replace the existing all_states_technical_summary function)
+
+from rest_framework.decorators import api_view
+from rest_framework.response import Response
+from django.db.models import Count, Sum, Avg, Max, Q
+from django.core.cache import cache
+from datetime import datetime, timedelta
+import hashlib
+
+from analytics.models import MonthlyTechnicalSummary
+from common.models import State
+from technical.models import HourlyLoad, FeederInterruption
+from commercial.models import Customer
+
+
 @api_view(["GET"])
 def all_states_technical_summary(request):
+    """
+    Optimized technical summary for all states using pre-calculated data where possible.
+    Falls back to real-time calculation when summary data is missing.
+    """
     from_date, to_date = get_date_range_from_request(request)
-
-    states = Feeder.objects.values_list("business_district__state__name", flat=True).distinct()
+    
+    # Debug logging
+    print(f"DEBUG: Request params: {dict(request.GET)}")
+    print(f"DEBUG: Calculated date range: {from_date} to {to_date}")
+    
+    # Try cache first
+    cache_key = _get_states_cache_key(from_date, to_date)
+    print(f"DEBUG: Cache key: {cache_key}")
+    
+    cached_response = cache.get(cache_key)
+    if cached_response:
+        print("DEBUG: Returning cached response")
+        return Response(cached_response)
+    
+    print("DEBUG: No cache found, calculating fresh data")
+    
+    # Get states that have feeders (exclude states with no infrastructure)
+    states_with_feeders = State.objects.filter(
+        districts__feeders__isnull=False
+    ).distinct().order_by('name')
+    
     overview = []
+    
+    for state in states_with_feeders:
+        try:
+            # Try to use summary data first
+            state_metrics = _get_state_metrics_from_summary(state, from_date, to_date)
+            
+            if not state_metrics:
+                # Fallback to real-time calculation
+                state_metrics = _calculate_state_metrics_realtime(state, from_date, to_date)
+            
+            if state_metrics:  # Only include states with data
+                overview.append({
+                    "state": state.name,
+                    "metrics": state_metrics
+                })
+                
+        except Exception as e:
+            # Log error but continue with other states
+            print(f"Error calculating metrics for state {state.name}: {str(e)}")
+            continue
+    
+    response_data = {"overview": overview}
+    
+    # Cache for 10 minutes (shorter than monthly summaries since this aggregates across months)
+    cache.set(cache_key, response_data, 600)
+    print(f"DEBUG: Cached response with key: {cache_key}")
+    
+    return Response(response_data)
 
-    for state in states:
-        feeders = Feeder.objects.filter(business_district__state__name=state)
-        feeder_ids = feeders.values_list("id", flat=True)
 
-        avg_supply = calculate_avg_supply(from_date, to_date, feeder_ids)
-        avg_duration = calculate_avg_interruption_duration(from_date, to_date, feeder_ids)
-        turnaround = avg_duration  # same as duration
-        ftc = 80  # placeholder
+def _get_states_cache_key(from_date, to_date):
+    """Generate cache key for states technical summary"""
+    date_str = f"{from_date}_{to_date}"
+    hash_key = hashlib.md5(date_str.encode()).hexdigest()[:8]
+    return f"states_technical_{hash_key}"
 
-        feeder_count = feeders.count()
-        peak_load = HourlyLoad.objects.filter(
-            feeder_id__in=feeder_ids, date__range=(from_date, to_date)
-        ).aggregate(peak=Max("load_mw"))["peak"] or 0
 
-        customer_population = 20000 + feeder_count * 100  # mock calculation
+def _get_state_metrics_from_summary(state, from_date, to_date):
+    """
+    Try to get state metrics from pre-calculated summary data.
+    Returns None if summary data is not available for the date range.
+    """
+    # Convert date range to months
+    months = _get_months_in_range(from_date, to_date)
+    
+    # Get state-level summaries for these months
+    state_summaries = MonthlyTechnicalSummary.objects.filter(
+        state=state,
+        business_district__isnull=True,  # State-level only
+        feeder__isnull=True,
+        month__in=months,
+        has_complete_data=True
+    )
+    
+    # If we don't have summaries for all months, fall back to real-time
+    if state_summaries.count() != len(months):
+        return None
+    
+    # Aggregate across months (weighted by days in month where applicable)
+    total_days = (to_date - from_date).days + 1
+    
+    # Calculate weighted averages and totals
+    total_supply_hours = state_summaries.aggregate(
+        total=Sum('total_supply_hours')
+    )['total'] or 0
+    
+    total_interruption_hours = state_summaries.aggregate(
+        total=Sum('total_interruption_hours')
+    )['total'] or 0
+    
+    total_interruptions = state_summaries.aggregate(
+        total=Sum('total_interruptions')
+    )['total'] or 0
+    
+    # Get the most recent summary for current values (feeder count, customer count, peak load)
+    latest_summary = state_summaries.order_by('-month').first()
+    
+    if not latest_summary:
+        return None
+    
+    # Calculate averages
+    avg_supply = total_supply_hours / len(months) if len(months) > 0 else 0
+    avg_duration = total_interruption_hours / total_interruptions if total_interruptions > 0 else 0
+    
+    # Feeder Tripping Count (FTC) - total interruptions in the period
+    ftc = total_interruptions
+    
+    return {
+        "avg_supply": round(float(avg_supply), 2),
+        "avg_duration": round(float(avg_duration), 2),
+        "turnaround": round(float(avg_duration), 2),  # Same as duration for restoration
+        "ftc": int(ftc),
+        "feeder_count": latest_summary.active_feeder_count,
+        "peak_load": float(latest_summary.max_peak_load),
+        "customer_population": latest_summary.total_customer_count,
+        "_source": "summary"
+    }
 
-        overview.append({
-            "state": state,
-            "metrics": {
-                "avg_supply": avg_supply,
-                "avg_duration": avg_duration,
-                "turnaround": turnaround,
-                "ftc": ftc,
-                "feeder_count": feeder_count,
-                "peak_load": peak_load,
-                "customer_population": customer_population,
-            }
-        })
 
-    return Response({"overview": overview})
+def _calculate_state_metrics_realtime(state, from_date, to_date):
+    """
+    Calculate state metrics in real-time when summary data is not available.
+    This is the corrected version of the original calculation logic.
+    """
+    # Get all feeders in this state
+    feeders = Feeder.objects.filter(business_district__state=state)
+    feeder_ids = list(feeders.values_list("id", flat=True))
+    
+    if not feeder_ids:
+        return None
+    
+    # 1. Average Supply Hours
+    # Use DailyHoursOfSupply if available, otherwise calculate from HourlyLoad
+    try:
+        from technical.models import DailyHoursOfSupply
+        daily_supply = DailyHoursOfSupply.objects.filter(
+            feeder_id__in=feeder_ids,
+            date__range=(from_date, to_date)
+        )
+        
+        if daily_supply.exists():
+            avg_supply = daily_supply.aggregate(avg=Avg('hours_supplied'))['avg'] or 0
+        else:
+            # Fallback: count hours with load > 0
+            hourly_supply = HourlyLoad.objects.filter(
+                feeder_id__in=feeder_ids,
+                date__range=(from_date, to_date),
+                load_mw__gt=0
+            ).values('feeder', 'date').annotate(
+                daily_hours=Count('hour')
+            )
+            avg_supply = hourly_supply.aggregate(avg=Avg('daily_hours'))['avg'] or 0
+            
+    except ImportError:
+        # DailyHoursOfSupply doesn't exist, use hourly method
+        hourly_supply = HourlyLoad.objects.filter(
+            feeder_id__in=feeder_ids,
+            date__range=(from_date, to_date),
+            load_mw__gt=0
+        ).values('feeder', 'date').annotate(
+            daily_hours=Count('hour')
+        )
+        avg_supply = hourly_supply.aggregate(avg=Avg('daily_hours'))['avg'] or 0
+    
+    # 2. Average Interruption Duration & FTC
+    interruptions = FeederInterruption.objects.filter(
+        feeder_id__in=feeder_ids,
+        occurred_at__date__range=(from_date, to_date)
+    )
+    
+    # Total interruptions count (FTC - Feeder Tripping Count)
+    ftc = interruptions.count()
+    
+    # Average duration for restored interruptions only
+    restored_interruptions = interruptions.filter(restored_at__isnull=False)
+    
+    if restored_interruptions.exists():
+        total_duration = sum(
+            (interruption.restored_at - interruption.occurred_at).total_seconds() / 3600
+            for interruption in restored_interruptions
+        )
+        avg_duration = total_duration / restored_interruptions.count()
+    else:
+        avg_duration = 0
+    
+    # 3. Peak Load
+    peak_load = HourlyLoad.objects.filter(
+        feeder_id__in=feeder_ids,
+        date__range=(from_date, to_date)
+    ).aggregate(peak=Max("load_mw"))["peak"] or 0
+    
+    # 4. Customer Population
+    customer_population = Customer.objects.filter(
+        transformer__feeder_id__in=feeder_ids
+    ).count()
+    
+    # 5. Feeder Count
+    feeder_count = len(feeder_ids)
+    
+    return {
+        "avg_supply": round(float(avg_supply), 2),
+        "avg_duration": round(float(avg_duration), 2),
+        "turnaround": round(float(avg_duration), 2),  # Same as duration
+        "ftc": ftc,
+        "feeder_count": feeder_count,
+        "peak_load": float(peak_load),
+        "customer_population": customer_population,
+        "_source": "realtime"
+    }
 
+
+def _get_months_in_range(from_date, to_date):
+    """Get list of first-of-month dates that fall within the date range"""
+    months = []
+    current = from_date.replace(day=1)
+    
+    while current <= to_date:
+        months.append(current)
+        # Move to next month
+        if current.month == 12:
+            current = current.replace(year=current.year + 1, month=1)
+        else:
+            current = current.replace(month=current.month + 1)
+    
+    return months
+
+
+# Keep the original helper functions if they exist elsewhere, or define them:
+def get_date_range_from_request(request):
+    """
+    Extract date range from request parameters with proper parameter handling.
+    """
+    # Check for explicit from/to dates
+    from_date_str = request.GET.get('from')
+    to_date_str = request.GET.get('to')
+    
+    if from_date_str and to_date_str:
+        try:
+            from_date = datetime.strptime(from_date_str, '%Y-%m-%d').date()
+            to_date = datetime.strptime(to_date_str, '%Y-%m-%d').date()
+            return from_date, to_date
+        except ValueError:
+            pass  # Fall through to other methods
+    
+    # Check for year/month parameters
+    year = request.GET.get('year')
+    month = request.GET.get('month')
+    
+    if year and month:
+        try:
+            year = int(year)
+            month = int(month)
+            from_date = datetime(year, month, 1).date()
+            
+            # Calculate last day of the month
+            if month == 12:
+                to_date = datetime(year + 1, 1, 1).date() - timedelta(days=1)
+            else:
+                to_date = datetime(year, month + 1, 1).date() - timedelta(days=1)
+            
+            return from_date, to_date
+        except (ValueError, TypeError):
+            pass  # Fall through to default
+    
+    # Check for single month parameter (current year)
+    if month:
+        try:
+            current_year = datetime.now().year
+            month = int(month)
+            from_date = datetime(current_year, month, 1).date()
+            
+            if month == 12:
+                to_date = datetime(current_year + 1, 1, 1).date() - timedelta(days=1)
+            else:
+                to_date = datetime(current_year, month + 1, 1).date() - timedelta(days=1)
+            
+            return from_date, to_date
+        except (ValueError, TypeError):
+            pass
+    
+    # Check for single year parameter (entire year)
+    if year:
+        try:
+            year = int(year)
+            from_date = datetime(year, 1, 1).date()
+            to_date = datetime(year, 12, 31).date()
+            return from_date, to_date
+        except (ValueError, TypeError):
+            pass
+    
+    # Default to current month
+    today = datetime.now().date()
+    from_date = today.replace(day=1)
+    if today.month == 12:
+        to_date = today.replace(year=today.year + 1, month=1, day=1) - timedelta(days=1)
+    else:
+        to_date = today.replace(month=today.month + 1, day=1) - timedelta(days=1)
+    
+    return from_date, to_date
 
 
 from rest_framework.decorators import api_view
@@ -847,71 +1132,409 @@ def calculate_feeder_count(_, __, feeder_ids):
     return len(feeder_ids)
 
 
+# technical/views.py (replace the existing state_technical_summary function)
+
+from rest_framework.decorators import api_view
+from rest_framework.response import Response
+from django.db.models import Count, Sum, Avg, Max, Q
+from django.core.cache import cache
+from django.shortcuts import get_object_or_404
+from datetime import datetime, timedelta
+from dateutil.relativedelta import relativedelta
+import hashlib
+
+from analytics.models import MonthlyTechnicalSummary
+from common.models import State, Feeder
+from technical.models import HourlyLoad, FeederInterruption, FeederEnergyDaily, FeederEnergyMonthly
+from commercial.models import Customer
+
+
 @api_view(["GET"])
 def state_technical_summary(request):
+    """
+    Optimized technical summary for a specific state using pre-calculated data where possible.
+    Falls back to real-time calculation when summary data is missing.
+    """
     state_name = request.GET.get("state")
+    if not state_name:
+        return Response({"error": "State parameter is required"}, status=400)
+    
+    # Get state object
+    state = get_object_or_404(State, name__iexact=state_name)
+    
     year = int(request.GET.get("year", datetime.now().year))
     month = int(request.GET.get("month", datetime.now().month))
     day = request.GET.get("date")
-
-    feeders = Feeder.objects.filter(business_district__state__name=state_name)
-    feeder_ids = feeders.values_list("id", flat=True)
-
-    # Top and bottom 5 peak load feeders
+    
+    # Try cache first
+    cache_key = _get_state_cache_key(state_name, year, month, day)
+    cached_response = cache.get(cache_key)
+    if cached_response:
+        return Response(cached_response)
+    
+    # Get feeders for this state
+    feeders = Feeder.objects.filter(business_district__state=state).select_related(
+        'substation', 'business_district'
+    )
+    feeder_ids = list(feeders.values_list("id", flat=True))
+    
+    if not feeder_ids:
+        return Response({"error": f"No feeders found for state {state_name}"}, status=404)
+    
+    # Calculate month boundaries
     month_start, month_end = get_month_range(year, month)
+    
+    # Get top and bottom feeders (optimized)
+    top_feeders, bottom_feeders = _get_top_bottom_feeders(feeder_ids, month_start, month_end)
+    
+    # Get load trend for specific day
+    load_trend = _get_load_trend_for_day(feeder_ids, day) if day else []
+    
+    # Get metrics using optimized calculation
+    metrics = _get_state_metrics_optimized(state, year, month, feeder_ids)
+    
+    response_data = {
+        "state": state_name,
+        "period": f"{year}-{month:02d}",
+        "top_feeders": top_feeders,
+        "bottom_feeders": bottom_feeders,
+        "load_trend": {
+            "date": day,
+            "unit": "MW",
+            "series": load_trend
+        },
+        "metrics": metrics
+    }
+    
+    # Cache for 15 minutes (current month) or 1 hour (historical months)
+    current_month = datetime.now().replace(day=1).date()
+    target_month = datetime(year, month, 1).date()
+    cache_timeout = 900 if target_month >= current_month else 3600
+    
+    cache.set(cache_key, response_data, cache_timeout)
+    
+    return Response(response_data)
+
+
+def _get_state_cache_key(state_name, year, month, day=None):
+    """Generate cache key for state technical summary"""
+    day_str = f"_day_{day}" if day else ""
+    cache_str = f"state_tech_{state_name}_{year}_{month}{day_str}"
+    return hashlib.md5(cache_str.encode()).hexdigest()[:16]
+
+
+def _get_top_bottom_feeders(feeder_ids, month_start, month_end):
+    """Get top 5 and bottom 5 feeders by peak load - optimized query"""
+    
+    # Single query to get all feeder peaks
     peak_data = HourlyLoad.objects.filter(
-        date__range=(month_start, month_end), feeder_id__in=feeder_ids
+        date__range=(month_start, month_end), 
+        feeder_id__in=feeder_ids
     ).values(
         "feeder__name",
-        "feeder__substation__name",
+        "feeder__substation__name", 
         "feeder__voltage_level",
+        "feeder_id"
     ).annotate(
         peak=Max("load_mw")
     ).order_by("-peak")
+    
+    # Convert to list for slicing
+    peak_list = list(peak_data)
+    
+    if not peak_list:
+        return [], []
+    
+    # Get top 5 and bottom 5
+    top_5 = peak_list[:5]
+    bottom_5 = peak_list[-5:] if len(peak_list) >= 5 else []
+    
+    def format_feeder_data(feeder_data):
+        return [
+            {
+                "feeder": item["feeder__name"],
+                "substation": item["feeder__substation__name"],
+                "voltage_level": item["feeder__voltage_level"],
+                "peak": round(float(item["peak"] or 0), 2),
+                "feeder_id": item["feeder_id"]
+            }
+            for item in feeder_data
+        ]
+    
+    return format_feeder_data(top_5), format_feeder_data(bottom_5)
 
-    top_5 = peak_data[:5]
-    bottom_5 = list(peak_data)[-5:]  # reverse will not work directly on queryset; cast to list first
 
-    top_feeders = [
-        {
-            "feeder": i["feeder__name"],
-            "substation": i["feeder__substation__name"],
-            "voltage_level": i["feeder__voltage_level"],
-            "peak": i["peak"],
+def _get_load_trend_for_day(feeder_ids, day):
+    """Get hourly load trend for a specific day - optimized"""
+    if not day:
+        return []
+    
+    try:
+        # Parse date
+        if isinstance(day, str):
+            day_date = datetime.strptime(day, "%Y-%m-%d").date()
+        else:
+            day_date = day
+        
+        # Single optimized query
+        trend_data = HourlyLoad.objects.filter(
+            date=day_date, 
+            feeder_id__in=feeder_ids
+        ).values("hour").annotate(
+            avg_load=Avg("load_mw")
+        ).order_by("hour")
+        
+        return [
+            {
+                "hour": item["hour"], 
+                "value": round(float(item["avg_load"] or 0), 2)
+            }
+            for item in trend_data
+        ]
+        
+    except (ValueError, TypeError) as e:
+        print(f"Error parsing day {day}: {str(e)}")
+        return []
+
+
+def _get_state_metrics_optimized(state, year, month, feeder_ids):
+    """Get state metrics using summary data where possible, with history"""
+    
+    target_month = datetime(year, month, 1).date()
+    
+    # Try to get from summary first
+    try:
+        summary = MonthlyTechnicalSummary.objects.get(
+            state=state,
+            business_district__isnull=True,
+            feeder__isnull=True,
+            month=target_month,
+            has_complete_data=True
+        )
+        
+        # Get historical data (4 previous months) from summaries
+        history_months = []
+        for i in range(1, 5):
+            hist_month = target_month - relativedelta(months=i)
+            history_months.append(hist_month)
+        
+        historical_summaries = MonthlyTechnicalSummary.objects.filter(
+            state=state,
+            business_district__isnull=True,
+            feeder__isnull=True,
+            month__in=history_months,
+            has_complete_data=True
+        ).order_by('month')
+        
+        # Build metrics with history from summaries
+        metrics = _build_metrics_from_summary(summary, historical_summaries, target_month)
+        metrics['_source'] = 'summary'
+        
+        return metrics
+        
+    except MonthlyTechnicalSummary.DoesNotExist:
+        # Fallback to real-time calculation
+        return _calculate_state_metrics_realtime(state, year, month, feeder_ids)
+
+
+def _build_metrics_from_summary(current_summary, historical_summaries, target_month):
+    """Build metrics response from summary data"""
+    
+    # Create history data
+    history_data = {}
+    for summary in historical_summaries:
+        month_name = summary.month.strftime("%b")
+        history_data[summary.month] = {
+            "month": month_name,
+            "avg_supply": float(summary.avg_hours_of_supply),
+            "avg_duration": float(summary.avg_interruption_duration),
+            "turnaround_time": float(summary.avg_fault_turnaround_time),
+            "interruptions": summary.total_interruptions,
+            "energy_delivered": float(summary.total_energy_delivered),
+            "feeder_count": summary.active_feeder_count,
         }
-        for i in top_5
-    ]
-    bottom_feeders = [
-        {
-            "feeder": i["feeder__name"],
-            "substation": i["feeder__substation__name"],
-            "voltage_level": i["feeder__voltage_level"],
-            "peak": i["peak"],
+    
+    # Sort history by month
+    sorted_history = sorted(history_data.items(), key=lambda x: x[0])
+    history_list = [data for _, data in sorted_history]
+    
+    # Calculate deltas (current vs previous month)
+    previous_month = target_month - relativedelta(months=1)
+    previous_data = history_data.get(previous_month, {})
+    
+    def calc_delta(current_val, prev_val):
+        if prev_val and prev_val != 0:
+            return round(((current_val - prev_val) / prev_val) * 100, 2)
+        return None
+    
+    current_metrics = {
+        "avg_supply": {
+            "current": float(current_summary.avg_hours_of_supply),
+            "delta": calc_delta(
+                float(current_summary.avg_hours_of_supply),
+                previous_data.get("avg_supply", 0)
+            ),
+            "history": history_list
+        },
+        "avg_duration": {
+            "current": float(current_summary.avg_interruption_duration),
+            "delta": calc_delta(
+                float(current_summary.avg_interruption_duration),
+                previous_data.get("avg_duration", 0)
+            ),
+            "history": history_list
+        },
+        "turnaround_time": {
+            "current": float(current_summary.avg_fault_turnaround_time),
+            "delta": calc_delta(
+                float(current_summary.avg_fault_turnaround_time),
+                previous_data.get("turnaround_time", 0)
+            ),
+            "history": history_list
+        },
+        "interruptions": {
+            "current": current_summary.total_interruptions,
+            "delta": calc_delta(
+                current_summary.total_interruptions,
+                previous_data.get("interruptions", 0)
+            ),
+            "history": history_list
+        },
+        "energy_delivered": {
+            "current": float(current_summary.total_energy_delivered),
+            "delta": calc_delta(
+                float(current_summary.total_energy_delivered),
+                previous_data.get("energy_delivered", 0)
+            ),
+            "history": history_list
+        },
+        "feeder_count": {
+            "current": current_summary.active_feeder_count,
+            "delta": calc_delta(
+                current_summary.active_feeder_count,
+                previous_data.get("feeder_count", 0)
+            ),
+            "history": history_list
         }
-        for i in bottom_5
-    ]
+    }
+    
+    return current_metrics
 
-    # Load trend for specific day
-    trend_series = []
-    if day:
-        trend_qs = HourlyLoad.objects.filter(
-            date=day, feeder_id__in=feeder_ids
-        ).values("hour").annotate(avg=Avg("load_mw")).order_by("hour")
-        trend_series = [{"hour": i["hour"], "value": round(i["avg"], 2)} for i in trend_qs]
 
-    return Response({
-        "top_feeders": top_feeders,
-        "bottom_feeders": bottom_feeders,
-        "load_trend": trend_series,
-        "metrics": {
-            "avg_supply": get_metric_with_history(calculate_avg_supply, feeder_ids, year, month),
-            "avg_duration": get_metric_with_history(calculate_avg_interruption_duration, feeder_ids, year, month),
-            "turnaround_time": get_metric_with_history(calculate_avg_interruption_duration, feeder_ids, year, month),
-            "interruptions": get_metric_with_history(calculate_interruptions, feeder_ids, year, month),
-            "energy_delivered": get_metric_with_history(calculate_energy_delivered, feeder_ids, year, month),
-            "feeder_count": get_metric_with_history(calculate_feeder_count, feeder_ids, year, month),
+def _calculate_state_metrics_realtime(state, year, month, feeder_ids):
+    """Calculate state metrics in real-time when summary data unavailable"""
+    
+    target_month = datetime(year, month, 1).date()
+    month_start, month_end = get_month_range(year, month)
+    
+    # Calculate current month metrics
+    current_metrics = _calculate_single_month_metrics(feeder_ids, month_start, month_end)
+    
+    # Calculate historical metrics (4 previous months)
+    history_data = []
+    for i in range(1, 5):
+        hist_date = target_month - relativedelta(months=i)
+        hist_start, hist_end = get_month_range(hist_date.year, hist_date.month)
+        hist_metrics = _calculate_single_month_metrics(feeder_ids, hist_start, hist_end)
+        
+        history_data.append({
+            "month": hist_date.strftime("%b"),
+            **{k: v for k, v in hist_metrics.items()}
+        })
+    
+    # Reverse to get chronological order (oldest to newest)
+    history_data.reverse()
+    
+    # Calculate deltas (current vs previous month)
+    prev_metrics = history_data[-1] if history_data else {}
+    
+    def calc_delta(current_val, prev_val):
+        if prev_val and prev_val != 0:
+            return round(((current_val - prev_val) / prev_val) * 100, 2)
+        return None
+    
+    # Format with history and deltas
+    metrics = {}
+    for key, current_val in current_metrics.items():
+        prev_val = prev_metrics.get(key, 0)
+        metrics[key] = {
+            "current": current_val,
+            "delta": calc_delta(current_val, prev_val),
+            "history": history_data
         }
-    })
+    
+    metrics['_source'] = 'realtime'
+    return metrics
+
+
+def _calculate_single_month_metrics(feeder_ids, month_start, month_end):
+    """Calculate metrics for a single month"""
+    
+    # Average supply hours
+    hourly_supply = HourlyLoad.objects.filter(
+        feeder_id__in=feeder_ids,
+        date__range=(month_start, month_end),
+        load_mw__gt=0
+    ).values('feeder', 'date').annotate(
+        daily_hours=Count('hour')
+    )
+    avg_supply = hourly_supply.aggregate(avg=Avg('daily_hours'))['avg'] or 0
+    
+    # Interruption metrics
+    interruptions = FeederInterruption.objects.filter(
+        feeder_id__in=feeder_ids,
+        occurred_at__date__range=(month_start, month_end)
+    )
+    
+    total_interruptions = interruptions.count()
+    
+    # Average duration for restored interruptions only
+    restored_interruptions = interruptions.filter(restored_at__isnull=False)
+    if restored_interruptions.exists():
+        total_duration = sum(
+            (int.restored_at - int.occurred_at).total_seconds() / 3600
+            for int in restored_interruptions
+        )
+        avg_duration = total_duration / restored_interruptions.count()
+    else:
+        avg_duration = 0
+    
+    # Energy delivered
+    try:
+        # Try monthly aggregates first
+        monthly_energy = FeederEnergyMonthly.objects.filter(
+            feeder_id__in=feeder_ids,
+            period=month_start
+        ).aggregate(total=Sum('energy_mwh'))['total'] or 0
+        
+        if monthly_energy == 0:
+            # Fallback to daily aggregation
+            monthly_energy = FeederEnergyDaily.objects.filter(
+                feeder_id__in=feeder_ids,
+                date__range=(month_start, month_end)
+            ).aggregate(total=Sum('energy_mwh'))['total'] or 0
+            
+    except Exception:
+        monthly_energy = 0
+    
+    return {
+        "avg_supply": round(float(avg_supply), 2),
+        "avg_duration": round(float(avg_duration), 2),
+        "turnaround_time": round(float(avg_duration), 2),  # Same as duration
+        "interruptions": total_interruptions,
+        "energy_delivered": float(monthly_energy),
+        "feeder_count": len(feeder_ids),
+    }
+
+
+def get_month_range(year, month):
+    """Get start and end dates for a given year/month"""
+    start = datetime(year, month, 1).date()
+    if month == 12:
+        end = datetime(year + 1, 1, 1).date() - timedelta(days=1)
+    else:
+        end = datetime(year, month + 1, 1).date() - timedelta(days=1)
+    return start, end
 
 
 

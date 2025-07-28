@@ -1,0 +1,448 @@
+# analytics/management/commands/populate_technical_summary.py
+from django.core.management.base import BaseCommand, CommandError
+from django.utils import timezone
+from datetime import datetime, date, timedelta
+from dateutil.relativedelta import relativedelta #type: ignore
+import time
+
+from analytics.models import MonthlyTechnicalSummary
+from analytics.utils.technical_calculations import TechnicalCalculator
+from common.models import State, BusinessDistrict, Feeder
+
+
+class Command(BaseCommand):
+    help = 'Populate or update monthly technical summary data'
+
+    def add_arguments(self, parser):
+        # Date arguments
+        parser.add_argument(
+            '--month',
+            type=str,
+            help='Specific month to populate (YYYY-MM format, e.g., 2025-07)'
+        )
+        parser.add_argument(
+            '--current-month',
+            action='store_true',
+            help='Populate only the current month'
+        )
+        parser.add_argument(
+            '--start-year',
+            type=int,
+            help='Starting year for bulk population'
+        )
+        parser.add_argument(
+            '--end-year',
+            type=int,
+            help='Ending year for bulk population'
+        )
+        parser.add_argument(
+            '--from-date',
+            type=str,
+            help='Start date for range (YYYY-MM-DD format)'
+        )
+        parser.add_argument(
+            '--to-date',
+            type=str,
+            help='End date for range (YYYY-MM-DD format)'
+        )
+
+        # Filtering arguments
+        parser.add_argument(
+            '--state',
+            type=str,
+            help='Filter by state name'
+        )
+        parser.add_argument(
+            '--district',
+            type=str,
+            help='Filter by business district name'
+        )
+        parser.add_argument(
+            '--feeder',
+            type=str,
+            help='Filter by feeder slug'
+        )
+        parser.add_argument(
+            '--all-levels',
+            action='store_true',
+            help='Populate all filtering levels (national, state, district, feeder)'
+        )
+
+        # Behavior arguments
+        parser.add_argument(
+            '--force',
+            action='store_true',
+            help='Force recalculation even if summary already exists'
+        )
+        parser.add_argument(
+            '--dry-run',
+            action='store_true',
+            help='Show what would be done without actually doing it'
+        )
+        parser.add_argument(
+            '--batch-size',
+            type=int,
+            default=50,
+            help='Number of summaries to process in each batch (default: 50)'
+        )
+
+    def handle(self, *args, **options):
+        self.verbosity = options['verbosity']
+        self.dry_run = options['dry_run']
+        self.force = options['force']
+        self.batch_size = options['batch_size']
+
+        if self.dry_run:
+            self.stdout.write(
+                self.style.WARNING('DRY RUN MODE - No changes will be made')
+            )
+
+        try:
+            # Parse date parameters
+            months = self._parse_date_params(options)
+            
+            # Parse filter parameters
+            filter_configs = self._parse_filter_params(options)
+            
+            # Show summary of what will be done
+            self._show_execution_plan(months, filter_configs)
+            
+            if not self.dry_run:
+                # Execute the population
+                self._populate_summaries(months, filter_configs)
+            
+            self.stdout.write(
+                self.style.SUCCESS('Technical summary population completed successfully')
+            )
+
+        except Exception as e:
+            raise CommandError(f'Error populating technical summaries: {str(e)}')
+
+    def _parse_date_params(self, options):
+        """Parse date parameters and return list of months to process"""
+        if options['month']:
+            try:
+                month_date = datetime.strptime(options['month'], '%Y-%m').date().replace(day=1)
+                return [month_date]
+            except ValueError:
+                raise CommandError('Invalid month format. Use YYYY-MM (e.g., 2025-07)')
+
+        if options['current_month']:
+            return [date.today().replace(day=1)]
+
+        if options['from_date'] and options['to_date']:
+            try:
+                from_date = datetime.strptime(options['from_date'], '%Y-%m-%d').date().replace(day=1)
+                to_date = datetime.strptime(options['to_date'], '%Y-%m-%d').date().replace(day=1)
+                
+                months = []
+                current = from_date
+                while current <= to_date:
+                    months.append(current)
+                    current += relativedelta(months=1)
+                return months
+            except ValueError:
+                raise CommandError('Invalid date format. Use YYYY-MM-DD')
+
+        if options['start_year'] or options['end_year']:
+            current_year = date.today().year
+            start_year = options['start_year'] or current_year
+            end_year = options['end_year'] or current_year
+            
+            months = []
+            for year in range(start_year, end_year + 1):
+                for month in range(1, 13):
+                    month_date = date(year, month, 1)
+                    # Don't process future months
+                    if month_date <= date.today().replace(day=1):
+                        months.append(month_date)
+            return months
+
+        # Default: current month only
+        return [date.today().replace(day=1)]
+
+    def _parse_filter_params(self, options):
+        """Parse filter parameters and return list of filter configurations"""
+        filter_configs = []
+
+        if options['all_levels']:
+            # Generate all possible filtering combinations
+            filter_configs.extend(self._generate_all_filter_combinations())
+        else:
+            # Single filter configuration based on provided parameters
+            config = {
+                'state': None,
+                'business_district': None,
+                'feeder': None
+            }
+
+            # Parse state
+            if options['state']:
+                try:
+                    config['state'] = State.objects.get(name__iexact=options['state'])
+                except State.DoesNotExist:
+                    raise CommandError(f'State "{options["state"]}" not found')
+
+            # Parse district
+            if options['district']:
+                qs = BusinessDistrict.objects.filter(name__iexact=options['district'])
+                if config['state']:
+                    qs = qs.filter(state=config['state'])
+                
+                district = qs.first()
+                if not district:
+                    raise CommandError(f'Business district "{options["district"]}" not found')
+                config['business_district'] = district
+
+            # Parse feeder
+            if options['feeder']:
+                qs = Feeder.objects.filter(slug=options['feeder'])
+                if config['business_district']:
+                    qs = qs.filter(business_district=config['business_district'])
+                elif config['state']:
+                    qs = qs.filter(business_district__state=config['state'])
+                
+                feeder = qs.first()
+                if not feeder:
+                    raise CommandError(f'Feeder "{options["feeder"]}" not found')
+                config['feeder'] = feeder
+
+            filter_configs.append(config)
+
+        return filter_configs
+
+    def _generate_all_filter_combinations(self):
+        """Generate all possible filter combinations for comprehensive population"""
+        configs = []
+
+        # National level
+        configs.append({
+            'state': None,
+            'business_district': None,
+            'feeder': None
+        })
+
+        # State level
+        for state in State.objects.all():
+            configs.append({
+                'state': state,
+                'business_district': None,
+                'feeder': None
+            })
+
+        # District level
+        for district in BusinessDistrict.objects.select_related('state'):
+            configs.append({
+                'state': district.state,
+                'business_district': district,
+                'feeder': None
+            })
+
+        # Feeder level
+        for feeder in Feeder.objects.select_related('business_district__state'):
+            if feeder.business_district:
+                configs.append({
+                    'state': feeder.business_district.state,
+                    'business_district': feeder.business_district,
+                    'feeder': feeder
+                })
+
+        return configs
+
+    def _show_execution_plan(self, months, filter_configs):
+        """Display what will be processed"""
+        total_operations = len(months) * len(filter_configs)
+        
+        self.stdout.write(f'\nExecution Plan:')
+        self.stdout.write(f'  Months to process: {len(months)}')
+        self.stdout.write(f'  Filter configurations: {len(filter_configs)}')
+        self.stdout.write(f'  Total operations: {total_operations}')
+        
+        if self.verbosity >= 2:
+            self.stdout.write('\nMonths:')
+            for month in months[:5]:  # Show first 5
+                self.stdout.write(f'  - {month.strftime("%Y-%m")}')
+            if len(months) > 5:
+                self.stdout.write(f'  ... and {len(months) - 5} more')
+            
+            self.stdout.write('\nFilter configurations:')
+            for i, config in enumerate(filter_configs[:5]):  # Show first 5
+                desc = self._get_filter_description(config)
+                self.stdout.write(f'  - {desc}')
+            if len(filter_configs) > 5:
+                self.stdout.write(f'  ... and {len(filter_configs) - 5} more')
+
+        # Check existing summaries
+        if not self.force:
+            existing_count = self._count_existing_summaries(months, filter_configs)
+            if existing_count > 0:
+                self.stdout.write(
+                    self.style.WARNING(
+                        f'\n{existing_count} summaries already exist and will be skipped. '
+                        'Use --force to recalculate them.'
+                    )
+                )
+
+        self.stdout.write('')
+
+    def _count_existing_summaries(self, months, filter_configs):
+        """Count how many summaries already exist"""
+        count = 0
+        for month in months:
+            for config in filter_configs:
+                exists = MonthlyTechnicalSummary.objects.filter(
+                    month=month,
+                    state=config['state'],
+                    business_district=config['business_district'],
+                    feeder=config['feeder']
+                ).exists()
+                if exists:
+                    count += 1
+        return count
+
+    def _populate_summaries(self, months, filter_configs):
+        """Execute the actual population"""
+        total_operations = len(months) * len(filter_configs)
+        processed = 0
+        created = 0
+        updated = 0
+        skipped = 0
+        errors = 0
+
+        start_time = time.time()
+
+        for month in months:
+            month_start_time = time.time()
+            month_processed = 0
+            month_created = 0
+            month_updated = 0
+            month_skipped = 0
+            month_errors = 0
+
+            for config in filter_configs:
+                try:
+                    result = self._process_single_summary(month, config)
+                    
+                    if result == 'created':
+                        created += 1
+                        month_created += 1
+                    elif result == 'updated':
+                        updated += 1
+                        month_updated += 1
+                    elif result == 'skipped':
+                        skipped += 1
+                        month_skipped += 1
+                    
+                    month_processed += 1
+                    processed += 1
+
+                except Exception as e:
+                    errors += 1
+                    month_errors += 1
+                    
+                    if self.verbosity >= 1:
+                        filter_desc = self._get_filter_description(config)
+                        self.stderr.write(
+                            f'Error processing {month.strftime("%Y-%m")} - {filter_desc}: {str(e)}'
+                        )
+
+                # Progress reporting
+                if processed % self.batch_size == 0 or processed == total_operations:
+                    self._show_progress(processed, total_operations, start_time)
+
+            # Month summary
+            if self.verbosity >= 1:
+                month_time = time.time() - month_start_time
+                self.stdout.write(
+                    f'{month.strftime("%Y-%m")}: '
+                    f'{month_created} created, {month_updated} updated, '
+                    f'{month_skipped} skipped, {month_errors} errors '
+                    f'({month_time:.1f}s)'
+                )
+
+        # Final summary
+        total_time = time.time() - start_time
+        self.stdout.write(f'\nFinal Results:')
+        self.stdout.write(f'  Total processed: {processed}')
+        self.stdout.write(f'  Created: {created}')
+        self.stdout.write(f'  Updated: {updated}')
+        self.stdout.write(f'  Skipped: {skipped}')
+        self.stdout.write(f'  Errors: {errors}')
+        self.stdout.write(f'  Total time: {total_time:.1f}s')
+        
+        if processed > 0:
+            self.stdout.write(f'  Average time per summary: {total_time/processed:.2f}s')
+
+    def _process_single_summary(self, month, config):
+        """Process a single month/filter combination"""
+        # Check if summary exists
+        existing_summary = MonthlyTechnicalSummary.objects.filter(
+            month=month,
+            state=config['state'],
+            business_district=config['business_district'],
+            feeder=config['feeder']
+        ).first()
+
+        if existing_summary and not self.force:
+            return 'skipped'
+
+        # Calculate metrics
+        calculator = TechnicalCalculator(
+            month_date=month,
+            state=config['state'],
+            business_district=config['business_district'],
+            feeder=config['feeder']
+        )
+
+        metrics = calculator.calculate_all_metrics()
+
+        # Create or update summary
+        if existing_summary:
+            # Update existing
+            for key, value in metrics.items():
+                setattr(existing_summary, key, value)
+            existing_summary.save()
+            return 'updated'
+        else:
+            # Create new
+            MonthlyTechnicalSummary.objects.create(
+                month=month,
+                state=config['state'],
+                business_district=config['business_district'],
+                feeder=config['feeder'],
+                **metrics
+            )
+            return 'created'
+
+    def _get_filter_description(self, config):
+        """Get human-readable description of filter configuration"""
+        if config['feeder']:
+            return f"Feeder: {config['feeder'].slug}"
+        elif config['business_district']:
+            return f"District: {config['business_district'].name}"
+        elif config['state']:
+            return f"State: {config['state'].name}"
+        else:
+            return "National"
+
+    def _show_progress(self, processed, total, start_time):
+        """Show progress information"""
+        if total > 0:
+            percentage = (processed / total) * 100
+            elapsed = time.time() - start_time
+            
+            if processed > 0:
+                avg_time = elapsed / processed
+                remaining_time = avg_time * (total - processed)
+                eta = f", ETA: {remaining_time:.0f}s"
+            else:
+                eta = ""
+            
+            self.stdout.write(
+                f'Progress: {processed}/{total} ({percentage:.1f}%) '
+                f'- {elapsed:.1f}s elapsed{eta}',
+                ending='\r'
+            )
+            
+            if processed == total:
+                self.stdout.write('')  # New line at end

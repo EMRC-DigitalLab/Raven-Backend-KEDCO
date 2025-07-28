@@ -1,3 +1,4 @@
+# common/models
 from django.db import models
 from django.utils.text import slugify
 from uuid import uuid4
