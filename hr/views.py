@@ -780,41 +780,41 @@ class StaffSummaryView(APIView):
 
     def get_state_specific_data(self, staff_queryset, collections_data):
         """Get state-specific retention, turnover, and distribution data"""
-        
+    
         states_data = {}
         states = State.objects.all()
-        
+    
         for state in states:
             # Get staff for this state
             state_staff = staff_queryset.filter(district__state=state)
-            
+        
             # Calculate metrics for this state
             state_metrics = state_staff.aggregate(
                 total_count=Count('id'),
                 retained_count=Count('id', filter=Q(exit_date__isnull=True)),
                 exited_count=Count('id', filter=Q(exit_date__isnull=False))
             )
-            
+        
             state_total = state_metrics['total_count']
             state_retained = state_metrics['retained_count']
             state_exited = state_metrics['exited_count']
-            
+        
             state_retention_rate = (state_retained / state_total * 100) if state_total else 0
             state_turnover_rate = (state_exited / state_total * 100) if state_total else 0
-            
+        
             # Get department distribution for this state
             state_distribution = state_staff.values("department__name").annotate(
                 count=Count("id")
             )
-            
+        
             # Get gender distribution for this state
             state_gender_split = state_staff.values("gender").annotate(
                 count=Count("id")
             )
-            
+        
             # Get collections per staff for this state
             collections_per_staff = collections_data.get("collections_per_staff_by_state", {}).get(state.name, 0)
-            
+        
             states_data[state.name] = {
                 "collections_per_staff": collections_per_staff,
                 "retention_rate": round(state_retention_rate, 2),
@@ -822,6 +822,8 @@ class StaffSummaryView(APIView):
                 "department_distribution": list(state_distribution),
                 "gender_distribution": list(state_gender_split)
             }
+    
+        return states_data
         
     def calculate_collections_per_staff_grouped_by_district(self, from_date, to_date, state_filter):
         """Calculate collections per staff for each district under a specific state (current month only)"""
