@@ -1,6 +1,6 @@
 from decimal import Decimal, ROUND_HALF_UP
 from datetime import date, timedelta
-from dateutil.relativedelta import relativedelta
+from dateutil.relativedelta import relativedelta # type: ignore
 from django.db.models import Sum
 from rest_framework import status
 from rest_framework.response import Response
