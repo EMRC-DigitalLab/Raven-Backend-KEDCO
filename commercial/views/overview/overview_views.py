@@ -4,11 +4,71 @@ from django.db.models import Sum
 from django.utils.dateparse import parse_date
 from decimal import Decimal, InvalidOperation
 from commercial.models import MonthlyCommercialSummary, MonthlyEnergyBilled
-from technical.models import EnergyDelivered
+from technical.models import EnergyDelivered, FeederEnergyMonthly, FeederEnergyDaily
+from common.models import Feeder, DistributionTransformer
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-def get_commercial_overview_data(mode, year=None, month=None, week=None, from_date=None, to_date=None):
+
+def get_feeder_energy_delivered(feeder, start_date, end_date=None):
+    """Get energy delivered for a specific feeder using optimized queries"""
+    try:
+        # For monthly mode, try monthly aggregates first
+        if end_date is None and isinstance(start_date, date):
+            # Single month query
+            delivered = FeederEnergyMonthly.objects.filter(
+                feeder=feeder,
+                period=start_date
+            ).aggregate(Sum("energy_mwh"))['energy_mwh__sum']
+            
+            if delivered:
+                return float(delivered)
+            
+            # Fallback to daily aggregation for the month
+            month_start = start_date
+            month_end = month_start + relativedelta(months=1) - timedelta(days=1)
+            delivered = FeederEnergyDaily.objects.filter(
+                feeder=feeder,
+                date__gte=month_start,
+                date__lte=month_end
+            ).aggregate(Sum("energy_mwh"))['energy_mwh__sum']
+            
+            if delivered:
+                return float(delivered)
+        
+        # For date ranges or fallback, use EnergyDelivered
+        if end_date:
+            delivered = EnergyDelivered.objects.filter(
+                feeder=feeder,
+                date__gte=start_date,
+                date__lte=end_date
+            ).aggregate(Sum("energy_mwh"))['energy_mwh__sum']
+        else:
+            # Single date query
+            delivered = EnergyDelivered.objects.filter(
+                feeder=feeder,
+                date__year=start_date.year,
+                date__month=start_date.month
+            ).aggregate(Sum("energy_mwh"))['energy_mwh__sum']
+        
+        return float(delivered or 0)
+        
+    except Exception:
+        return 0.0
+
+
+def get_commercial_overview_data(mode, year=None, month=None, week=None, from_date=None, to_date=None, feeder_slug=None):
+    # Validate feeder if provided
+    feeder = None
+    feeder_transformers = []
+    
+    if feeder_slug:
+        try:
+            feeder = Feeder.objects.get(slug=feeder_slug)
+            feeder_transformers = list(DistributionTransformer.objects.filter(feeder=feeder))
+        except Feeder.DoesNotExist:
+            raise ValueError(f"Feeder with slug '{feeder_slug}' not found")
+    
     def generate_period_list(mode, reference_date, week_number=None):
         periods = []
         if mode == "yearly":
@@ -107,18 +167,55 @@ def get_commercial_overview_data(mode, year=None, month=None, week=None, from_da
             filter_kwargs = {"month__gte": period, "month__lte": period + relativedelta(days=delta-1)}
             energy_delivered_filter = {"date__gte": period, "date__lte": period + relativedelta(days=delta-1)}
 
-        summary = MonthlyCommercialSummary.objects.filter(**filter_kwargs).aggregate(
-            revenue_billed=Sum("revenue_billed"),
-            revenue_collected=Sum("revenue_collected"),
-            customers_billed=Sum("customers_billed"),
-            customers_responded=Sum("customers_responded"),
-        )
-        energy_billed = MonthlyEnergyBilled.objects.filter(**filter_kwargs).aggregate(
-            energy=Sum("energy_mwh")
-        )["energy"] or 0
-        energy_delivered = EnergyDelivered.objects.filter(**energy_delivered_filter).aggregate(
-            Sum("energy_mwh")
-        )["energy_mwh__sum"] or 0
+        # Apply feeder filtering if specified
+        if feeder:
+            # Filter commercial summary by feeder's transformers
+            summary = MonthlyCommercialSummary.objects.filter(
+                transformer__in=feeder_transformers,
+                **filter_kwargs
+            ).aggregate(
+                revenue_billed=Sum("revenue_billed"),
+                revenue_collected=Sum("revenue_collected"),
+                customers_billed=Sum("customers_billed"),
+                customers_responded=Sum("customers_responded"),
+            )
+            
+            # Filter energy billed by feeder
+            energy_billed = MonthlyEnergyBilled.objects.filter(
+                feeder=feeder,
+                **filter_kwargs
+            ).aggregate(energy=Sum("energy_mwh"))["energy"] or 0
+            
+            # Get energy delivered for feeder using optimized query
+            if mode == "monthly":
+                energy_delivered = get_feeder_energy_delivered(feeder, period)
+            elif mode == "weekly" or mode == "range":
+                start_date = period
+                end_date = period + timedelta(days=6) if mode == "weekly" else period + relativedelta(days=delta-1)
+                energy_delivered = get_feeder_energy_delivered(feeder, start_date, end_date)
+            elif mode == "daily":
+                energy_delivered = get_feeder_energy_delivered(feeder, period, period)
+            else:  # yearly
+                energy_delivered = EnergyDelivered.objects.filter(
+                    feeder=feeder,
+                    **energy_delivered_filter
+                ).aggregate(Sum("energy_mwh"))["energy_mwh__sum"] or 0
+        else:
+            # Global data (no feeder filter)
+            summary = MonthlyCommercialSummary.objects.filter(**filter_kwargs).aggregate(
+                revenue_billed=Sum("revenue_billed"),
+                revenue_collected=Sum("revenue_collected"),
+                customers_billed=Sum("customers_billed"),
+                customers_responded=Sum("customers_responded"),
+            )
+            
+            energy_billed = MonthlyEnergyBilled.objects.filter(**filter_kwargs).aggregate(
+                energy=Sum("energy_mwh")
+            )["energy"] or 0
+            
+            energy_delivered = EnergyDelivered.objects.filter(**energy_delivered_filter).aggregate(
+                Sum("energy_mwh")
+            )["energy_mwh__sum"] or 0
 
         revenue_billed = summary["revenue_billed"] or 0
         revenue_collected = summary["revenue_collected"] or 0
@@ -128,8 +225,13 @@ def get_commercial_overview_data(mode, year=None, month=None, week=None, from_da
         try:
             billing_eff = Decimal(energy_billed) / Decimal(energy_delivered) if energy_delivered else Decimal(0)
             collection_eff = Decimal(revenue_collected) / Decimal(revenue_billed) if revenue_billed else Decimal(0)
-            energy_collected = energy_delivered * collection_eff if energy_delivered > 0 else Decimal("0")
+            energy_collected = Decimal(energy_delivered) * collection_eff if energy_delivered > 0 else Decimal("0")
             atcc = Decimal(1) - (billing_eff * collection_eff)
+
+            # Cap efficiencies at 100% and ensure AT&C is non-negative
+            billing_eff = min(billing_eff, Decimal(1))
+            collection_eff = min(collection_eff, Decimal(1))
+            atcc = max(atcc, Decimal(0))
 
             billing_eff_pct = round(billing_eff * Decimal("100"), 2)
             collection_eff_pct = round(collection_eff * Decimal("100"), 2)
@@ -139,6 +241,7 @@ def get_commercial_overview_data(mode, year=None, month=None, week=None, from_da
             collections_pc = round(Decimal(revenue_collected) / Decimal(customers_billed), 2) if customers_billed else Decimal(0)
             response_rate = round(Decimal(customers_responded) / Decimal(customers_billed) * Decimal("100"), 2) if customers_billed else Decimal(0)
 
+            # Customer response metric = Collections Per Customer / Revenue Billed Per Customer
             response_metric = (
                 round(collections_pc / revenue_billed_pc, 2)
                 if revenue_billed_pc != 0
@@ -165,6 +268,7 @@ def get_commercial_overview_data(mode, year=None, month=None, week=None, from_da
 
     return data
 
+
 class CommercialOverviewAPIView(APIView):
     def get(self, request):
         # Parse query parameters
@@ -173,14 +277,19 @@ class CommercialOverviewAPIView(APIView):
         month = int(request.query_params.get('month', datetime.today().month))
         from_date = request.query_params.get('from_date')
         to_date = request.query_params.get('to_date')
+        feeder_slug = request.query_params.get('feeder')  # New feeder filter
 
-        # Delegate to analytics logic
-        data = get_commercial_overview_data(
-            mode=mode,
-            year=year,
-            month=month,
-            from_date=from_date,
-            to_date=to_date
-        )
-
-        return Response(data)
+        try:
+            # Delegate to analytics logic
+            data = get_commercial_overview_data(
+                mode=mode,
+                year=year,
+                month=month,
+                from_date=from_date,
+                to_date=to_date,
+                feeder_slug=feeder_slug
+            )
+            return Response(data)
+            
+        except ValueError as e:
+            return Response({"error": str(e)}, status=400)
