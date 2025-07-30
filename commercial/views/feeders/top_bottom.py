@@ -1,5 +1,5 @@
 from datetime import date
-from dateutil.relativedelta import relativedelta
+from dateutil.relativedelta import relativedelta # type: ignore
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from common.models import Feeder, BusinessDistrict, State

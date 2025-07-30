@@ -3,7 +3,6 @@ from commercial.models import MonthlyEnergyBilled, MonthlyCommercialSummary
 from decimal import Decimal, ROUND_HALF_UP
 from django.db.models import Sum
 from datetime import timedelta
-from dateutil.relativedelta import relativedelta
 
 
 def safe_decimal(value):
