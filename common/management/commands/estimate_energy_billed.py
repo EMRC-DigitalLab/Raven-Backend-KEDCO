@@ -1,20 +1,17 @@
-# management/commands/estimate_energy_billed.py
-
 from django.core.management.base import BaseCommand, CommandError
 from django.db.models import Sum
 from django.db import transaction
 from decimal import Decimal, ROUND_HALF_UP
-from datetime import date, datetime
+from datetime import date
 from dateutil.relativedelta import relativedelta # type: ignore
 from tqdm import tqdm # type: ignore
 
 from common.models import Feeder
-from commercial.models import MonthlyEnergyBilled
-from technical.models import EnergyDelivered
+from commercial.models import MonthlyEnergyBilled, MonthlyCommercialSummary
 
 
 class Command(BaseCommand):
-    help = 'Estimate and populate MonthlyEnergyBilled data using proportional allocation'
+    help = 'Estimate and populate MonthlyEnergyBilled data using revenue-based proportional allocation'
 
     # Energy billed data in GWh by year and month
     ENERGY_BILLED_DATA = {
@@ -25,21 +22,6 @@ class Command(BaseCommand):
     }
 
     def add_arguments(self, parser):
-        parser.add_argument(
-            '--year',
-            type=int,
-            help='Specific year to process (e.g., 2024)',
-        )
-        parser.add_argument(
-            '--month',
-            type=int,
-            help='Specific month to process (1-12). Requires --year.',
-        )
-        parser.add_argument(
-            '--feeder',
-            type=str,
-            help='Specific feeder slug to process',
-        )
         parser.add_argument(
             '--dry-run',
             action='store_true',
@@ -59,22 +41,13 @@ class Command(BaseCommand):
             self.stdout.write(self.style.WARNING("DRY RUN MODE - No changes will be made"))
 
         try:
-            if options.get('year') and options.get('month'):
-                # Process specific year and month
-                self.process_specific_month(options['year'], options['month'], options.get('feeder'))
-            elif options.get('year'):
-                # Process entire year
-                self.process_year(options['year'], options.get('feeder'))
-            else:
-                # Process all available data
-                self.process_all_data(options.get('feeder'))
-                
+            self.process_all_data()
         except Exception as e:
             raise CommandError(f'Error during processing: {str(e)}')
 
-    def process_all_data(self, feeder_slug=None):
-        """Process all available energy billed data"""
-        self.stdout.write(self.style.HTTP_INFO("Processing all available energy billed data..."))
+    def process_all_data(self):
+        """Process all available energy billed data using revenue-based allocation"""
+        self.stdout.write(self.style.HTTP_INFO("Processing all available energy billed data using revenue-based allocation..."))
         
         total_processed = 0
         total_created = 0
@@ -84,7 +57,7 @@ class Command(BaseCommand):
         for year, monthly_data in self.ENERGY_BILLED_DATA.items():
             self.stdout.write(f"\nProcessing year {year}...")
             
-            year_stats = self.process_year(year, feeder_slug)
+            year_stats = self.process_year(year, monthly_data)
             total_processed += year_stats['processed']
             total_created += year_stats['created']
             total_updated += year_stats['updated']
@@ -92,20 +65,15 @@ class Command(BaseCommand):
 
         self.print_summary(total_processed, total_created, total_updated, total_skipped)
 
-    def process_year(self, year, feeder_slug=None):
+    def process_year(self, year, monthly_data):
         """Process all months in a specific year"""
-        if year not in self.ENERGY_BILLED_DATA:
-            raise CommandError(f"No energy billed data available for year {year}")
-
-        monthly_data = self.ENERGY_BILLED_DATA[year]
-        
         total_processed = 0
         total_created = 0
         total_updated = 0
         total_skipped = 0
 
         for month_index, energy_gwh in enumerate(monthly_data, 1):
-            month_stats = self.process_specific_month(year, month_index, feeder_slug)
+            month_stats = self.process_specific_month(year, month_index, energy_gwh)
             total_processed += month_stats['processed']
             total_created += month_stats['created']
             total_updated += month_stats['updated']
@@ -118,91 +86,70 @@ class Command(BaseCommand):
             'skipped': total_skipped
         }
 
-    def process_specific_month(self, year, month, feeder_slug=None):
-        """Process a specific year and month"""
-        if year not in self.ENERGY_BILLED_DATA:
-            raise CommandError(f"No energy billed data available for year {year}")
-
-        monthly_data = self.ENERGY_BILLED_DATA[year]
-        if month > len(monthly_data):
-            raise CommandError(f"No data available for {year}-{month:02d}")
-
-        # Get the energy billed for this month (convert GWh to MWh)
-        energy_gwh = monthly_data[month - 1]
-        disco_total_energy_billed_mwh = Decimal(str(energy_gwh * 1000))  # Convert GWh to MWh
-
+    def process_specific_month(self, year, month, energy_gwh):
+        """Process a specific year and month using revenue-based allocation"""
+        # Convert GWh to MWh
+        disco_total_energy_billed_mwh = Decimal(str(energy_gwh * 1000))
+        
         # Create the month date (first day of month)
         month_date = date(year, month, 1)
-        month_start = month_date
-        month_end = month_start + relativedelta(months=1)
 
         self.stdout.write(
             f"Processing {month_date.strftime('%B %Y')}: "
             f"{energy_gwh} GWh ({disco_total_energy_billed_mwh} MWh)"
         )
 
-        # Get all feeders or specific feeder
-        if feeder_slug:
-            feeders = Feeder.objects.filter(slug=feeder_slug)
-            if not feeders.exists():
-                raise CommandError(f"Feeder with slug '{feeder_slug}' not found")
-        else:
-            feeders = Feeder.objects.all()
+        # Get total revenue billed across all transformers for this month
+        total_revenue_billed = MonthlyCommercialSummary.objects.filter(
+            month=month_date
+        ).aggregate(total=Sum('revenue_billed'))['total'] or Decimal('0')
 
-        # Calculate total energy delivered across all feeders for this month
-        total_energy_delivered = EnergyDelivered.objects.filter(
-            date__gte=month_start,
-            date__lt=month_end
-        ).aggregate(total=Sum('energy_mwh'))['total'] or Decimal('0')
-
-        if total_energy_delivered == 0:
+        if total_revenue_billed == 0:
             self.stdout.write(
                 self.style.WARNING(
-                    f"No energy delivered data found for {month_date.strftime('%B %Y')}. "
+                    f"No revenue billed data found for {month_date.strftime('%B %Y')}. "
                     f"Skipping this month."
                 )
             )
             return {'processed': 0, 'created': 0, 'updated': 0, 'skipped': 1}
 
-        self.stdout.write(f"Total energy delivered: {total_energy_delivered} MWh")
+        self.stdout.write(f"Total revenue billed: ₦{total_revenue_billed:,}")
 
-        # Process each feeder
+        # Get all feeders that have transformers with revenue data for this month
+        feeders_with_revenue = Feeder.objects.filter(
+            transformers__monthlycommercialsummary__month=month_date
+        ).distinct()
+
+        if not feeders_with_revenue.exists():
+            self.stdout.write(
+                self.style.WARNING(
+                    f"No feeders with revenue data found for {month_date.strftime('%B %Y')}"
+                )
+            )
+            return {'processed': 0, 'created': 0, 'updated': 0, 'skipped': 1}
+
         processed = 0
         created = 0
         updated = 0
         skipped = 0
 
-        feeders_with_delivery = feeders.filter(
-            energydelivered__date__gte=month_start,
-            energydelivered__date__lt=month_end
-        ).distinct()
-
-        if not feeders_with_delivery.exists():
-            self.stdout.write(
-                self.style.WARNING(
-                    f"No feeders with energy delivery data found for {month_date.strftime('%B %Y')}"
-                )
-            )
-            return {'processed': 0, 'created': 0, 'updated': 0, 'skipped': 1}
-
         progress_desc = f"Processing feeders for {month_date.strftime('%b %Y')}"
         
-        for feeder in tqdm(feeders_with_delivery, desc=progress_desc, unit="feeder"):
-            # Calculate feeder's energy delivered for this month
-            feeder_energy_delivered = EnergyDelivered.objects.filter(
-                feeder=feeder,
-                date__gte=month_start,
-                date__lt=month_end
-            ).aggregate(total=Sum('energy_mwh'))['total'] or Decimal('0')
+        for feeder in tqdm(feeders_with_revenue, desc=progress_desc, unit="feeder"):
+            # Calculate total revenue billed for all transformers under this feeder
+            feeder_revenue_billed = MonthlyCommercialSummary.objects.filter(
+                transformer__feeder=feeder,
+                month=month_date
+            ).aggregate(total=Sum('revenue_billed'))['total'] or Decimal('0')
 
-            if feeder_energy_delivered == 0:
+            if feeder_revenue_billed == 0:
                 skipped += 1
                 continue
 
-            # Calculate proportional allocation
-            # Feeder_Billed_Energy = (Feeder_Delivered / Total_Delivered) × DisCo_Total_Billed
-            proportion = feeder_energy_delivered / total_energy_delivered
-            feeder_billed_energy = (proportion * disco_total_energy_billed_mwh).quantize(
+            # Calculate revenue-based proportional allocation
+            # Feeder_Billed_Energy = (Feeder_Revenue / Total_Revenue) × DisCo_Total_Billed_Energy
+            revenue_proportion = feeder_revenue_billed / total_revenue_billed
+            feeder_billed_energy = (revenue_proportion * disco_total_energy_billed_mwh).quantize(
                 Decimal('0.01'), rounding=ROUND_HALF_UP
             )
 
@@ -238,14 +185,6 @@ class Command(BaseCommand):
                     created += 1
 
             processed += 1
-
-            # Log detailed info for single feeder processing
-            if feeder_slug:
-                self.stdout.write(
-                    f"  {feeder.name}: {feeder_energy_delivered} MWh delivered → "
-                    f"{feeder_billed_energy} MWh billed "
-                    f"({proportion:.4%} share)"
-                )
 
         return {
             'processed': processed,
