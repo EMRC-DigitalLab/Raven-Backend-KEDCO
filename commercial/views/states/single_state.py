@@ -1,6 +1,6 @@
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from datetime import date
-from dateutil.relativedelta import relativedelta
+from dateutil.relativedelta import relativedelta # type: ignore
 from django.db.models import Sum
 from django.utils.dateparse import parse_date
 from rest_framework.decorators import api_view
