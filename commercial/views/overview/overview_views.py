@@ -8,8 +8,6 @@ from technical.models import EnergyDelivered
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-
-
 def get_commercial_overview_data(mode, year=None, month=None, week=None, from_date=None, to_date=None):
     def generate_period_list(mode, reference_date, week_number=None):
         periods = []
@@ -130,6 +128,7 @@ def get_commercial_overview_data(mode, year=None, month=None, week=None, from_da
         try:
             billing_eff = Decimal(energy_billed) / Decimal(energy_delivered) if energy_delivered else Decimal(0)
             collection_eff = Decimal(revenue_collected) / Decimal(revenue_billed) if revenue_billed else Decimal(0)
+            energy_collected = energy_delivered * collection_eff if energy_delivered > 0 else Decimal("0")
             atcc = Decimal(1) - (billing_eff * collection_eff)
 
             billing_eff_pct = round(billing_eff * Decimal("100"), 2)
@@ -149,10 +148,11 @@ def get_commercial_overview_data(mode, year=None, month=None, week=None, from_da
         except (InvalidOperation, ZeroDivisionError):
             billing_eff_pct = collection_eff_pct = atcc_pct = Decimal(0)
             revenue_billed_pc = collections_pc = response_rate = response_metric = Decimal(0)
+            energy_collected = Decimal(0)
 
         append_with_delta(data["energy_delivered"], energy_delivered, label)
         append_with_delta(data["energy_billed"], energy_billed, label)
-        append_with_delta(data["energy_collected"], (revenue_collected * 1000) / 60, label)
+        append_with_delta(data["energy_collected"], energy_collected, label)
 
         data["billing_efficiency"].append({"period": label, "value": float(billing_eff_pct)})
         data["collection_efficiency"].append({"period": label, "value": float(collection_eff_pct)})
@@ -164,7 +164,6 @@ def get_commercial_overview_data(mode, year=None, month=None, week=None, from_da
         append_with_delta(data["customer_response_metric"], response_metric, label)
 
     return data
-
 
 class CommercialOverviewAPIView(APIView):
     def get(self, request):
