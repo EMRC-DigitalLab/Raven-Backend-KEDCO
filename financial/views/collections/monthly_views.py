@@ -32,6 +32,7 @@ class DailyCollectionsByMonthView(APIView):
         state_name = request.GET.get("state")
         district_name = request.GET.get("business_district")
         feeder_slug = request.GET.get("feeder")
+        transformer_slug = request.GET.get("transformer")
 
         # Get last day of the month
         next_month = (start_date.replace(day=28) + timedelta(days=4)).replace(day=1)
@@ -41,8 +42,23 @@ class DailyCollectionsByMonthView(APIView):
         transformer_filter = {}
         location_info = {"type": "global"}
 
-        if feeder_slug:
-            # Feeder filtering takes highest precedence
+        if transformer_slug:
+            # Transformer filtering takes highest precedence
+            try:
+                transformer = DistributionTransformer.objects.get(slug=transformer_slug)
+                transformer_filter = {"transformer": transformer}
+                location_info = {
+                    "type": "transformer", 
+                    "name": transformer.name,
+                    "feeder": transformer.feeder.name if transformer.feeder else None,
+                    "district": transformer.feeder.business_district.name if transformer.feeder and transformer.feeder.business_district else None,
+                    "state": transformer.feeder.business_district.state.name if transformer.feeder and transformer.feeder.business_district else None
+                }
+            except DistributionTransformer.DoesNotExist:
+                return Response({"error": f"Transformer with slug '{transformer_slug}' not found"}, 
+                              status=status.HTTP_404_NOT_FOUND)
+        elif feeder_slug:
+            # Feeder filtering takes second precedence
             try:
                 feeder = Feeder.objects.get(slug=feeder_slug)
                 transformer_filter = {"transformer__feeder": feeder}
@@ -81,7 +97,7 @@ class DailyCollectionsByMonthView(APIView):
             # Try to get daily collections first (more granular and accurate)
             daily_collections = 0
             if transformer_filter:
-                # Filtered by location (state, district, or feeder)
+                # Filtered by location (state, district, feeder, or transformer)
                 daily_collections = DailyCollection.objects.filter(
                     date=current_day,
                     **transformer_filter
@@ -96,7 +112,7 @@ class DailyCollectionsByMonthView(APIView):
             monthly_collections = 0
             if daily_collections == 0:
                 if transformer_filter:
-                    # Filtered by location (state, district, or feeder)
+                    # Filtered by location (state, district, feeder, or transformer)
                     monthly_collections = MonthlyCommercialSummary.objects.filter(
                         month=date(current_day.year, current_day.month, 1),
                         **transformer_filter
