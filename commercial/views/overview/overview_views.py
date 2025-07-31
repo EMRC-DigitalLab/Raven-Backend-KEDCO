@@ -57,15 +57,24 @@ def get_feeder_energy_delivered(feeder, start_date, end_date=None):
         return 0.0
 
 
-def get_commercial_overview_data(mode, year=None, month=None, week=None, from_date=None, to_date=None, feeder_slug=None):
-    # Validate feeder if provided
+def get_commercial_overview_data(mode, year=None, month=None, week=None, from_date=None, to_date=None, feeder_slug=None, transformer_slug=None):
+    # Validate feeder or transformer if provided
     feeder = None
-    feeder_transformers = []
+    transformer = None
+    filter_transformers = []
     
-    if feeder_slug:
+    if transformer_slug:
+        # Transformer filtering takes precedence over feeder
+        try:
+            transformer = DistributionTransformer.objects.get(slug=transformer_slug)
+            filter_transformers = [transformer]
+            feeder = transformer.feeder  # Also set feeder for energy calculations
+        except DistributionTransformer.DoesNotExist:
+            raise ValueError(f"Transformer with slug '{transformer_slug}' not found")
+    elif feeder_slug:
         try:
             feeder = Feeder.objects.get(slug=feeder_slug)
-            feeder_transformers = list(DistributionTransformer.objects.filter(feeder=feeder))
+            filter_transformers = list(DistributionTransformer.objects.filter(feeder=feeder))
         except Feeder.DoesNotExist:
             raise ValueError(f"Feeder with slug '{feeder_slug}' not found")
     
@@ -167,11 +176,11 @@ def get_commercial_overview_data(mode, year=None, month=None, week=None, from_da
             filter_kwargs = {"month__gte": period, "month__lte": period + relativedelta(days=delta-1)}
             energy_delivered_filter = {"date__gte": period, "date__lte": period + relativedelta(days=delta-1)}
 
-        # Apply feeder filtering if specified
-        if feeder:
-            # Filter commercial summary by feeder's transformers
+        # Apply filtering if transformer or feeder is specified
+        if filter_transformers:
+            # Filter commercial summary by specific transformer(s)
             summary = MonthlyCommercialSummary.objects.filter(
-                transformer__in=feeder_transformers,
+                transformer__in=filter_transformers,
                 **filter_kwargs
             ).aggregate(
                 revenue_billed=Sum("revenue_billed"),
@@ -180,7 +189,7 @@ def get_commercial_overview_data(mode, year=None, month=None, week=None, from_da
                 customers_responded=Sum("customers_responded"),
             )
             
-            # Filter energy billed by feeder
+            # Filter energy billed by feeder (since energy billed is tracked at feeder level)
             energy_billed = MonthlyEnergyBilled.objects.filter(
                 feeder=feeder,
                 **filter_kwargs
@@ -201,7 +210,7 @@ def get_commercial_overview_data(mode, year=None, month=None, week=None, from_da
                     **energy_delivered_filter
                 ).aggregate(Sum("energy_mwh"))["energy_mwh__sum"] or 0
         else:
-            # Global data (no feeder filter)
+            # Global data (no feeder/transformer filter)
             summary = MonthlyCommercialSummary.objects.filter(**filter_kwargs).aggregate(
                 revenue_billed=Sum("revenue_billed"),
                 revenue_collected=Sum("revenue_collected"),
@@ -277,7 +286,8 @@ class CommercialOverviewAPIView(APIView):
         month = int(request.query_params.get('month', datetime.today().month))
         from_date = request.query_params.get('from_date')
         to_date = request.query_params.get('to_date')
-        feeder_slug = request.query_params.get('feeder')  # New feeder filter
+        feeder_slug = request.query_params.get('feeder')  # Feeder filter
+        transformer_slug = request.query_params.get('transformer')  # New transformer filter
 
         try:
             # Delegate to analytics logic
@@ -287,7 +297,8 @@ class CommercialOverviewAPIView(APIView):
                 month=month,
                 from_date=from_date,
                 to_date=to_date,
-                feeder_slug=feeder_slug
+                feeder_slug=feeder_slug,
+                transformer_slug=transformer_slug
             )
             return Response(data)
             

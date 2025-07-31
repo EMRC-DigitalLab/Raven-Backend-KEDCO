@@ -47,6 +47,7 @@ def transformer_metrics_by_feeder_view(request):
 
         summary = MonthlyCommercialSummary.objects.filter(
             sales_rep__in=sales_reps,
+            transformer=transformer,
             month__range=(date_from, date_to)
         ).aggregate(
             revenue_billed=Sum("revenue_billed"),
@@ -56,36 +57,45 @@ def transformer_metrics_by_feeder_view(request):
         revenue_billed = Decimal(summary["revenue_billed"] or 0)
         revenue_collected = Decimal(summary["revenue_collected"] or 0)
 
+        # Get energy billed for this specific transformer's feeder
         energy_billed = MonthlyEnergyBilled.objects.filter(
             feeder=feeder,
             month__range=(date_from, date_to)
         ).aggregate(energy=Sum("energy_mwh"))["energy"] or 0
 
+        # Get energy delivered for this specific transformer's feeder
         energy_delivered = EnergyDelivered.objects.filter(
             feeder=feeder,
             date__range=(date_from, date_to)
         ).aggregate(energy=Sum("energy_mwh"))["energy"] or 0
 
-        total_cost = Opex.objects.filter(
-            district=transformer.feeder.business_district,
-            date__range=(date_from, date_to)
-        ).aggregate(total=Sum("credit"))["total"] or 0
-
-        # Calculate ATCC
+        # Calculate efficiencies
         try:
             billing_eff = Decimal(energy_billed) / Decimal(energy_delivered) if energy_delivered else Decimal(0)
             collection_eff = revenue_collected / revenue_billed if revenue_billed else Decimal(0)
+            
+            # Cap efficiencies at 100%
+            billing_eff = min(billing_eff, Decimal(1))
+            collection_eff = min(collection_eff, Decimal(1))
+            
+            # Calculate energy collected: Energy Delivered × Collection Efficiency
+            energy_collected = Decimal(energy_delivered) * collection_eff if energy_delivered else Decimal(0)
+            
+            # Calculate ATCC: 1 - (Billing Efficiency × Collection Efficiency)
             atcc = (1 - (billing_eff * collection_eff)) * 100
+            
         except Exception:
-            atcc = 0
+            billing_eff = collection_eff = Decimal(0)
+            energy_collected = Decimal(0)
+            atcc = 100  # 100% losses if calculation fails
 
         result.append({
             "name": transformer.name,
             "slug": transformer.slug,
-            "total_cost": round(total_cost, 2),
-            "revenue_billed": round(revenue_billed, 2),
-            "revenue_collected": round(revenue_collected, 2),
-            "atcc": round(atcc, 2),
+            "energy_delivered": round(float(energy_delivered), 2),
+            "energy_billed": round(float(energy_billed), 2), 
+            "energy_collected": round(float(energy_collected), 2),
+            "atcc": round(float(atcc), 2),
         })
 
     return Response(result)
