@@ -164,7 +164,7 @@ class CustomerBusinessMetricsView(APIView):
             billing_eff = safe_divide(energy_billed, energy_delivered) * 100
             collection_eff = safe_divide(Decimal(collected), Decimal(revenue)) * 100
             atcc_losses = Decimal(100) - (billing_eff * collection_eff / 100)
-            energy_collected = energy_delivered * (collection_eff / 100)
+            energy_collected = energy_billed * (collection_eff / 100)
 
             # Store current month data
             current_data = {

@@ -176,7 +176,7 @@ def commercial_all_states_view(request):
             collection_eff = (revenue_collected / revenue_billed) * 100 if revenue_billed > 0 else Decimal(0)
             
             # Calculate energy collected using the corrected formula
-            energy_collected = energy_delivered * (collection_eff / 100) if energy_delivered > 0 else Decimal(0)
+            energy_collected = energy_billed * (collection_eff / 100) if energy_delivered > 0 else Decimal(0)
             
             # Calculate AT&C losses
             atcc = (Decimal(1) - ((billing_eff / 100) * (collection_eff / 100))) * 100

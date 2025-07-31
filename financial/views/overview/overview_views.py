@@ -1,23 +1,68 @@
 from datetime import date
-from decimal import Decimal
-from dateutil.relativedelta import relativedelta  # type: ignore
+from decimal import Decimal, ROUND_HALF_UP
+from dateutil.relativedelta import relativedelta # type: ignore
 from django.db.models import Sum, Q
 from rest_framework.response import Response
 from rest_framework.decorators import api_view
-from financial.models import *
-from financial.serializers import *
+from financial.models import Opex, HQOpex, SalaryPayment, NBETInvoice, MOInvoice, MYTOTariff
 from common.models import Feeder, DistributionTransformer
 from commercial.models import MonthlyCommercialSummary, DailyCollection
-from financial.models import Opex
-from django.db.models import Sum
-from rest_framework.decorators import api_view
-from rest_framework.response import Response
-from datetime import date
-from dateutil.relativedelta import relativedelta # type: ignore
-from commercial.models import MonthlyCommercialSummary
-from django.db.models import Q
-from technical.models import EnergyDelivered
+from technical.models import EnergyDelivered, FeederEnergyMonthly, FeederEnergyDaily
 
+
+def safe_decimal(value):
+    """Convert value to Decimal safely"""
+    try:
+        return Decimal(str(value or 0))
+    except (TypeError, ValueError):
+        return Decimal(0)
+
+
+def safe_float(value):
+    """Convert value to float safely"""
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def calculate_delta(current, previous):
+    """Calculate percentage change between current and previous values"""
+    if previous and previous != 0:
+        return round(((current - previous) / previous) * 100, 2)
+    return None
+
+
+def get_energy_delivered_optimized(energy_filter, start_date, end_date):
+    """Get energy delivered using optimized queries"""
+    try:
+        # For single month periods, try monthly aggregates first
+        if (end_date - start_date).days <= 32:
+            delivered = FeederEnergyMonthly.objects.filter(
+                energy_filter & Q(period=start_date)
+            ).aggregate(Sum("energy_mwh"))['energy_mwh__sum']
+            
+            if delivered:
+                return safe_decimal(delivered)
+        
+        # Try daily aggregation
+        end_date_actual = end_date - relativedelta(days=1)
+        delivered = FeederEnergyDaily.objects.filter(
+            energy_filter & Q(date__gte=start_date, date__lte=end_date_actual)
+        ).aggregate(Sum("energy_mwh"))['energy_mwh__sum']
+        
+        if delivered:
+            return safe_decimal(delivered)
+        
+        # Fallback to EnergyDelivered
+        delivered = EnergyDelivered.objects.filter(
+            energy_filter & Q(date__gte=start_date, date__lt=end_date)
+        ).aggregate(Sum("energy_mwh"))['energy_mwh__sum']
+        
+        return safe_decimal(delivered)
+        
+    except Exception:
+        return Decimal(0)
 
 
 @api_view(["GET"])
@@ -42,155 +87,282 @@ def financial_overview_view(request):
     prev_date = selected_date - relativedelta(months=1)
     prev_end = selected_date
 
-    # Determine filtering level and build base filters
-    commercial_base = Q()
-    opex_base = Q()
-    salary_base = Q()
-    energy_base = Q()
-
+    # Pre-fetch location entities and build filters
+    location_info = {}
+    commercial_transformers = []
+    energy_feeders = []
+    
     if transformer_slug:
         # Transformer-level filtering (highest precedence)
         try:
-            transformer = DistributionTransformer.objects.get(slug=transformer_slug)
-            commercial_base = Q(sales_rep__assigned_transformers=transformer)
-            opex_base = Q(district=transformer.feeder.business_district)
-            salary_base = Q(district=transformer.feeder.business_district)
-            energy_base = Q(feeder=transformer.feeder)
+            transformer = DistributionTransformer.objects.select_related(
+                'feeder__business_district'
+            ).get(slug=transformer_slug)
+            commercial_transformers = [transformer]
+            energy_feeders = [transformer.feeder]
+            location_info = {
+                'type': 'transformer',
+                'transformer': transformer,
+                'feeder': transformer.feeder,
+                'district': transformer.feeder.business_district
+            }
         except DistributionTransformer.DoesNotExist:
             return Response({"error": "Transformer not found"}, status=400)
+            
     elif feeder_slug:
         # Feeder-level filtering
         try:
-            feeder = Feeder.objects.get(slug=feeder_slug)
-            commercial_base = Q(sales_rep__assigned_transformers__feeder=feeder)
-            opex_base = Q(district=feeder.business_district)
-            salary_base = Q(district=feeder.business_district)
-            energy_base = Q(feeder=feeder)
+            feeder = Feeder.objects.select_related('business_district').get(slug=feeder_slug)
+            commercial_transformers = list(DistributionTransformer.objects.filter(feeder=feeder))
+            energy_feeders = [feeder]
+            location_info = {
+                'type': 'feeder',
+                'feeder': feeder,
+                'district': feeder.business_district
+            }
         except Feeder.DoesNotExist:
             return Response({"error": "Feeder not found"}, status=400)
+            
     elif district_name:
         # Business district filtering
-        commercial_base = Q(sales_rep__assigned_transformers__feeder__business_district__name__iexact=district_name)
-        opex_base = Q(district__name__iexact=district_name)
-        salary_base = Q(district__name__iexact=district_name)
-        energy_base = Q(feeder__business_district__name__iexact=district_name)
+        feeders = list(Feeder.objects.filter(business_district__name__iexact=district_name))
+        commercial_transformers = list(DistributionTransformer.objects.filter(feeder__in=feeders))
+        energy_feeders = feeders
+        location_info = {'type': 'district', 'name': district_name}
+        
     elif state_name:
         # State filtering
-        commercial_base = Q(sales_rep__assigned_transformers__feeder__business_district__state__name__iexact=state_name)
-        opex_base = Q(district__state__name__iexact=state_name)
-        salary_base = Q(district__state__name__iexact=state_name)
-        energy_base = Q(feeder__business_district__state__name__iexact=state_name)
+        feeders = list(Feeder.objects.filter(business_district__state__name__iexact=state_name))
+        commercial_transformers = list(DistributionTransformer.objects.filter(feeder__in=feeders))
+        energy_feeders = feeders
+        location_info = {'type': 'state', 'name': state_name}
+    else:
+        # Global filtering
+        commercial_transformers = None  # Will use no filter
+        energy_feeders = None  # Will use no filter
+        location_info = {'type': 'global'}
 
-    def calculate_delta(current, previous):
-        """Calculate percentage change between current and previous values"""
-        if previous and previous != 0:
-            return round(((current - previous) / previous) * 100, 2)
-        return None
-
-    def get_energy_share(start_date, end_date, energy_filter):
+    def get_energy_share(start_date, end_date):
         """Calculate energy share for proportional allocation"""
+        if location_info['type'] == 'global':
+            return Decimal(1)  # Global gets 100% share
+            
         # Energy delivered for filtered scope
-        filtered_energy = EnergyDelivered.objects.filter(
-            energy_filter & Q(date__gte=start_date, date__lt=end_date)
-        ).aggregate(total=Sum("energy_mwh"))["total"] or Decimal("0")
+        if energy_feeders:
+            filtered_energy = get_energy_delivered_optimized(
+                Q(feeder__in=energy_feeders), start_date, end_date
+            )
+        else:
+            filtered_energy = Decimal(0)
         
         # Total energy delivered across all feeders
-        total_energy = EnergyDelivered.objects.filter(
-            date__gte=start_date, date__lt=end_date
-        ).aggregate(total=Sum("energy_mwh"))["total"] or Decimal("0")
+        total_energy = get_energy_delivered_optimized(Q(), start_date, end_date)
         
         # Calculate share (0-1)
         if total_energy > 0:
             return filtered_energy / total_energy
-        return Decimal("0")
+        return Decimal(0)
 
     def get_costs_for_period(start_date, end_date):
         """Get all cost components for a given period"""
-        # For transformer and feeder level, we need to calculate transformer's share of feeder energy
-        if transformer_slug:
-            # Transformer share calculation
-            # Since we don't have direct transformer energy data, we'll use a simplified approach:
-            # 1. Get all transformers on the feeder
-            # 2. Assume equal distribution (can be enhanced with actual transformer load data)
-            transformer = DistributionTransformer.objects.get(slug=transformer_slug)
+        # Calculate energy share for proportional allocation
+        energy_share = get_energy_share(start_date, end_date)
+        
+        # Initialize transformer share for transformer-level filtering
+        transformer_share = Decimal(1)
+        
+        if location_info['type'] == 'transformer':
+            # Transformer gets equal share of feeder's costs
             feeder_transformers_count = DistributionTransformer.objects.filter(
-                feeder=transformer.feeder
+                feeder=location_info['transformer'].feeder
             ).count()
-            
-            # Transformer gets equal share of feeder's allocations
-            transformer_share = Decimal("1") / Decimal(feeder_transformers_count) if feeder_transformers_count > 0 else Decimal("1")
-            
-            # Get feeder's energy share first
-            feeder_energy_share = get_energy_share(start_date, end_date, Q(feeder=transformer.feeder))
-            # Transformer's final share is its portion of the feeder's share
-            energy_share = feeder_energy_share * transformer_share
-        else:
-            # Regular energy share calculation for feeder/district/state
-            energy_share = get_energy_share(start_date, end_date, energy_base)
+            transformer_share = Decimal(1) / Decimal(feeder_transformers_count) if feeder_transformers_count > 0 else Decimal(1)
 
-        # OPEX (both debit and credit) - transformer uses feeder's district OPEX
-        opex_filter = opex_base & Q(date__gte=start_date, date__lt=end_date)
-        opex_data = Opex.objects.filter(opex_filter).aggregate(
-            debit=Sum("debit"), 
-            credit=Sum("credit")
-        )
+        # OPEX calculation (sum of both debit and credit)
+        opex_total = Decimal(0)
+        hq_opex_total = Decimal(0)
         
-        if transformer_slug:
-            # Transformer gets proportional share of district OPEX based on transformer count
-            transformer = DistributionTransformer.objects.get(slug=transformer_slug)
-            district_transformers_count = DistributionTransformer.objects.filter(
-                feeder__business_district=transformer.feeder.business_district
-            ).count()
-            transformer_opex_share = Decimal("1") / Decimal(district_transformers_count) if district_transformers_count > 0 else Decimal("1")
+        if location_info['type'] in ['transformer', 'feeder']:
+            # Use district-level OPEX
+            district = location_info.get('district')
+            if district:
+                # Regular OPEX
+                opex_data = Opex.objects.filter(
+                    district=district,
+                    date__gte=start_date,
+                    date__lt=end_date
+                ).aggregate(debit=Sum("debit"), credit=Sum("credit"))
+                
+                district_opex = safe_decimal(opex_data["debit"]) + safe_decimal(opex_data["credit"])
+                
+                # HQ OPEX is allocated proportionally to all districts
+                hq_opex_data = HQOpex.objects.filter(
+                    date__gte=start_date,
+                    date__lt=end_date
+                ).aggregate(debit=Sum("debit"), credit=Sum("credit"))
+                
+                total_hq_opex = safe_decimal(hq_opex_data["debit"]) + safe_decimal(hq_opex_data["credit"])
+                
+                # Allocate HQ OPEX based on energy share
+                hq_opex_allocated = total_hq_opex * energy_share
+                
+                if location_info['type'] == 'transformer':
+                    # Transformer gets proportional share based on transformer count in district
+                    district_transformers_count = DistributionTransformer.objects.filter(
+                        feeder__business_district=district
+                    ).count()
+                    transformer_district_share = Decimal(1) / Decimal(district_transformers_count) if district_transformers_count > 0 else Decimal(1)
+                    opex_total = district_opex * transformer_district_share
+                    hq_opex_total = hq_opex_allocated * transformer_district_share
+                else:
+                    # Feeder gets proportional share based on feeder count in district
+                    district_feeders_count = Feeder.objects.filter(business_district=district).count()
+                    feeder_district_share = Decimal(1) / Decimal(district_feeders_count) if district_feeders_count > 0 else Decimal(1)
+                    opex_total = district_opex * feeder_district_share
+                    hq_opex_total = hq_opex_allocated * feeder_district_share
+                    
+        elif location_info['type'] == 'district':
+            # District-level OPEX
+            opex_data = Opex.objects.filter(
+                district__name__iexact=location_info['name'],
+                date__gte=start_date,
+                date__lt=end_date
+            ).aggregate(debit=Sum("debit"), credit=Sum("credit"))
+            opex_total = safe_decimal(opex_data["debit"]) + safe_decimal(opex_data["credit"])
             
-            opex_total = float(((opex_data["debit"] or 0) + (opex_data["credit"] or 0)) * transformer_opex_share)
+            # Allocate HQ OPEX proportionally
+            hq_opex_data = HQOpex.objects.filter(
+                date__gte=start_date,
+                date__lt=end_date
+            ).aggregate(debit=Sum("debit"), credit=Sum("credit"))
+            total_hq_opex = safe_decimal(hq_opex_data["debit"]) + safe_decimal(hq_opex_data["credit"])
+            hq_opex_total = total_hq_opex * energy_share
+            
+        elif location_info['type'] == 'state':
+            # State-level OPEX
+            opex_data = Opex.objects.filter(
+                district__state__name__iexact=location_info['name'],
+                date__gte=start_date,
+                date__lt=end_date
+            ).aggregate(debit=Sum("debit"), credit=Sum("credit"))
+            opex_total = safe_decimal(opex_data["debit"]) + safe_decimal(opex_data["credit"])
+            
+            # Allocate HQ OPEX proportionally
+            hq_opex_data = HQOpex.objects.filter(
+                date__gte=start_date,
+                date__lt=end_date
+            ).aggregate(debit=Sum("debit"), credit=Sum("credit"))
+            total_hq_opex = safe_decimal(hq_opex_data["debit"]) + safe_decimal(hq_opex_data["credit"])
+            hq_opex_total = total_hq_opex * energy_share
+            
         else:
-            opex_total = float((opex_data["debit"] or 0) + (opex_data["credit"] or 0))
+            # Global OPEX
+            opex_data = Opex.objects.filter(
+                date__gte=start_date,
+                date__lt=end_date
+            ).aggregate(debit=Sum("debit"), credit=Sum("credit"))
+            opex_total = safe_decimal(opex_data["debit"]) + safe_decimal(opex_data["credit"])
+            
+            hq_opex_data = HQOpex.objects.filter(
+                date__gte=start_date,
+                date__lt=end_date
+            ).aggregate(debit=Sum("debit"), credit=Sum("credit"))
+            hq_opex_total = safe_decimal(hq_opex_data["debit"]) + safe_decimal(hq_opex_data["credit"])
 
-        # Salaries - transformer uses proportional share of district salaries
-        salary_filter = salary_base & Q(month__gte=start_date, month__lt=end_date)
-        district_salary_total = SalaryPayment.objects.filter(salary_filter).aggregate(
-            total=Sum("amount"))["total"] or Decimal("0")
-        
-        if transformer_slug:
-            salary_total = float(district_salary_total * transformer_opex_share)
+        # Combined OPEX total
+        combined_opex_total = opex_total + hq_opex_total
+
+        # Salaries calculation
+        if location_info['type'] in ['transformer', 'feeder']:
+            # Use district-level salaries
+            district = location_info.get('district')
+            if district:
+                district_salary_total = SalaryPayment.objects.filter(
+                    district=district,
+                    month__gte=start_date,
+                    month__lt=end_date
+                ).aggregate(total=Sum("amount"))["total"] or Decimal(0)
+                
+                if location_info['type'] == 'transformer':
+                    salary_total = district_salary_total * transformer_district_share
+                else:
+                    salary_total = district_salary_total * feeder_district_share
+            else:
+                salary_total = Decimal(0)
+                
+        elif location_info['type'] == 'district':
+            salary_total = SalaryPayment.objects.filter(
+                district__name__iexact=location_info['name'],
+                month__gte=start_date,
+                month__lt=end_date
+            ).aggregate(total=Sum("amount"))["total"] or Decimal(0)
+            
+        elif location_info['type'] == 'state':
+            salary_total = SalaryPayment.objects.filter(
+                district__state__name__iexact=location_info['name'],
+                month__gte=start_date,
+                month__lt=end_date
+            ).aggregate(total=Sum("amount"))["total"] or Decimal(0)
+            
         else:
-            salary_total = float(district_salary_total)
+            # Global salaries
+            salary_total = SalaryPayment.objects.filter(
+                month__gte=start_date,
+                month__lt=end_date
+            ).aggregate(total=Sum("amount"))["total"] or Decimal(0)
 
         # NBET Invoice (allocated proportionally based on energy share)
         nbet_total_invoice = NBETInvoice.objects.filter(
-            month__gte=start_date, month__lt=end_date
-        ).aggregate(total=Sum("amount"))["total"] or Decimal("0")
-        nbet_allocated = float(nbet_total_invoice * energy_share)
+            month__gte=start_date,
+            month__lt=end_date
+        ).aggregate(total=Sum("amount"))["total"] or Decimal(0)
+        nbet_allocated = nbet_total_invoice * energy_share
 
         # MO Invoice (allocated proportionally based on energy share)
         mo_total_invoice = MOInvoice.objects.filter(
-            month__gte=start_date, month__lt=end_date
-        ).aggregate(total=Sum("amount"))["total"] or Decimal("0")
-        mo_allocated = float(mo_total_invoice * energy_share)
+            month__gte=start_date,
+            month__lt=end_date
+        ).aggregate(total=Sum("amount"))["total"] or Decimal(0)
+        mo_allocated = mo_total_invoice * energy_share
 
-        total_cost = opex_total + salary_total + nbet_allocated + mo_allocated
+        total_cost = combined_opex_total + salary_total + nbet_allocated + mo_allocated
 
         return {
-            "opex": opex_total,
-            "salaries": salary_total,
-            "nbet": nbet_allocated,
-            "mo": mo_allocated,
-            "total": total_cost,
-            "energy_share": float(energy_share),
-            "transformer_opex_share": float(transformer_opex_share) if transformer_slug else None
+            "opex": safe_float(opex_total),
+            "hq_opex": safe_float(hq_opex_total),
+            "disco_opex": safe_float(combined_opex_total),  # Combined OPEX for backward compatibility
+            "salaries": safe_float(salary_total),
+            "nbet": safe_float(nbet_allocated),
+            "mo": safe_float(mo_allocated),
+            "total": safe_float(total_cost),
+            "energy_share": safe_float(energy_share)
         }
 
     def get_revenue_for_period(start_date, end_date):
         """Get revenue data for a given period"""
-        commercial_filter = commercial_base & Q(month__gte=start_date, month__lt=end_date)
-        revenue_data = MonthlyCommercialSummary.objects.filter(commercial_filter).aggregate(
-            revenue_billed=Sum("revenue_billed"),
-            revenue_collected=Sum("revenue_collected"),
-        )
+        if commercial_transformers is not None:
+            # Filtered by specific transformers
+            revenue_data = MonthlyCommercialSummary.objects.filter(
+                transformer__in=commercial_transformers,
+                month__gte=start_date,
+                month__lt=end_date
+            ).aggregate(
+                revenue_billed=Sum("revenue_billed"),
+                revenue_collected=Sum("revenue_collected"),
+            )
+        else:
+            # Global revenue
+            revenue_data = MonthlyCommercialSummary.objects.filter(
+                month__gte=start_date,
+                month__lt=end_date
+            ).aggregate(
+                revenue_billed=Sum("revenue_billed"),
+                revenue_collected=Sum("revenue_collected"),
+            )
+            
         return {
-            "billed": float(revenue_data["revenue_billed"] or 0),
-            "collected": float(revenue_data["revenue_collected"] or 0)
+            "billed": safe_float(revenue_data["revenue_billed"]),
+            "collected": safe_float(revenue_data["revenue_collected"])
         }
 
     # ─── 2) OPERATING EXPENDITURE (Selected Month + Delta) ─────────────────────
@@ -261,30 +433,36 @@ def financial_overview_view(request):
         prev_collections = period_revenue["collected"]
 
     # ─── 5) MONTHLY COLLECTIONS FOR ENTIRE YEAR ───────────────────────────────
-    yearly_commercial_filter = commercial_base & Q(month__year=year)
     monthly_collections_year = []
     
     for m in range(1, 13):
-        month_filter = yearly_commercial_filter & Q(month__month=m)
-        month_collections = MonthlyCommercialSummary.objects.filter(month_filter).aggregate(
-            collections=Sum("revenue_collected")
-        )["collections"] or 0
+        month_start = date(year, m, 1)
+        month_end = month_start + relativedelta(months=1)
+        
+        month_revenue = get_revenue_for_period(month_start, month_end)
         
         monthly_collections_year.append({
-            "month": date(year, m, 1).strftime("%b"),
-            "collections": float(month_collections),
-            "billed": 0
+            "month": month_start.strftime("%b"),
+            "collections": month_revenue["collected"],
+            "billed": month_revenue["billed"]
         })
 
     # ─── 6) COLLECTIONS BY VENDOR ──────────────────────────────────────────────
-    vendor_collections = DailyCollection.objects.filter(
-        date__gte=selected_date, 
-        date__lt=selected_end
-    ).values("vendor_name").annotate(amount=Sum("amount"))
+    if commercial_transformers is not None:
+        vendor_collections = DailyCollection.objects.filter(
+            transformer__in=commercial_transformers,
+            date__gte=selected_date, 
+            date__lt=selected_end
+        ).values("vendor_name").annotate(amount=Sum("amount"))
+    else:
+        vendor_collections = DailyCollection.objects.filter(
+            date__gte=selected_date, 
+            date__lt=selected_end
+        ).values("vendor_name").annotate(amount=Sum("amount"))
     
     if vendor_collections.exists():
         collections_by_vendor = [
-            {"vendor": row["vendor_name"], "amount": float(row["amount"] or 0)}
+            {"vendor": row["vendor_name"], "amount": safe_float(row["amount"])}
             for row in vendor_collections
         ]
     else:
@@ -292,72 +470,119 @@ def financial_overview_view(request):
             {"vendor": "Cash", "amount": current_revenue["collected"]}
         ]
 
-    # ─── 7) OPEX BREAKDOWN (AFTER COLLECTIONS BY VENDOR) ──────────────────────
-    current_opex_filter = opex_base & Q(date__gte=selected_date, date__lt=selected_end)
-    prev_opex_filter = opex_base & Q(date__gte=prev_date, date__lt=selected_date)
-    
-    def get_opex_breakdown_by_type(qs_current, qs_previous, field_name):
-        if field_name == 'both':
-            current_data = qs_current.values("opex_category__name").annotate(
+    # ─── 7) OPEX BREAKDOWN ─────────────────────────────────────────────────────
+    def get_opex_breakdown():
+        """Get OPEX breakdown by Opex and HQOpex with previous period comparison"""
+        current_start = selected_date
+        current_end = selected_end
+        prev_start = prev_date
+        prev_end = selected_date
+        
+        # Current period breakdown
+        def get_opex_by_category(queryset, is_hq=False):
+            data = queryset.values("opex_category__name").annotate(
                 total=Sum("credit") + Sum("debit")
             )
-        else:
-            current_data = qs_current.values("opex_category__name").annotate(
-                total=Sum(field_name)
-            )
-        
-        current_breakdown = {
-            row["opex_category__name"] or "Uncategorized": float(row["total"] or 0)
-            for row in current_data
-        }
-        
-        if qs_previous is not None:
-            if field_name == 'both':
-                prev_data = qs_previous.values("opex_category__name").annotate(
-                    total=Sum("credit") + Sum("debit")
-                )
-            else:
-                prev_data = qs_previous.values("opex_category__name").annotate(
-                    total=Sum(field_name)
-                )
-            
-            prev_breakdown = {
-                row["opex_category__name"] or "Uncategorized": float(row["total"] or 0)
-                for row in prev_data
+            return {
+                (row["opex_category__name"] or "Uncategorized"): {
+                    "amount": safe_float(row["total"]),
+                    "type": "HQ OPEX" if is_hq else "District OPEX"
+                }
+                for row in data
             }
+        
+        # Build current period queries based on location filter
+        if location_info['type'] in ['transformer', 'feeder']:
+            district = location_info.get('district')
+            if district:
+                current_opex_qs = Opex.objects.filter(district=district, date__gte=current_start, date__lt=current_end)
+                prev_opex_qs = Opex.objects.filter(district=district, date__gte=prev_start, date__lt=prev_end)
+            else:
+                current_opex_qs = Opex.objects.none()
+                prev_opex_qs = Opex.objects.none()
+        elif location_info['type'] == 'district':
+            current_opex_qs = Opex.objects.filter(district__name__iexact=location_info['name'], date__gte=current_start, date__lt=current_end)
+            prev_opex_qs = Opex.objects.filter(district__name__iexact=location_info['name'], date__gte=prev_start, date__lt=prev_end)
+        elif location_info['type'] == 'state':
+            current_opex_qs = Opex.objects.filter(district__state__name__iexact=location_info['name'], date__gte=current_start, date__lt=current_end)
+            prev_opex_qs = Opex.objects.filter(district__state__name__iexact=location_info['name'], date__gte=prev_start, date__lt=prev_end)
         else:
-            prev_breakdown = {}
+            current_opex_qs = Opex.objects.filter(date__gte=current_start, date__lt=current_end)
+            prev_opex_qs = Opex.objects.filter(date__gte=prev_start, date__lt=prev_end)
         
-        result = []
-        for category, current_amount in current_breakdown.items():
-            prev_amount = prev_breakdown.get(category, 0)
-            delta = calculate_delta(current_amount, prev_amount) if prev_amount else None
+        # HQ OPEX queries (always global, allocated proportionally)
+        current_hq_qs = HQOpex.objects.filter(date__gte=current_start, date__lt=current_end)
+        prev_hq_qs = HQOpex.objects.filter(date__gte=prev_start, date__lt=prev_end)
+        
+        # Get current period data
+        current_opex_breakdown = get_opex_by_category(current_opex_qs, is_hq=False)
+        current_hq_breakdown = get_opex_by_category(current_hq_qs, is_hq=True)
+        
+        # Get previous period data
+        prev_opex_breakdown = get_opex_by_category(prev_opex_qs, is_hq=False)
+        prev_hq_breakdown = get_opex_by_category(prev_hq_qs, is_hq=True)
+        
+        # Combine all categories and calculate deltas
+        all_categories = set(list(current_opex_breakdown.keys()) + list(current_hq_breakdown.keys()) + 
+                           list(prev_opex_breakdown.keys()) + list(prev_hq_breakdown.keys()))
+        
+        # Prepare results
+        all_opex = []
+        opex_only = []
+        hq_opex_only = []
+        
+        for category in all_categories:
+            # Current amounts
+            current_opex_amount = current_opex_breakdown.get(category, {}).get("amount", 0)
+            current_hq_amount = current_hq_breakdown.get(category, {}).get("amount", 0)
             
-            result.append({
-                "category": category,
-                "amount": current_amount,
-                "delta": delta,
-            })
+            # Previous amounts
+            prev_opex_amount = prev_opex_breakdown.get(category, {}).get("amount", 0)
+            prev_hq_amount = prev_hq_breakdown.get(category, {}).get("amount", 0)
+            
+            # Combined amounts
+            current_total = current_opex_amount + current_hq_amount
+            prev_total = prev_opex_amount + prev_hq_amount
+            
+            # Calculate deltas
+            total_delta = calculate_delta(current_total, prev_total) if prev_total > 0 else None
+            opex_delta = calculate_delta(current_opex_amount, prev_opex_amount) if prev_opex_amount > 0 else None
+            hq_delta = calculate_delta(current_hq_amount, prev_hq_amount) if prev_hq_amount > 0 else None
+            
+            # Add to results if there's any current activity
+            if current_total > 0:
+                all_opex.append({
+                    "category": category,
+                    "amount": current_total,
+                    "delta": total_delta
+                })
+            
+            if current_opex_amount > 0:
+                opex_only.append({
+                    "category": category,
+                    "amount": current_opex_amount,
+                    "delta": opex_delta
+                })
+            
+            if current_hq_amount > 0:
+                hq_opex_only.append({
+                    "category": category,
+                    "amount": current_hq_amount,
+                    "delta": hq_delta
+                })
         
-        result.sort(key=lambda x: x["amount"], reverse=True)
-        return result
+        # Sort by amount (descending)
+        all_opex.sort(key=lambda x: x["amount"], reverse=True)
+        opex_only.sort(key=lambda x: x["amount"], reverse=True)
+        hq_opex_only.sort(key=lambda x: x["amount"], reverse=True)
+        
+        return {
+            "all": all_opex,
+            "opex": opex_only,
+            "hq_opex": hq_opex_only,
+        }
     
-    qs_current = Opex.objects.filter(current_opex_filter)
-    qs_previous = Opex.objects.filter(prev_opex_filter) if prev_opex_filter else None
-    
-    opex_breakdown = {
-        "all": get_opex_breakdown_by_type(qs_current, qs_previous, "both"),
-        "credit_only": get_opex_breakdown_by_type(
-            qs_current.filter(credit__gt=0), 
-            qs_previous.filter(credit__gt=0) if qs_previous else None, 
-            "credit"
-        ),
-        "debit_only": get_opex_breakdown_by_type(
-            qs_current.filter(debit__gt=0), 
-            qs_previous.filter(debit__gt=0) if qs_previous else None, 
-            "debit"
-        ),
-    }
+    opex_breakdown = get_opex_breakdown()
 
     # ─── 8) HISTORICAL COSTS BREAKDOWN (4 MONTHS INCLUDING SELECTED) ──────────
     periods_including_selected = [selected_date - relativedelta(months=i) for i in range(3, -1, -1)]
@@ -376,10 +601,10 @@ def financial_overview_view(request):
             "nbet": period_costs["nbet"],
             "mo": period_costs["mo"],
             "salaries": period_costs["salaries"],
-            "disco_opex": period_costs["opex"],
+            "disco_opex": period_costs["disco_opex"],  # This now includes both Opex and HQOpex
             "total": month_total,
             "delta": month_delta,
-            "energy_share": period_costs["energy_share"]  # For debugging/transparency
+            "energy_share": period_costs["energy_share"]
         })
         
         prev_month_total = month_total
@@ -391,91 +616,76 @@ def financial_overview_view(request):
         period_end = period_date + relativedelta(months=1)
         
         # Energy delivered for tariff calculations
-        energy_delivered = EnergyDelivered.objects.filter(
-            energy_base & Q(date__gte=period_date, date__lt=period_end)
-        ).aggregate(total=Sum("energy_mwh"))["total"] or Decimal("0")
+        if energy_feeders:
+            energy_delivered = get_energy_delivered_optimized(
+                Q(feeder__in=energy_feeders), period_date, period_end
+            )
+        else:
+            energy_delivered = get_energy_delivered_optimized(Q(), period_date, period_end)
 
         # Commercial data for tariff calculations
-        period_commercial_filter = commercial_base & Q(month__gte=period_date, month__lt=period_end)
-        commercial_data = MonthlyCommercialSummary.objects.filter(period_commercial_filter).aggregate(
-            revenue_billed=Sum("revenue_billed"), 
-            revenue_collected=Sum("revenue_collected")
-        )
+        period_revenue = get_revenue_for_period(period_date, period_end)
         
-        revenue_billed = commercial_data["revenue_billed"] or 0
-        revenue_collected = commercial_data["revenue_collected"] or 0
+        revenue_billed = safe_decimal(period_revenue["billed"])
+        revenue_collected = safe_decimal(period_revenue["collected"])
 
-        # Calculate tariffs
-        billing_tariff = (revenue_billed / (energy_delivered * 1000)) if energy_delivered else 0
-        collection_tariff = (revenue_collected / (energy_delivered * 1000)) if energy_delivered else 0
+        # Calculate tariffs (₦/kWh)
+        # Convert MWh to kWh for tariff calculation
+        energy_delivered_kwh = energy_delivered * Decimal(1000)
+        
+        # Billing Tariff = Revenue Billed / Energy Delivered (in kWh)
+        billing_tariff = (revenue_billed / energy_delivered_kwh) if energy_delivered_kwh > 0 else Decimal(0)
+        
+        # Collection Tariff = Revenue Collected / Energy Delivered (in kWh) 
+        collection_tariff = (revenue_collected / energy_delivered_kwh) if energy_delivered_kwh > 0 else Decimal(0)
+        
+        # Tariff Loss = Billing Tariff - Collection Tariff
         tariff_loss = billing_tariff - collection_tariff
 
-        # Get MYTO tariff
+        # Get MYTO tariff (assuming single band for now, can be enhanced)
         myto_tariff_obj = MYTOTariff.objects.filter(
             effective_date__lte=period_date
         ).order_by("-effective_date").first()
-        myto_tariff = float(myto_tariff_obj.rate_per_kwh) if myto_tariff_obj else 60.0
+        myto_tariff = safe_float(myto_tariff_obj.rate_per_kwh) if myto_tariff_obj else 60.0
 
         historical_tariffs.append({
             "month": period_date.strftime("%b"),
             "myto_tariff": myto_tariff,
-            "billing_tariff": round(float(billing_tariff), 2),
-            "collection_tariff": round(float(collection_tariff), 2),
-            "tariff_loss": round(float(tariff_loss), 2),
+            "billing_tariff": safe_float(billing_tariff),
+            "collection_tariff": safe_float(collection_tariff),
+            "tariff_loss": safe_float(tariff_loss),
         })
 
-    # ─── 10) BUILD RESPONSE IN FRONTEND ORDER ─────────────────────────────────
+    # ─── 10) BUILD RESPONSE ─────────────────────────────────────────────────────
     return Response({
-        # 1. Operating Expenditure (first display)
         "operating_expenditure": operating_expenditure,
-        
-        # 2. Profit Margin (second display)
         "profit_margin": profit_margin,
-        
-        # 3. Total Cost with history (third component)
         "total_cost": {
             "current": current_costs["total"],
             "delta": calculate_delta(current_costs["total"], prev_costs["total"]),
             "history": total_cost_history
         },
-        
-        # 4. Revenue Billed with history (fourth component)
         "revenue_billed": {
             "current": current_revenue["billed"],
             "delta": calculate_delta(current_revenue["billed"], prev_revenue["billed"]),
             "history": revenue_billed_history
         },
-        
-        # 5. Collections with history (fifth component)
         "collections": {
             "current": current_revenue["collected"],
             "delta": calculate_delta(current_revenue["collected"], prev_revenue["collected"]),
             "history": collections_history
         },
-        
-        # 6. Monthly collections line chart (sixth component)
         "monthly_collections_year": monthly_collections_year,
-        
-        # 7. Collections by vendor (seventh component)
         "collections_by_vendor": collections_by_vendor,
-        
-        # 8. OPEX breakdown (eighth component)
         "opex_breakdown": opex_breakdown,
-        
-        # 9. Historical costs breakdown (ninth component)
         "historical_costs": historical_costs,
-        
-        # 10. Historical tariffs (tenth component)
         "historical_tariffs": historical_tariffs,
-        
-        # Additional metadata for debugging/transparency
         "filter_info": {
-            "level": "transformer" if transformer_slug else "feeder" if feeder_slug else "district" if district_name else "state" if state_name else "all",
+            "level": location_info['type'],
             "transformer": transformer_slug,
             "feeder": feeder_slug,
             "district": district_name,
             "state": state_name,
-            "current_energy_share": current_costs.get("energy_share", 0),
-            "transformer_opex_share": current_costs.get("transformer_opex_share", None)
+            "current_energy_share": current_costs.get("energy_share", 0)
         }
     })

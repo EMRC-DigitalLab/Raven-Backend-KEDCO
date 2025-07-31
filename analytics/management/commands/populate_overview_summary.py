@@ -312,7 +312,7 @@ class Command(BaseCommand):
         billing_eff = (energy_billed / energy_delivered * 100) if energy_delivered > 0 else Decimal("0")
         collection_eff = (revenue_collected / revenue_billed * 100) if revenue_billed > 0 else Decimal("0")
         atc_losses = Decimal("100") - (billing_eff * collection_eff / 100) if billing_eff and collection_eff else Decimal("100")
-        energy_collected = energy_delivered * (collection_eff / 100) if energy_delivered > 0 else Decimal("0")
+        energy_collected = energy_billed * (collection_eff / 100) if energy_delivered > 0 else Decimal("0")
         customer_response_rate = (customers_responded / customers_billed * 100) if customers_billed > 0 else Decimal("0")
         
         total_cost = opex_costs + salary_costs + nbet_costs + mo_costs

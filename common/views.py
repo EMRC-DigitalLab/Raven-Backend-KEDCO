@@ -179,7 +179,7 @@ class OverviewAPIView(APIView):
             
             # Energy collected = Energy Delivered × Collection Efficiency
             # This represents the energy equivalent of what was actually collected
-            energy_collected = energy_delivered * collection_eff
+            energy_collected = energy_billed * collection_eff
             
             # Customer response rate
             customer_response_rate = (customers_responded / customers_billed * 100) if customers_billed > 0 else 0

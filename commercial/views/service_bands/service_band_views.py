@@ -159,7 +159,7 @@ class ServiceBandMetricsView(APIView):
                 response_rate = (Decimal(customers_responded) / Decimal(customers_billed) * 100) if customers_billed > 0 else Decimal(0)
                 
                 # Energy collected = Energy Delivered * (Collection Efficiency / 100)
-                energy_collected = energy_delivered * (collection_eff / 100) if energy_delivered > 0 else Decimal(0)
+                energy_collected = energy_billed * (collection_eff / 100) if energy_delivered > 0 else Decimal(0)
                 
             except Exception:
                 billing_eff = collection_eff = atcc = response_rate = energy_collected = Decimal(0)
