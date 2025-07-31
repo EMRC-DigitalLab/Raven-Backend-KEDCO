@@ -5,7 +5,8 @@ from rest_framework.decorators import action
 from financial.models import *
 from financial.serializers import *
 from common.mixins import DistrictLocationFilterMixin
-from financial.models import Opex
+from commercial.utils import get_filtered_feeders
+from commercial.date_filters import get_date_range_from_request
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.decorators import action
@@ -13,29 +14,9 @@ from django.db import transaction
 from common.models import BusinessDistrict as District
 
 
-
 class OpexCategoryViewSet(viewsets.ModelViewSet):
     queryset = OpexCategory.objects.all()
     serializer_class = OpexCategorySerializer
-
-class GLBreakdownViewSet(viewsets.ModelViewSet):
-    queryset = GLBreakdown.objects.all()
-    serializer_class = GLBreakdownSerializer
-
-class SalaryPaymentViewSet(viewsets.ModelViewSet):
-    queryset = SalaryPayment.objects.all()
-    serializer_class = SalaryPaymentSerializer
-    filterset_fields = ["district", "month", "staff"]
-
-# class OpexViewSet(DistrictLocationFilterMixin, viewsets.ModelViewSet):
-#     # queryset = Expense.objects.all()
-#     serializer_class = OpexSerializer
-#     filter_backends = [DjangoFilterBackend]
-#     filterset_fields = {'district', 'gl_breakdown', 'opex_category', 'date'}
-
-#     def get_queryset(self):
-#         qs = Opex.objects.all()
-#         return self.filter_by_location(qs)
 
 class OpexViewSet(DistrictLocationFilterMixin, viewsets.ModelViewSet):
     queryset = Opex.objects.all()
@@ -834,3 +815,32 @@ class HQOpexViewSet(viewsets.ModelViewSet):
         if errors:
             response_data['error_details'] = errors
         return Response(response_data, status=status.HTTP_200_OK)
+
+
+class GLBreakdownViewSet(viewsets.ModelViewSet):
+    queryset = GLBreakdown.objects.all()
+    serializer_class = GLBreakdownSerializer
+
+
+class MonthlyRevenueBilledViewSet(viewsets.ModelViewSet):
+    serializer_class = MonthlyRevenueBilledSerializer
+
+    def get_queryset(self):
+        feeders = get_filtered_feeders(self.request)
+        month_from, month_to = get_date_range_from_request(self.request, 'month')
+
+        qs = MonthlyRevenueBilled.objects.filter(feeder__in=feeders)
+
+        if month_from and month_to:
+            qs = qs.filter(month__range=(month_from, month_to))
+        elif month_from:
+            qs = qs.filter(month__gte=month_from)
+        elif month_to:
+            qs = qs.filter(month__lte=month_to)
+
+        return qs
+    
+class SalaryPaymentViewSet(viewsets.ModelViewSet):
+    queryset = SalaryPayment.objects.all()
+    serializer_class = SalaryPaymentSerializer
+    filterset_fields = ["district", "month", "staff"]
