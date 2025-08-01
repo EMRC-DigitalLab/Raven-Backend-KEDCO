@@ -1,6 +1,6 @@
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
-from django.db.models import Sum, Avg, Max, Q
+from django.db.models import Sum, Avg, Max, Q, Count
 from django.core.cache import cache
 from datetime import datetime, timedelta
 import hashlib
@@ -18,7 +18,7 @@ def technical_service_band_summary(request):
     Technical summary for all service bands with optional state filtering.
     
     Returns metrics for each service band including:
-    - Total cost (NBET + MO allocation based on energy delivered)
+    - Average duration of supply (daily average hours of electricity supply)
     - Duration of interruption (average hours including ongoing outages)
     - Turnaround time (same as duration)
     - Feeder tripping count (total fault interruptions excluding load shedding/maintenance)
@@ -68,10 +68,10 @@ def technical_service_band_summary(request):
                 "band": band.name,
                 "band_description": band.description,
                 "metrics": band_metrics or {
-                    "total_cost": 0.0,
+                    "average_duration_of_supply": 0.0,
                     "duration_of_interruption": 0.0,
                     "turnaround_time": 0.0,
-                    "feeder_tripping_rate": 0.0,
+                    "feeder_tripping_count": 0,
                     "number_of_feeders": 0,
                     "customer_count": 0,
                     "average_peak_load": 0.0,
@@ -86,7 +86,7 @@ def technical_service_band_summary(request):
                 "band": band.name,
                 "band_description": band.description,
                 "metrics": {
-                    "total_cost": 0.0,
+                    "average_duration_of_supply": 0.0,
                     "duration_of_interruption": 0.0,
                     "turnaround_time": 0.0,
                     "feeder_tripping_count": 0,
@@ -181,7 +181,7 @@ def _calculate_band_metrics_realtime(band, month_start, month_end, state_filter)
     
     # Initialize default metrics (all zeros)
     default_metrics = {
-        "total_cost": 0.0,
+        "average_duration_of_supply": 0.0,
         "duration_of_interruption": 0.0,
         "turnaround_time": 0.0,
         "feeder_tripping_count": 0,
@@ -197,8 +197,8 @@ def _calculate_band_metrics_realtime(band, month_start, month_end, state_filter)
         return default_metrics
     
     try:
-        # 1. Total Cost Calculation
-        total_cost = _calculate_band_total_cost(feeder_ids, month_start, month_end, state_filter)
+        # 1. Average Duration of Supply Calculation
+        avg_supply_duration = _calculate_band_average_supply_duration(feeder_ids, month_start, month_end)
         
         # 2. Interruption Metrics
         interruption_metrics = _calculate_band_interruption_metrics(feeder_ids, month_start, month_end)
@@ -207,7 +207,7 @@ def _calculate_band_metrics_realtime(band, month_start, month_end, state_filter)
         infrastructure_metrics = _calculate_band_infrastructure_metrics(feeder_ids, month_start, month_end)
         
         return {
-            "total_cost": float(total_cost),
+            "average_duration_of_supply": float(avg_supply_duration),
             "duration_of_interruption": interruption_metrics['avg_duration'],
             "turnaround_time": interruption_metrics['avg_turnaround_time'],
             "feeder_tripping_count": interruption_metrics['tripping_count'],
@@ -223,78 +223,52 @@ def _calculate_band_metrics_realtime(band, month_start, month_end, state_filter)
         return default_metrics
 
 
-def _calculate_band_total_cost(feeder_ids, month_start, month_end, state_filter):
-    """Calculate total cost for the band using energy-based allocation"""
-    from decimal import Decimal
+def _calculate_band_average_supply_duration(feeder_ids, month_start, month_end):
+    """Calculate average daily duration of supply for the band"""
     
     # Return 0 if no feeders
     if not feeder_ids:
-        return Decimal('0')
+        return 0.0
     
     try:
-        # Get total energy delivered by all feeders (for calculating shares)
-        if state_filter:
-            # Get all feeders in the state for total energy calculation
-            all_state_feeders = Feeder.objects.filter(
-                business_district__state=state_filter
-            ).values_list('id', flat=True)
+        # Try to use DailyHoursOfSupply if available
+        try:
+            from technical.models import DailyHoursOfSupply
+            daily_supply = DailyHoursOfSupply.objects.filter(
+                feeder_id__in=feeder_ids,
+                date__range=(month_start, month_end)
+            )
             
-            total_energy_query = FeederEnergyDaily.objects.filter(
-                feeder_id__in=all_state_feeders,
-                date__range=(month_start, month_end)
-            )
-        else:
-            # National level - all feeders
-            total_energy_query = FeederEnergyDaily.objects.filter(
-                date__range=(month_start, month_end)
-            )
+            if daily_supply.exists():
+                avg_supply = daily_supply.aggregate(avg=Avg('hours_supplied'))['avg'] or 0
+                return round(min(float(avg_supply), 24.0), 2)  # Cap at 24 hours
+            
+        except ImportError:
+            pass  # DailyHoursOfSupply doesn't exist, use hourly method
         
-        total_energy_delivered = total_energy_query.aggregate(
-            total=Sum('energy_mwh')
-        )['total'] or Decimal('0')
-        
-        # If no total energy data, return 0 (don't fail)
-        if total_energy_delivered == 0:
-            return Decimal('0')
-        
-        # Get energy delivered by feeders in this band
-        band_energy_delivered = FeederEnergyDaily.objects.filter(
+        # Fallback: Calculate daily hours from HourlyLoad data
+        daily_hours = HourlyLoad.objects.filter(
             feeder_id__in=feeder_ids,
-            date__range=(month_start, month_end)
-        ).aggregate(
-            total=Sum('energy_mwh')
-        )['total'] or Decimal('0')
+            date__range=(month_start, month_end),
+            load_mw__gt=0  # Only count hours with actual load
+        ).values('feeder', 'date').annotate(
+            daily_hours=Count('hour')
+        )
         
-        # Calculate band's share of total energy
-        if total_energy_delivered > 0 and band_energy_delivered > 0:
-            band_energy_share = band_energy_delivered / total_energy_delivered
+        if daily_hours.exists():
+            avg_supply = daily_hours.aggregate(avg=Avg('daily_hours'))['avg'] or 0
+            return round(min(float(avg_supply), 24.0), 2)  # Cap at 24 hours
         else:
-            return Decimal('0')
-        
-        # Get NBET costs for the month
-        nbet_costs = NBETInvoice.objects.filter(
-            month__year=month_start.year,
-            month__month=month_start.month
-        ).aggregate(total=Sum("amount"))["total"] or Decimal("0")
-        
-        # Get MO costs for the month
-        mo_costs = MOInvoice.objects.filter(
-            month__year=month_start.year,
-            month__month=month_start.month
-        ).aggregate(total=Sum("amount"))["total"] or Decimal("0")
-        
-        # Allocate costs based on energy share
-        total_cost = (nbet_costs + mo_costs) * band_energy_share
-        
-        return total_cost
-        
+            return 0.0
+            
     except Exception as e:
-        logger.error(f"Error calculating band total cost: {str(e)}")
-        return Decimal('0')
+        logger.error(f"Error calculating band average supply duration: {str(e)}")
+        return 0.0
 
 
 def _calculate_band_interruption_metrics(feeder_ids, month_start, month_end):
     """Calculate interruption-related metrics for the band with improved logic"""
+    from django.utils import timezone
     
     # Get all interruptions for the band's feeders
     all_interruptions = FeederInterruption.objects.filter(
@@ -325,18 +299,34 @@ def _calculate_band_interruption_metrics(feeder_ids, month_start, month_end):
     total_duration_hours = 0.0
     interruption_count = 0
     
-    period_end = datetime.combine(month_end, datetime.max.time())
+    # Create timezone-aware period end datetime
+    period_end_naive = datetime.combine(month_end, datetime.max.time())
+    period_end = timezone.make_aware(period_end_naive) if timezone.is_naive(period_end_naive) else period_end_naive
     
     for interruption in all_interruptions:
-        if interruption.restored_at:
-            # Resolved interruption - use actual duration
-            duration = (interruption.restored_at - interruption.occurred_at).total_seconds() / 3600
-        else:
-            # Ongoing interruption - calculate duration to end of period
-            duration = (period_end - interruption.occurred_at).total_seconds() / 3600
-        
-        total_duration_hours += duration
-        interruption_count += 1
+        try:
+            if interruption.restored_at:
+                # Resolved interruption - use actual duration
+                duration = (interruption.restored_at - interruption.occurred_at).total_seconds() / 3600
+            else:
+                # Ongoing interruption - calculate duration to end of period
+                # Ensure both datetimes have the same timezone awareness
+                occurred_at = interruption.occurred_at
+                if timezone.is_naive(occurred_at) and not timezone.is_naive(period_end):
+                    occurred_at = timezone.make_aware(occurred_at)
+                elif not timezone.is_naive(occurred_at) and timezone.is_naive(period_end):
+                    period_end = timezone.make_aware(period_end)
+                
+                duration = (period_end - occurred_at).total_seconds() / 3600
+            
+            # Only include reasonable durations (not negative, not extremely long)
+            if duration >= 0 and duration <= 8760:  # Max 1 year duration
+                total_duration_hours += duration
+                interruption_count += 1
+                
+        except Exception as e:
+            logger.error(f"Error calculating duration for interruption {interruption.id}: {str(e)}")
+            continue
     
     # Calculate average duration
     avg_duration = total_duration_hours / interruption_count if interruption_count > 0 else 0.0
