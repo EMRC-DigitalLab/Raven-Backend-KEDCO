@@ -79,7 +79,7 @@ def transformer_metrics_by_feeder_view(request):
             collection_eff = min(collection_eff, Decimal(1))
             
             # Calculate energy collected: Energy Delivered × Collection Efficiency
-            energy_collected = Decimal(energy_delivered) * collection_eff if energy_delivered else Decimal(0)
+            energy_collected = Decimal(energy_billed) * collection_eff if energy_delivered else Decimal(0)
             
             # Calculate ATCC: 1 - (Billing Efficiency × Collection Efficiency)
             atcc = (1 - (billing_eff * collection_eff)) * 100

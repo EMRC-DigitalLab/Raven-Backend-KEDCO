@@ -137,7 +137,7 @@ def calculate_metrics(delivered, billed, revenue_billed, revenue_collected, cust
         atcc_losses = Decimal(100) - (billing_eff * collection_eff / 100)
         
         # Energy collected = Energy Delivered * (Collection Efficiency / 100)
-        energy_collected = delivered * (collection_eff / 100)
+        energy_collected = billed * (collection_eff / 100)
         
         # Customer response rate = (Customers Responded / Customers Billed) * 100
         response_rate = safe_divide(Decimal(customers_responded), Decimal(customers_billed)) * 100

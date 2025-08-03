@@ -234,7 +234,7 @@ def get_commercial_overview_data(mode, year=None, month=None, week=None, from_da
         try:
             billing_eff = Decimal(energy_billed) / Decimal(energy_delivered) if energy_delivered else Decimal(0)
             collection_eff = Decimal(revenue_collected) / Decimal(revenue_billed) if revenue_billed else Decimal(0)
-            energy_collected = Decimal(energy_delivered) * collection_eff if energy_delivered > 0 else Decimal("0")
+            energy_collected = Decimal(energy_billed) * collection_eff if energy_delivered > 0 else Decimal("0")
             atcc = Decimal(1) - (billing_eff * collection_eff)
 
             # Cap efficiencies at 100% and ensure AT&C is non-negative

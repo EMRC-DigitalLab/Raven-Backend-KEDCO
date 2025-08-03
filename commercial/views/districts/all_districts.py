@@ -99,7 +99,7 @@ def commercial_all_business_districts_view(request):
             
             # Energy collected = Energy Delivered * Collection Efficiency / 100
             # This represents the energy equivalent of what was actually collected
-            energy_collected = delivered_mwh * collection_eff / 100
+            energy_collected = billed_mwh * collection_eff / 100
             
         except (ZeroDivisionError, InvalidOperation) as e:
             print(f"Error calculating efficiency metrics for {district.name}: {e}")
