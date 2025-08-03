@@ -12,7 +12,7 @@ from dateutil.relativedelta import relativedelta
 
 
 def get_date_range_from_request(request):
-    """Enhanced date range parsing with support for multiple modes"""
+    """Enhanced date range parsing with support for multiple modes including yearly"""
     mode = request.GET.get("mode", "monthly")
     
     if mode in ["daily", "weekly", "custom", "range"]:
@@ -31,6 +31,15 @@ def get_date_range_from_request(request):
             
         except (KeyError, ValueError) as e:
             raise ValueError(f"Invalid date format for {mode} mode: {str(e)}")
+    
+    elif mode == "yearly":
+        try:
+            year = int(request.GET.get("year", datetime.now().year))
+            from_date = datetime(year, 1, 1).date()
+            to_date = datetime(year, 12, 31).date()
+            return from_date, to_date, "yearly"
+        except (KeyError, ValueError):
+            raise ValueError("Invalid or missing year for yearly mode")
     
     else:  # monthly mode
         try:
@@ -72,6 +81,8 @@ def _get_state_metrics_from_summary(state, from_date, to_date, mode):
         
         if mode == "monthly":
             return _get_monthly_summary_metrics(state, from_date, to_date)
+        elif mode == "yearly":
+            return _get_yearly_summary_metrics(state, from_date, to_date)
         else:
             return _get_daily_summary_metrics(state, from_date, to_date, mode)
             
@@ -105,6 +116,7 @@ def _get_monthly_summary_metrics(state, from_date, to_date):
     total_days = (to_date - from_date).days + 1
     weighted_supply_hours = 0
     weighted_interruption_hours = 0
+    weighted_turnaround_time = 0
     total_interruptions = 0
     total_weight = 0
     
@@ -124,6 +136,7 @@ def _get_monthly_summary_metrics(state, from_date, to_date):
         
         weighted_supply_hours += float(summary.avg_hours_of_supply) * weight
         weighted_interruption_hours += float(summary.avg_interruption_duration) * weight
+        weighted_turnaround_time += float(summary.avg_turnaround_time) * weight
         total_interruptions += summary.total_interruptions
         total_weight += weight
     
@@ -136,12 +149,61 @@ def _get_monthly_summary_metrics(state, from_date, to_date):
     return {
         "avg_supply": round(min(weighted_supply_hours, 24.0), 2),
         "avg_duration": round(weighted_interruption_hours, 2),
-        "turnaround": round(float(latest_summary.avg_turnaround_time), 2),
+        "turnaround": round(weighted_turnaround_time, 2),
         "ftc": int(total_interruptions),
         "feeder_count": latest_summary.active_feeder_count,
         "peak_load": float(latest_summary.max_peak_load),
         "customer_population": latest_summary.total_customer_count,
         "_source": "monthly_summary"
+    }
+
+
+def _get_yearly_summary_metrics(state, from_date, to_date):
+    """Get metrics from yearly aggregation of monthly summaries"""
+    target_year = from_date.year
+    print(f"DEBUG: Looking for yearly summary data for state {state.name}, year: {target_year}")
+    
+    # Get all months in the year
+    year_months = []
+    for month in range(1, 13):
+        year_months.append(datetime(target_year, month, 1).date())
+    
+    # Get state-level monthly summaries for the entire year
+    state_summaries = MonthlyTechnicalSummary.objects.filter(
+        state=state,
+        business_district__isnull=True,
+        feeder__isnull=True,
+        month__in=year_months,
+        has_complete_data=True
+    )
+    
+    print(f"DEBUG: Found {state_summaries.count()} monthly summaries for year {target_year} for {state.name}")
+    
+    # For yearly mode, we can accept partial data (not all 12 months)
+    # but we need at least some data
+    if state_summaries.count() == 0:
+        print(f"DEBUG: No monthly summary data for {state.name} in {target_year}, falling back to realtime")
+        return None
+    
+    # Calculate yearly aggregates from available monthly data
+    total_interruptions = state_summaries.aggregate(total=Sum('total_interruptions'))['total'] or 0
+    avg_supply = state_summaries.aggregate(avg=Avg('avg_hours_of_supply'))['avg'] or 0
+    avg_duration = state_summaries.aggregate(avg=Avg('avg_interruption_duration'))['avg'] or 0
+    avg_turnaround = state_summaries.aggregate(avg=Avg('avg_turnaround_time'))['avg'] or 0
+    max_peak_load = state_summaries.aggregate(max=Max('max_peak_load'))['max'] or 0
+    
+    # Get infrastructure metrics from the most recent summary
+    latest_summary = state_summaries.order_by('-month').first()
+    
+    return {
+        "avg_supply": round(min(float(avg_supply), 24.0), 2),
+        "avg_duration": round(float(avg_duration), 2),
+        "turnaround": round(float(avg_turnaround), 2),
+        "ftc": int(total_interruptions),
+        "feeder_count": latest_summary.active_feeder_count,
+        "peak_load": float(max_peak_load),
+        "customer_population": latest_summary.total_customer_count,
+        "_source": f"yearly_summary_{state_summaries.count()}_months"
     }
 
 
@@ -197,7 +259,7 @@ def _get_daily_summary_metrics(state, from_date, to_date, mode):
 def _calculate_state_metrics_realtime(state, from_date, to_date, mode):
     """
     Calculate state metrics in real-time when summary data is not available.
-    Enhanced to handle different modes properly.
+    Enhanced to handle different modes properly including yearly.
     """
     print(f"DEBUG: Calculating realtime metrics for state {state.name}, mode: {mode}")
     
@@ -291,7 +353,7 @@ def _calculate_state_metrics_realtime(state, from_date, to_date, mode):
     result = {
         "avg_supply": round(float(avg_supply), 2),
         "avg_duration": round(float(avg_duration), 2),
-        "turnaround": round(float(avg_duration), 2),
+        "turnaround": round(float(avg_duration), 2),  # Use same as duration for now
         "ftc": ftc,
         "feeder_count": feeder_count,
         "peak_load": float(peak_load),
@@ -324,18 +386,21 @@ def all_states_technical_summary(request):
     """
     Enhanced technical summary for all states supporting multiple modes:
     - monthly: Traditional month-based filtering using MonthlyTechnicalSummary
+    - yearly: Year-based filtering using MonthlyTechnicalSummary (aggregated)
     - daily: Single day filtering using DailyTechnicalSummary
     - weekly: Week range filtering using DailyTechnicalSummary
     - custom: Custom date range filtering using DailyTechnicalSummary
     - range: Legacy range mode (same as custom)
     
     Query Parameters:
-    - mode: monthly, daily, weekly, custom, range
+    - mode: monthly, yearly, daily, weekly, custom, range
     - For monthly: year, month
+    - For yearly: year
     - For others: from_date, to_date (ISO format: YYYY-MM-DDTHH:MM:SS.sssZ)
     
     Examples:
     - ?mode=monthly&year=2024&month=8
+    - ?mode=yearly&year=2024
     - ?mode=daily&from_date=2024-08-02T23:00:00.000Z&to_date=2024-08-02T23:00:00.000Z
     - ?mode=weekly&from_date=2024-08-05T00:00:00.000Z&to_date=2024-08-11T23:59:59.999Z
     - ?mode=custom&from_date=2024-08-01T00:00:00.000Z&to_date=2024-08-15T23:59:59.999Z
@@ -407,24 +472,38 @@ def all_states_technical_summary(request):
     
     print(f"DEBUG: Final overview has {len(overview)} states")
     
+    # Create mode-specific metadata
+    metadata = {
+        "mode": mode,
+        "from_date": from_date.isoformat(),
+        "to_date": to_date.isoformat(),
+        "total_states": len(overview),
+        "summary_sources": sum(1 for state in overview if "summary" in state["metrics"].get("_source", "")),
+        "realtime_sources": sum(1 for state in overview if "realtime" in state["metrics"].get("_source", "")),
+    }
+    
+    # Add mode-specific metadata
+    if mode == "yearly":
+        metadata["year"] = from_date.year
+    elif mode == "monthly":
+        metadata["year"] = from_date.year
+        metadata["month"] = from_date.month
+    else:
+        metadata["date_range_days"] = (to_date - from_date).days + 1
+    
     response_data = {
         "overview": overview,
-        "_metadata": {
-            "mode": mode,
-            "from_date": from_date.isoformat(),
-            "to_date": to_date.isoformat(),
-            "total_states": len(overview),
-            "summary_sources": sum(1 for state in overview if "summary" in state["metrics"].get("_source", "")),
-            "realtime_sources": sum(1 for state in overview if "realtime" in state["metrics"].get("_source", "")),
-        }
+        "_metadata": metadata
     }
     
     # Cache for different durations based on mode and whether it includes current data
     today = datetime.now().date()
     if to_date >= today:
         cache_timeout = 300  # 5 minutes for current data
+    elif mode == "yearly":
+        cache_timeout = 3600  # 1 hour for yearly data
     else:
-        cache_timeout = 1800  # 30 minutes for historical data
+        cache_timeout = 1800  # 30 minutes for other historical data
     
     cache.set(cache_key, response_data, cache_timeout)
     print(f"DEBUG: Cached response with key: {cache_key} for {cache_timeout} seconds")
@@ -432,7 +511,7 @@ def all_states_technical_summary(request):
     return Response(response_data)
 
 
-# Legacy support function
+# Legacy support functions
 def calculate_avg_supply(from_date, to_date, feeder_ids):
     """Legacy function for backward compatibility"""
     daily_supply = HourlyLoad.objects.filter(

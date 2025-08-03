@@ -49,6 +49,8 @@ class OptimizedTechnicalOverviewAPIView(APIView):
         # Fetch data based on mode
         if mode == 'monthly':
             overview_data = self._fetch_monthly_data(date_info['periods'], filter_params)
+        elif mode == 'yearly':
+            overview_data = self._fetch_yearly_data(date_info['periods'], filter_params)
         else:
             overview_data = self._fetch_daily_data(date_info['periods'], filter_params, mode)
         
@@ -94,6 +96,14 @@ class OptimizedTechnicalOverviewAPIView(APIView):
                     to_date == (from_date.replace(month=from_date.month+1 if from_date.month < 12 else 1, 
                                                 year=from_date.year if from_date.month < 12 else from_date.year+1, day=1) - timedelta(days=1))):
                     return 'monthly'
+                else:
+                    return 'custom'
+            elif diff_days >= 365 and diff_days <= 366:
+                # Check if it's a full year (365 or 366 days for leap year)
+                if (from_date.month == 1 and from_date.day == 1 and 
+                    to_date.month == 12 and to_date.day == 31 and 
+                    from_date.year == to_date.year):
+                    return 'yearly'
                 else:
                     return 'custom'
             else:
@@ -161,6 +171,8 @@ class OptimizedTechnicalOverviewAPIView(APIView):
         """Parse dates based on the specified mode"""
         if mode == 'monthly':
             return self._parse_monthly_dates(request)
+        elif mode == 'yearly':
+            return self._parse_yearly_dates(request)
         else:
             return self._parse_daily_dates(request, mode)
     
@@ -183,6 +195,27 @@ class OptimizedTechnicalOverviewAPIView(APIView):
             'periods': list(reversed(periods)),
             'target_date': target_date,
             'mode': 'monthly'
+        }
+    
+    def _parse_yearly_dates(self, request):
+        """Parse dates for yearly mode"""
+        try:
+            year = int(request.GET.get("year", datetime.now().year))
+            target_date = datetime(year, 1, 1).date()
+        except (TypeError, ValueError):
+            target_date = date.today().replace(month=1, day=1)
+        
+        # Get 5 years (current + 4 previous)
+        periods = []
+        for i in range(5):
+            period_year = target_date.year - i
+            period_start = date(period_year, 1, 1)
+            periods.append(period_start)
+        
+        return {
+            'periods': list(reversed(periods)),
+            'target_date': target_date,
+            'mode': 'yearly'
         }
     
     def _parse_daily_dates(self, request, mode):
@@ -321,6 +354,224 @@ class OptimizedTechnicalOverviewAPIView(APIView):
                         overview_data.append(self._get_fallback_data(period.strftime("%b"), 'monthly'))
         
         return overview_data
+    
+    def _fetch_yearly_data(self, periods, filter_params):
+        """Fetch data using yearly aggregation of monthly summaries"""
+        overview_data = []
+        
+        for period_start in periods:
+            target_year = period_start.year
+            
+            # Get all months in this year
+            year_months = []
+            for month in range(1, 13):
+                year_months.append(datetime(target_year, month, 1).date())
+            
+            # Build query filters for monthly summaries
+            query_filters = {'month__in': year_months}
+            for key, value in filter_params.items():
+                if value is not None:
+                    query_filters[key] = value
+            
+            # Get monthly summaries for this year
+            monthly_summaries = MonthlyTechnicalSummary.objects.filter(**query_filters)
+            
+            if monthly_summaries.exists():
+                # Aggregate yearly data from monthly summaries
+                aggregated = self._aggregate_yearly_from_monthly(monthly_summaries, target_year)
+                overview_data.append(aggregated)
+            else:
+                # Try to aggregate from feeder level for this year
+                year_start = date(target_year, 1, 1)
+                year_end = date(target_year, 12, 31)
+                aggregated = self._aggregate_yearly_from_feeders(year_start, year_end, filter_params, target_year)
+                if aggregated:
+                    overview_data.append(aggregated)
+                else:
+                    overview_data.append(self._get_fallback_data(str(target_year), 'yearly'))
+        
+        return overview_data
+    
+    def _aggregate_yearly_from_monthly(self, monthly_summaries, target_year):
+        """Aggregate yearly data from monthly summaries - FIXED aggregation logic"""
+        # Calculate yearly aggregates
+        total_interruptions = monthly_summaries.aggregate(total=Sum('total_interruptions'))['total'] or 0
+        avg_supply = monthly_summaries.aggregate(avg=Avg('avg_hours_of_supply'))['avg'] or 0
+        avg_duration = monthly_summaries.aggregate(avg=Avg('avg_interruption_duration'))['avg'] or 0
+        avg_turnaround = monthly_summaries.aggregate(avg=Avg('avg_turnaround_time'))['avg'] or 0
+        avg_fault_turnaround = monthly_summaries.aggregate(avg=Avg('avg_fault_turnaround_time'))['avg'] or 0
+        total_energy = monthly_summaries.aggregate(total=Sum('total_energy_delivered'))['total'] or 0
+        avg_peak_load = monthly_summaries.aggregate(avg=Avg('avg_peak_load'))['avg'] or 0
+        max_peak_load = monthly_summaries.aggregate(max=Max('max_peak_load'))['max'] or 0
+        
+        # FIXED: Get infrastructure metrics properly
+        # For feeder count and customer count, we should use the maximum values seen
+        # across all months, not just the latest month, since these can vary
+        max_feeder_count = monthly_summaries.aggregate(max=Max('active_feeder_count'))['max'] or 0
+        max_customer_count = monthly_summaries.aggregate(max=Max('total_customer_count'))['max'] or 0
+        
+        # Calculate daily averages for yearly period
+        days_in_year = 366 if target_year % 4 == 0 and (target_year % 100 != 0 or target_year % 400 == 0) else 365
+        avg_daily_interruptions = total_interruptions / days_in_year if days_in_year > 0 else 0
+        
+        # Aggregate interruption breakdowns
+        combined_breakdown = {}
+        combined_summary_breakdown = {}
+        
+        for summary in monthly_summaries:
+            # Get breakdown data safely
+            breakdown_data = summary.interruption_breakdown_dict if hasattr(summary, 'interruption_breakdown_dict') else {}
+            summary_breakdown_data = summary.summary_breakdown_dict if hasattr(summary, 'summary_breakdown_dict') else {}
+            
+            for fault_type, hours in breakdown_data.items():
+                combined_breakdown[fault_type] = combined_breakdown.get(fault_type, 0) + float(hours)
+            
+            for category, hours in summary_breakdown_data.items():
+                combined_summary_breakdown[category] = combined_summary_breakdown.get(category, 0) + float(hours)
+        
+        # Calculate reliability indices using max customer count
+        saifi = total_interruptions / max_customer_count if max_customer_count > 0 else 0
+        total_interruption_hours = sum(combined_breakdown.values()) if combined_breakdown else 0
+        saidi = total_interruption_hours / max_customer_count if max_customer_count > 0 else 0
+        
+        return {
+            "month": str(target_year),  # Use year as "month" for compatibility
+            "energy_delivered": float(total_energy),
+            "average_load": float(avg_peak_load),
+            "max_load": float(max_peak_load),
+            "interruptions": total_interruptions,
+            "avg_hours_supply": float(avg_supply),
+            "avg_interruption_duration": float(avg_duration),
+            "avg_turnaround_time": float(avg_turnaround),
+            "avg_fault_turnaround_time": float(avg_fault_turnaround),
+            "feeder_count": max_feeder_count,  # FIXED: Use max instead of latest
+            "customer_count": max_customer_count,  # FIXED: Use max instead of latest
+            "avg_daily_interruptions": round(avg_daily_interruptions, 2),
+            "availability_percentage": round((float(avg_supply) / 24) * 100, 2),
+            "saifi": round(saifi, 4),
+            "saidi": round(saidi, 4),
+            "interruption_breakdown": combined_breakdown,
+            "summary_breakdown": combined_summary_breakdown,
+            "_source": f"yearly_monthly_aggregation_{monthly_summaries.count()}_months",
+            "_year": target_year,
+            "_debug_months": list(monthly_summaries.values_list('month', flat=True)),
+        }
+    
+    def _aggregate_yearly_from_feeders(self, year_start, year_end, filter_params, target_year):
+        """Aggregate yearly data from feeder-level monthly summaries - FIXED logic"""
+        # Get all months in the year
+        year_months = []
+        for month in range(1, 13):
+            year_months.append(datetime(target_year, month, 1).date())
+        
+        # Build query to get feeder-level summaries for this year
+        feeder_filters = {
+            'month__in': year_months,
+            'feeder__isnull': False,
+            'state__isnull': True,
+            'business_district__isnull': True,
+        }
+        
+        # Apply geographic filters
+        if filter_params['feeder']:
+            feeder_filters['feeder'] = filter_params['feeder']
+        elif filter_params['business_district']:
+            feeder_filters['feeder__business_district'] = filter_params['business_district']
+        elif filter_params['state']:
+            feeder_filters['feeder__business_district__state'] = filter_params['state']
+        
+        feeder_summaries = MonthlyTechnicalSummary.objects.filter(**feeder_filters)
+        
+        if not feeder_summaries.exists():
+            return None
+        
+        # FIXED: Get unique feeders and their data
+        unique_feeders = set()
+        feeder_yearly_data = {}
+        
+        for summary in feeder_summaries:
+            feeder_id = summary.feeder.id
+            unique_feeders.add(feeder_id)
+            
+            if feeder_id not in feeder_yearly_data:
+                feeder_yearly_data[feeder_id] = {
+                    'total_energy': 0,
+                    'total_interruptions': 0,
+                    'total_interruption_hours': 0,
+                    'supply_hours_sum': 0,
+                    'duration_sum': 0,
+                    'turnaround_sum': 0,
+                    'month_count': 0,
+                    'peak_loads': [],
+                    'latest_summary': None,
+                    'customer_counts': [],
+                }
+            
+            data = feeder_yearly_data[feeder_id]
+            data['total_energy'] += float(summary.total_energy_delivered)
+            data['total_interruptions'] += summary.total_interruptions
+            data['total_interruption_hours'] += float(summary.total_interruption_hours) if hasattr(summary, 'total_interruption_hours') else 0
+            data['supply_hours_sum'] += float(summary.avg_hours_of_supply)
+            data['duration_sum'] += float(summary.avg_interruption_duration)
+            data['turnaround_sum'] += float(summary.avg_turnaround_time) if hasattr(summary, 'avg_turnaround_time') else float(summary.avg_fault_turnaround_time)
+            data['month_count'] += 1
+            data['peak_loads'].append(float(summary.max_peak_load))
+            data['customer_counts'].append(summary.total_customer_count)
+            
+            if not data['latest_summary'] or summary.month > data['latest_summary'].month:
+                data['latest_summary'] = summary
+        
+        # Now aggregate across all feeders
+        total_energy = sum(data['total_energy'] for data in feeder_yearly_data.values())
+        total_interruptions = sum(data['total_interruptions'] for data in feeder_yearly_data.values())
+        
+        # Calculate weighted averages
+        total_feeder_months = sum(data['month_count'] for data in feeder_yearly_data.values())
+        if total_feeder_months > 0:
+            avg_supply = sum(data['supply_hours_sum'] for data in feeder_yearly_data.values()) / total_feeder_months
+            total_interruption_hours = sum(data['total_interruption_hours'] for data in feeder_yearly_data.values())
+            weighted_avg_duration = total_interruption_hours / total_interruptions if total_interruptions > 0 else 0
+            avg_turnaround = sum(data['turnaround_sum'] for data in feeder_yearly_data.values()) / total_feeder_months
+        else:
+            avg_supply = avg_turnaround = weighted_avg_duration = 0
+        
+        # FIXED: Infrastructure metrics
+        unique_feeder_count = len(unique_feeders)  # This is the correct feeder count
+        all_peak_loads = [load for data in feeder_yearly_data.values() for load in data['peak_loads']]
+        max_peak_load = max(all_peak_loads) if all_peak_loads else 0
+        avg_peak_load = sum(all_peak_loads) / len(all_peak_loads) if all_peak_loads else 0
+        
+        # FIXED: Customer count - use max across all feeders and months
+        all_customer_counts = [count for data in feeder_yearly_data.values() for count in data['customer_counts']]
+        total_customer_count = max(all_customer_counts) if all_customer_counts else 0
+        
+        # Calculate daily averages
+        days_in_year = 366 if target_year % 4 == 0 and (target_year % 100 != 0 or target_year % 400 == 0) else 365
+        avg_daily_interruptions = total_interruptions / days_in_year if days_in_year > 0 else 0
+        
+        return {
+            "month": str(target_year),
+            "energy_delivered": round(total_energy, 2),
+            "average_load": round(avg_peak_load, 2),
+            "max_load": round(max_peak_load, 2),
+            "interruptions": total_interruptions,
+            "avg_hours_supply": round(avg_supply, 2),
+            "avg_interruption_duration": round(weighted_avg_duration, 2),
+            "avg_turnaround_time": round(avg_turnaround, 2),
+            "avg_fault_turnaround_time": round(avg_turnaround, 2),
+            "feeder_count": unique_feeder_count,  # FIXED: Use unique feeder count
+            "customer_count": total_customer_count,  # FIXED: Use max customer count
+            "avg_daily_interruptions": round(avg_daily_interruptions, 2),
+            "availability_percentage": round((avg_supply / 24) * 100, 2),
+            "saifi": round(total_interruptions / total_customer_count if total_customer_count > 0 else 0, 4),
+            "saidi": round(total_interruption_hours / total_customer_count if total_customer_count > 0 else 0, 4),
+            "interruption_breakdown": {},  # Could be calculated if needed
+            "summary_breakdown": {},
+            "_source": f"yearly_feeder_aggregation_{unique_feeder_count}_feeders",
+            "_year": target_year,
+            "_debug_feeder_summaries": feeder_summaries.count(),
+            "_debug_unique_feeders": list(unique_feeders),
+        }
     
     def _aggregate_monthly_from_feeders(self, periods, filter_params):
         """Aggregate monthly data from feeder-level summaries"""
@@ -1039,17 +1290,30 @@ class OptimizedTechnicalOverviewAPIView(APIView):
         if date_info['mode'] == 'monthly':
             current_month = today.replace(day=1)
             return current_month in date_info['periods']
+        elif date_info['mode'] == 'yearly':
+            current_year_start = today.replace(month=1, day=1)
+            return current_year_start in date_info['periods']
         else:
             # For daily modes, check if target date is today or in the future
             target_date = date_info.get('target_date', today)
             return target_date >= today
     
     def _get_cache_key(self, mode, date_info, filter_params):
-        """Generate cache key for the request - FIXED to include more parameters"""
+        """Generate cache key for the request - FIXED to handle all modes"""
         if mode == 'monthly':
             date_str = "_".join(m.strftime("%Y%m") for m in date_info['periods'])
+        elif mode == 'yearly':
+            date_str = "_".join(str(p.year) for p in date_info['periods'])
         else:
-            date_str = f"{date_info['from_date']}_{date_info['to_date']}"
+            # For daily, weekly, custom modes
+            from_date = date_info.get('from_date')
+            to_date = date_info.get('to_date')
+            if from_date and to_date:
+                date_str = f"{from_date}_{to_date}"
+            else:
+                # Fallback: use target_date if available
+                target_date = date_info.get('target_date', date.today())
+                date_str = f"{target_date}_{target_date}"
         
         filter_str = ""
         if filter_params['feeder']:
@@ -1062,6 +1326,65 @@ class OptimizedTechnicalOverviewAPIView(APIView):
         # NOTE: We're not including load trend date in cache key 
         # because we handle that separately in the main get() method
         return f"technical_api_v2_{mode}_{date_str}{filter_str}"
+
+
+# Add this helper function for yearly calculations that might be used elsewhere
+def _calculate_single_period_metrics(feeder_ids, period_start, period_end):
+    """Calculate metrics for a single period (used by yearly and other modes)"""
+    from technical.models import HourlyLoad, FeederInterruption
+    from commercial.models import Customer
+    
+    # Average supply hours across the period
+    hourly_supply = HourlyLoad.objects.filter(
+        feeder_id__in=feeder_ids,
+        date__range=(period_start, period_end),
+        load_mw__gt=0
+    ).values('feeder', 'date').annotate(
+        daily_hours=Count('hour')
+    )
+    avg_supply = hourly_supply.aggregate(avg=Avg('daily_hours'))['avg'] or 0
+    
+    # Interruption metrics
+    interruptions = FeederInterruption.objects.filter(
+        feeder_id__in=feeder_ids,
+        occurred_at__date__range=(period_start, period_end)
+    )
+    
+    total_interruptions = interruptions.count()
+    
+    # Average duration for restored interruptions only
+    restored_interruptions = interruptions.filter(restored_at__isnull=False)
+    if restored_interruptions.exists():
+        total_duration = sum(
+            (interruption.restored_at - interruption.occurred_at).total_seconds() / 3600
+            for interruption in restored_interruptions
+        )
+        avg_duration = total_duration / restored_interruptions.count()
+    else:
+        avg_duration = 0
+    
+    # Energy delivered (sum for the period)
+    try:
+        from technical.models import FeederEnergyDaily
+        period_energy = FeederEnergyDaily.objects.filter(
+            feeder_id__in=feeder_ids,
+            date__range=(period_start, period_end)
+        ).aggregate(total=Sum('energy_mwh'))['total'] or 0
+    except Exception:
+        period_energy = 0
+    
+    # Customer count
+    customer_count = Customer.objects.filter(transformer__feeder_id__in=feeder_ids).count()
+    
+    return {
+        "avg_supply": round(float(avg_supply), 2),
+        "avg_duration": round(float(avg_duration), 2),
+        "turnaround_time": round(float(avg_duration), 2),  # Same as duration
+        "interruptions": total_interruptions,
+        "energy_delivered": float(period_energy),
+        "feeder_count": len(feeder_ids),
+        "customer_count": customer_count,
+    }
 
 
 class TechnicalHealthAPIView(APIView):

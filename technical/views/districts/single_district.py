@@ -9,6 +9,34 @@ from analytics.models import MonthlyTechnicalSummary, DailyTechnicalSummary
 from technical.models import HourlyLoad, FeederInterruption
 from common.models import Feeder
 
+def _get_day_label_for_period(date_obj, index):
+    """Get day label for historical periods"""
+    # Return day name: Mon, Tue, Wed, etc.
+    return date_obj.strftime("%a")
+
+
+def _get_week_label_for_period(index):
+    """Get week label for historical periods"""
+    return f"Wk{5-index}"
+
+
+def _get_custom_label_for_period(index):
+    """Get custom period label for historical periods"""
+    if index == 1:
+        return "Previous"
+    else:
+        return f"P{5-index}"
+
+
+def _get_year_label_for_period(year):
+    """Get year label for historical periods"""
+    return str(year)
+
+
+def _get_month_label_for_period(date_obj):
+    """Get month label for historical periods"""
+    return date_obj.strftime("%b")  # Jan, Feb, Mar, etc.
+
 
 def _parse_iso_date(date_str):
     """Parse ISO datetime string to date"""
@@ -95,13 +123,16 @@ def get_metric_with_history_enhanced(calc_fn, feeder_ids, from_date, to_date, mo
 
 
 def get_metric_with_history_monthly(calc_fn, feeder_ids, year, month):
-    """Original monthly history calculation - maintained for backward compatibility"""
+    """FIXED: Monthly history calculation with proper labels"""
     history = []
     for i in range(4, 0, -1):
         dt = datetime(year, month, 1) - relativedelta(months=i)
         start, end = get_month_range(dt.year, dt.month)
         val = calc_fn(start, end, feeder_ids)
-        history.append(round(val, 2))
+        history.append({
+            "month": _get_month_label_for_period(dt),  # Jan, Feb, Mar, etc.
+            "value": round(val, 2)
+        })
 
     current_start, current_end = get_month_range(year, month)
     current = calc_fn(current_start, current_end, feeder_ids)
@@ -113,19 +144,22 @@ def get_metric_with_history_monthly(calc_fn, feeder_ids, year, month):
     return {
         "current": round(current, 2),
         "delta": delta(current, previous),
-        "history": history,
+        "history": history,  # Now contains objects with month labels
     }
 
 
 def get_metric_with_history_yearly(calc_fn, feeder_ids, year):
-    """Yearly history calculation using previous years"""
+    """FIXED: Yearly history calculation with proper labels"""
     history = []
     for i in range(4, 0, -1):
         prev_year = year - i
         start = datetime(prev_year, 1, 1).date()
         end = datetime(prev_year, 12, 31).date()
         val = calc_fn(start, end, feeder_ids)
-        history.append(round(val, 2))
+        history.append({
+            "month": _get_year_label_for_period(prev_year),  # "2020", "2021", etc.
+            "value": round(val, 2)
+        })
 
     # Current year
     current_start = datetime(year, 1, 1).date()
@@ -141,12 +175,12 @@ def get_metric_with_history_yearly(calc_fn, feeder_ids, year):
     return {
         "current": round(current, 2),
         "delta": delta(current, previous),
-        "history": history,
+        "history": history,  # Now contains objects with year labels
     }
 
 
 def get_metric_with_history_daily_range(calc_fn, feeder_ids, from_date, to_date, mode):
-    """Daily range history calculation for daily/weekly/custom modes"""
+    """FIXED: Daily range history calculation with proper labels"""
     period_length = (to_date - from_date).days + 1
     history = []
     
@@ -156,13 +190,23 @@ def get_metric_with_history_daily_range(calc_fn, feeder_ids, from_date, to_date,
             # For daily mode, go back by individual days
             hist_date = from_date - timedelta(days=i)
             hist_start = hist_end = hist_date
-        else:
-            # For weekly/custom, go back by period length
+            period_label = _get_day_label_for_period(hist_date, i)
+        elif mode == "weekly":
+            # For weekly mode, go back by weeks
             hist_end = from_date - timedelta(days=i * period_length)
             hist_start = hist_end - timedelta(days=period_length - 1)
+            period_label = _get_week_label_for_period(i)
+        else:
+            # For custom mode, go back by period length
+            hist_end = from_date - timedelta(days=i * period_length)
+            hist_start = hist_end - timedelta(days=period_length - 1)
+            period_label = _get_custom_label_for_period(i)
         
         val = calc_fn(hist_start, hist_end, feeder_ids)
-        history.append(round(val, 2))
+        history.append({
+            "month": period_label,  # Keep "month" for compatibility
+            "value": round(val, 2)
+        })
 
     # Current period
     current = calc_fn(from_date, to_date, feeder_ids)
@@ -180,7 +224,7 @@ def get_metric_with_history_daily_range(calc_fn, feeder_ids, from_date, to_date,
     return {
         "current": round(current, 2),
         "delta": delta(current, previous),
-        "history": history,
+        "history": history,  # Now contains objects with proper labels
     }
 
 
@@ -203,7 +247,7 @@ def _get_district_metrics_from_summary(district_name, from_date, to_date, mode, 
 
 
 def _get_monthly_summary_metrics_single_district(district, from_date, feeder_ids):
-    """Get metrics from monthly summaries for single district"""
+    """Get metrics from monthly summaries with proper history labels"""
     target_month = from_date
     
     try:
@@ -229,15 +273,16 @@ def _get_monthly_summary_metrics_single_district(district, from_date, feeder_ids
             has_complete_data=True
         ).order_by('month')
         
-        # Build metrics from summaries
+        # Build history data with proper labels
         history_data = []
         for hist_summary in historical_summaries:
             history_data.append({
-                'avg_supply': float(hist_summary.avg_hours_of_supply),
-                'duration': float(hist_summary.avg_interruption_duration),
-                'interruptions': float(hist_summary.avg_daily_interruptions),
-                'faults': hist_summary.total_interruptions,
-                'feeder_count': hist_summary.active_feeder_count,
+                "month": _get_month_label_for_period(hist_summary.month),  # Jan, Feb, etc.
+                "avg_supply": float(hist_summary.avg_hours_of_supply),
+                "duration": float(hist_summary.avg_interruption_duration),
+                "interruptions": float(hist_summary.avg_daily_interruptions),
+                "faults": hist_summary.total_interruptions,
+                "feeder_count": hist_summary.active_feeder_count,
             })
         
         # Calculate deltas (current vs previous month)
@@ -264,32 +309,32 @@ def _get_monthly_summary_metrics_single_district(district, from_date, feeder_ids
             "avg_supply": {
                 "current": round(float(summary.avg_hours_of_supply), 2),
                 "delta": delta(float(summary.avg_hours_of_supply), prev_data.get('avg_supply', 0)),
-                "history": [d['avg_supply'] for d in history_data],
+                "history": history_data,  # Now contains objects with month labels
             },
             "duration": {
                 "current": round(float(summary.avg_interruption_duration), 2),
                 "delta": delta(float(summary.avg_interruption_duration), prev_data.get('duration', 0)),
-                "history": [d['duration'] for d in history_data],
+                "history": history_data,  # Shared history data
             },
             "turnaround_time": {
                 "current": round(float(summary.avg_fault_turnaround_time), 2),
                 "delta": delta(float(summary.avg_fault_turnaround_time), prev_data.get('duration', 0)),
-                "history": [d['duration'] for d in history_data],  # Use duration for turnaround
+                "history": history_data,  # Shared history data
             },
             "interruptions": {
                 "current": round(float(summary.avg_daily_interruptions), 2),
                 "delta": delta(float(summary.avg_daily_interruptions), prev_data.get('interruptions', 0)),
-                "history": [d['interruptions'] for d in history_data],
+                "history": history_data,  # Shared history data
             },
             "faults": {
                 "current": summary.total_interruptions,
                 "delta": delta(summary.total_interruptions, prev_data.get('faults', 0)),
-                "history": [d['faults'] for d in history_data],
+                "history": history_data,  # Shared history data
             },
             "feeder_count": {
                 "current": summary.active_feeder_count,
                 "delta": delta(summary.active_feeder_count, prev_data.get('feeder_count', 0)),
-                "history": [d['feeder_count'] for d in history_data],
+                "history": history_data,  # Shared history data
             },
             "_source": "monthly_summary"
         }
@@ -299,7 +344,7 @@ def _get_monthly_summary_metrics_single_district(district, from_date, feeder_ids
 
 
 def _get_yearly_summary_metrics_single_district(district, from_date, feeder_ids):
-    """Get yearly metrics from aggregated monthly summaries for single district"""
+    """FIXED: Get yearly metrics with proper history labels"""
     target_year = from_date.year
     
     # Get all months in the year
@@ -331,8 +376,20 @@ def _get_yearly_summary_metrics_single_district(district, from_date, feeder_ids)
         latest_summary = year_summaries.order_by('-month').first()
         feeder_count = latest_summary.active_feeder_count if latest_summary else len(feeder_ids)
         
+        # Create monthly breakdown data for current year
+        monthly_history = []
+        for summary in year_summaries:
+            monthly_history.append({
+                "month": _get_month_label_for_period(summary.month),  # Jan, Feb, etc.
+                "avg_supply": float(summary.avg_hours_of_supply),
+                "duration": float(summary.avg_interruption_duration),
+                "interruptions": float(summary.avg_daily_interruptions),
+                "faults": summary.total_interruptions,
+                "feeder_count": summary.active_feeder_count,
+            })
+        
         # Calculate historical years (4 previous years)
-        history_data = []
+        yearly_history = []
         for i in range(1, 5):
             prev_year = target_year - i
             prev_year_months = []
@@ -355,20 +412,24 @@ def _get_yearly_summary_metrics_single_district(district, from_date, feeder_ids)
                 prev_latest = prev_summaries.order_by('-month').first()
                 prev_feeder_count = prev_latest.active_feeder_count if prev_latest else len(feeder_ids)
                 
-                history_data.append({
-                    'avg_supply': float(prev_avg_supply),
-                    'duration': float(prev_avg_duration),
-                    'interruptions': float(prev_avg_daily_interruptions),
-                    'faults': int(prev_total_interruptions),
-                    'feeder_count': prev_feeder_count,
+                yearly_history.append({
+                    "month": _get_year_label_for_period(prev_year),  # "2020", "2021", etc.
+                    "avg_supply": float(prev_avg_supply),
+                    "duration": float(prev_avg_duration),
+                    "interruptions": float(prev_avg_daily_interruptions),
+                    "faults": int(prev_total_interruptions),
+                    "feeder_count": prev_feeder_count,
                 })
         
-        # Reverse to get chronological order
-        history_data.reverse()
+        # Reverse yearly history to get chronological order
+        yearly_history.reverse()
+        
+        # Combine yearly and monthly history
+        combined_history = yearly_history + monthly_history
         
         # Calculate deltas (current year vs previous year)
-        if history_data:
-            prev_data = history_data[-1]
+        if yearly_history:
+            prev_data = yearly_history[-1]
         else:
             prev_data = {}
         
@@ -376,32 +437,32 @@ def _get_yearly_summary_metrics_single_district(district, from_date, feeder_ids)
             "avg_supply": {
                 "current": round(float(avg_supply), 2),
                 "delta": delta(float(avg_supply), prev_data.get('avg_supply', 0)),
-                "history": [d['avg_supply'] for d in history_data],
+                "history": combined_history,  # Now contains objects with proper labels
             },
             "duration": {
                 "current": round(float(avg_duration), 2),
                 "delta": delta(float(avg_duration), prev_data.get('duration', 0)),
-                "history": [d['duration'] for d in history_data],
+                "history": combined_history,  # Shared history data
             },
             "turnaround_time": {
                 "current": round(float(avg_turnaround), 2),
                 "delta": delta(float(avg_turnaround), prev_data.get('duration', 0)),
-                "history": [d['duration'] for d in history_data],
+                "history": combined_history,  # Shared history data
             },
             "interruptions": {
                 "current": round(float(avg_daily_interruptions), 2),
                 "delta": delta(float(avg_daily_interruptions), prev_data.get('interruptions', 0)),
-                "history": [d['interruptions'] for d in history_data],
+                "history": combined_history,  # Shared history data
             },
             "faults": {
                 "current": int(total_interruptions),
                 "delta": delta(total_interruptions, prev_data.get('faults', 0)),
-                "history": [d['faults'] for d in history_data],
+                "history": combined_history,  # Shared history data
             },
             "feeder_count": {
                 "current": feeder_count,
                 "delta": delta(feeder_count, prev_data.get('feeder_count', 0)),
-                "history": [d['feeder_count'] for d in history_data],
+                "history": combined_history,  # Shared history data
             },
             "_source": "yearly_summary"
         }
@@ -412,7 +473,7 @@ def _get_yearly_summary_metrics_single_district(district, from_date, feeder_ids)
 
 
 def _get_daily_summary_metrics_single_district(district, from_date, to_date, mode, feeder_ids):
-    """Get metrics from daily summaries for single district"""
+    """FIXED: Get metrics from daily summaries with proper history labels"""
     # Collect all dates in the range
     dates = []
     current = from_date
@@ -441,7 +502,7 @@ def _get_daily_summary_metrics_single_district(district, from_date, to_date, mod
             current_avg_duration = float(current_summary.avg_interruption_duration)
             current_avg_turnaround = float(current_summary.avg_fault_turnaround_time)
             current_total_interruptions = current_summary.total_interruptions
-            current_daily_interruptions = float(current_summary.total_interruptions)  # For daily, this is the total
+            current_daily_interruptions = float(current_summary.total_interruptions)
             current_feeder_count = current_summary.active_feeder_count
         else:
             # For weekly/custom, aggregate the summaries
@@ -453,7 +514,7 @@ def _get_daily_summary_metrics_single_district(district, from_date, to_date, mod
             latest_summary = summaries.order_by('-date').first()
             current_feeder_count = latest_summary.active_feeder_count if latest_summary else len(feeder_ids)
         
-        # Calculate historical periods
+        # Calculate historical periods with proper labels
         period_length = (to_date - from_date).days + 1
         history_data = []
         
@@ -463,16 +524,27 @@ def _get_daily_summary_metrics_single_district(district, from_date, to_date, mod
                 hist_date = from_date - timedelta(days=i)
                 hist_start = hist_end = hist_date
                 hist_dates = [hist_date]
-            else:
-                # For weekly/custom, go back by period length
+                period_label = _get_day_label_for_period(hist_date, i)
+            elif mode == "weekly":
+                # For weekly mode, go back by weeks
                 hist_end = from_date - timedelta(days=i * period_length)
                 hist_start = hist_end - timedelta(days=period_length - 1)
-                
                 hist_dates = []
                 current_date = hist_start
                 while current_date <= hist_end:
                     hist_dates.append(current_date)
                     current_date += timedelta(days=1)
+                period_label = _get_week_label_for_period(i)
+            else:
+                # For custom mode, go back by period length
+                hist_end = from_date - timedelta(days=i * period_length)
+                hist_start = hist_end - timedelta(days=period_length - 1)
+                hist_dates = []
+                current_date = hist_start
+                while current_date <= hist_end:
+                    hist_dates.append(current_date)
+                    current_date += timedelta(days=1)
+                period_label = _get_custom_label_for_period(i)
             
             hist_summaries = DailyTechnicalSummary.objects.filter(
                 state=district.state,
@@ -499,11 +571,12 @@ def _get_daily_summary_metrics_single_district(district, from_date, to_date, mod
                     hist_feeder_count = hist_latest.active_feeder_count if hist_latest else len(feeder_ids)
                 
                 history_data.append({
-                    'avg_supply': float(hist_avg_supply),
-                    'duration': float(hist_avg_duration),
-                    'interruptions': float(hist_daily_interruptions),
-                    'faults': int(hist_total_interruptions),
-                    'feeder_count': hist_feeder_count,
+                    "month": period_label,  # Keep "month" for compatibility
+                    "avg_supply": float(hist_avg_supply),
+                    "duration": float(hist_avg_duration),
+                    "interruptions": float(hist_daily_interruptions),
+                    "faults": int(hist_total_interruptions),
+                    "feeder_count": hist_feeder_count,
                 })
         
         # Reverse to get chronological order
@@ -519,32 +592,32 @@ def _get_daily_summary_metrics_single_district(district, from_date, to_date, mod
             "avg_supply": {
                 "current": round(float(current_avg_supply), 2),
                 "delta": delta(float(current_avg_supply), prev_data.get('avg_supply', 0)),
-                "history": [round(d['avg_supply'], 2) for d in history_data],
+                "history": history_data,  # Now contains objects with proper labels
             },
             "duration": {
                 "current": round(float(current_avg_duration), 2),
                 "delta": delta(float(current_avg_duration), prev_data.get('duration', 0)),
-                "history": [round(d['duration'], 2) for d in history_data],
+                "history": history_data,  # Shared history data
             },
             "turnaround_time": {
                 "current": round(float(current_avg_turnaround), 2),
                 "delta": delta(float(current_avg_turnaround), prev_data.get('duration', 0)),
-                "history": [round(d['duration'], 2) for d in history_data],
+                "history": history_data,  # Shared history data
             },
             "interruptions": {
                 "current": round(float(current_daily_interruptions), 2),
                 "delta": delta(float(current_daily_interruptions), prev_data.get('interruptions', 0)),
-                "history": [round(d['interruptions'], 2) for d in history_data],
+                "history": history_data,  # Shared history data
             },
             "faults": {
                 "current": int(current_total_interruptions),
                 "delta": delta(current_total_interruptions, prev_data.get('faults', 0)),
-                "history": [d['faults'] for d in history_data],
+                "history": history_data,  # Shared history data
             },
             "feeder_count": {
                 "current": current_feeder_count,
                 "delta": delta(current_feeder_count, prev_data.get('feeder_count', 0)),
-                "history": [d['feeder_count'] for d in history_data],
+                "history": history_data,  # Shared history data
             },
             "_source": f"daily_summary_{mode}"
         }
