@@ -1,7 +1,9 @@
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal, ROUND_HALF_UP
-from dateutil.relativedelta import relativedelta # type: ignore
+from dateutil.relativedelta import relativedelta
+import calendar
 from django.db.models import Sum, Q
+from django.utils.dateparse import parse_datetime
 from rest_framework.response import Response
 from rest_framework.decorators import api_view
 from financial.models import Opex, HQOpex, SalaryPayment, NBETInvoice, MOInvoice, MYTOTariff
@@ -31,6 +33,122 @@ def calculate_delta(current, previous):
     if previous and previous != 0:
         return round(((current - previous) / previous) * 100, 2)
     return None
+
+
+def parse_date_params(request):
+    """Parse and determine date filtering mode and ranges"""
+    mode = request.query_params.get("mode", "monthly")
+    from_date_str = request.query_params.get("from_date")
+    to_date_str = request.query_params.get("to_date")
+    year = int(request.query_params.get("year", date.today().year))
+    month = request.query_params.get("month")
+    
+    # Handle legacy year/month parameters for backward compatibility
+    if not from_date_str or not to_date_str:
+        today = date.today()
+        if mode == "yearly":
+            from_date = date(year, 1, 1)
+            to_date = date(year + 1, 1, 1)
+        elif mode == "weekly":
+            # Get start of current week (Monday)
+            days_since_monday = today.weekday()
+            from_date = today - relativedelta(days=days_since_monday)
+            to_date = from_date + relativedelta(days=7)
+        elif mode == "daily":
+            from_date = today
+            to_date = today + relativedelta(days=1)
+        else:  # monthly
+            if month:
+                from_date = date(year, int(month), 1)
+                to_date = from_date + relativedelta(months=1)
+            else:
+                from_date = date(today.year, today.month, 1)
+                to_date = from_date + relativedelta(months=1)
+    else:
+        # Parse provided dates
+        from_datetime = parse_datetime(from_date_str)
+        to_datetime = parse_datetime(to_date_str)
+        
+        if not from_datetime or not to_datetime:
+            raise ValueError("Invalid date format. Use ISO format: YYYY-MM-DDTHH:MM:SS.sssZ")
+        
+        from_date = from_datetime.date()
+        to_date = to_datetime.date()
+        
+        # Ensure to_date is exclusive (add 1 day if it seems to be inclusive)
+        if to_date == from_date:
+            to_date = to_date + relativedelta(days=1)
+        
+        # Auto-detect mode if not explicitly set to custom
+        if mode != "custom":
+            date_diff = (to_date - from_date).days
+            if date_diff == 1:
+                mode = "daily"
+            elif date_diff == 7:
+                mode = "weekly"  
+            elif date_diff >= 28 and date_diff <= 31:
+                mode = "monthly"
+            elif date_diff >= 365 and date_diff <= 366:
+                mode = "yearly"
+            else:
+                mode = "custom"
+    
+    return mode, from_date, to_date
+
+
+def get_historical_periods(mode, from_date, to_date, count=4):
+    """Get historical periods based on mode and date range"""
+    periods = []
+    current_from = from_date
+    current_to = to_date
+    
+    if mode == "daily":
+        for i in range(count):
+            period_from = current_from - relativedelta(days=i+1)
+            period_to = period_from + relativedelta(days=1)
+            periods.insert(0, (period_from, period_to))
+    elif mode == "weekly":
+        for i in range(count):
+            period_from = current_from - relativedelta(weeks=i+1)
+            period_to = period_from + relativedelta(weeks=1)
+            periods.insert(0, (period_from, period_to))
+    elif mode == "monthly":
+        for i in range(count):
+            period_from = current_from - relativedelta(months=i+1)
+            period_to = period_from + relativedelta(months=1)
+            periods.insert(0, (period_from, period_to))
+    elif mode == "yearly":
+        for i in range(count):
+            period_from = current_from - relativedelta(years=i+1)
+            period_to = period_from + relativedelta(years=1)
+            periods.insert(0, (period_from, period_to))
+    else:  # custom
+        # Calculate the range difference and create similar periods
+        date_diff = (to_date - from_date).days
+        for i in range(count):
+            period_from = current_from - relativedelta(days=date_diff * (i+1))
+            period_to = period_from + relativedelta(days=date_diff)
+            periods.insert(0, (period_from, period_to))
+    
+    return periods
+
+
+def format_period_label(mode, from_date, to_date, index=None):
+    """Format period label based on mode"""
+    if mode == "daily":
+        return from_date.strftime("%a")  # Mon, Tue, Wed, Thu, Fri, Sat, Sun
+    elif mode == "weekly":
+        week_num = from_date.isocalendar()[1]
+        return f"Wk{week_num}"
+    elif mode == "monthly":
+        return from_date.strftime("%b")  # Jan, Feb, etc.
+    elif mode == "yearly":
+        return str(from_date.year)  # 2023, 2024, 2025, etc.
+    else:  # custom
+        if index is not None:
+            return f"P{index + 1}"
+        else:
+            return f"{from_date.strftime('%m/%d')}-{to_date.strftime('%m/%d')}"
 
 
 def get_energy_delivered_optimized(energy_filter, start_date, end_date):
@@ -67,25 +185,17 @@ def get_energy_delivered_optimized(energy_filter, start_date, end_date):
 
 @api_view(["GET"])
 def financial_overview_view(request):
-    # ─── 1) PARAMS & BASE FILTERS ──────────────────────────────────────────────
-    year = int(request.query_params.get("year", date.today().year))
-    month = request.query_params.get("month")
+    # ─── 1) PARSE DATE PARAMETERS ──────────────────────────────────────────────
+    try:
+        mode, from_date, to_date = parse_date_params(request)
+    except ValueError as e:
+        return Response({"error": str(e)}, status=400)
+    
+    # ─── 2) LOCATION FILTERS ───────────────────────────────────────────────────
     state_name = request.query_params.get("state")
     district_name = request.query_params.get("business_district")
     feeder_slug = request.query_params.get("feeder")
     transformer_slug = request.query_params.get("transformer")
-
-    # Ensure month is provided for proper calculations
-    if not month:
-        month = date.today().month
-    else:
-        month = int(month)
-
-    # Set up date ranges
-    selected_date = date(year, month, 1)
-    selected_end = selected_date + relativedelta(months=1)
-    prev_date = selected_date - relativedelta(months=1)
-    prev_end = selected_date
 
     # Pre-fetch location entities and build filters
     location_info = {}
@@ -178,9 +288,13 @@ def financial_overview_view(request):
             ).count()
             transformer_share = Decimal(1) / Decimal(feeder_transformers_count) if feeder_transformers_count > 0 else Decimal(1)
 
-        # OPEX calculation (sum of both debit and credit)
+        # OPEX calculation (sum of both debit and credit) - combining Opex and HQOpex
         opex_total = Decimal(0)
         hq_opex_total = Decimal(0)
+        
+        # Initialize shares for transformer/feeder level filtering
+        transformer_district_share = Decimal(1)
+        feeder_district_share = Decimal(1)
         
         if location_info['type'] in ['transformer', 'feeder']:
             # Use district-level OPEX
@@ -269,19 +383,34 @@ def financial_overview_view(request):
             ).aggregate(debit=Sum("debit"), credit=Sum("credit"))
             hq_opex_total = safe_decimal(hq_opex_data["debit"]) + safe_decimal(hq_opex_data["credit"])
 
-        # Combined OPEX total
+        # Combined OPEX total (Opex + HQOpex)
         combined_opex_total = opex_total + hq_opex_total
 
-        # Salaries calculation
+        # Salaries calculation (handle periods shorter than a month)
+        salary_period_start = start_date.replace(day=1)  # Always use first of month for salary queries
+        salary_period_end = end_date.replace(day=1) + relativedelta(months=1) if end_date.day > 1 else end_date.replace(day=1)
+        
+        # Calculate proration factor for periods shorter than a month
+        period_days = (end_date - start_date).days
+        if period_days < 28:  # Shorter than a typical month
+            # Get the number of days in the month containing the period
+            month_days = calendar.monthrange(start_date.year, start_date.month)[1]
+            proration_factor = Decimal(period_days) / Decimal(month_days)
+        else:
+            proration_factor = Decimal(1)  # No proration for longer periods
+            
         if location_info['type'] in ['transformer', 'feeder']:
             # Use district-level salaries
             district = location_info.get('district')
             if district:
                 district_salary_total = SalaryPayment.objects.filter(
                     district=district,
-                    month__gte=start_date,
-                    month__lt=end_date
+                    month__gte=salary_period_start,
+                    month__lt=salary_period_end
                 ).aggregate(total=Sum("amount"))["total"] or Decimal(0)
+                
+                # Apply proration and location-specific share
+                district_salary_total = district_salary_total * proration_factor
                 
                 if location_info['type'] == 'transformer':
                     salary_total = district_salary_total * transformer_district_share
@@ -291,39 +420,48 @@ def financial_overview_view(request):
                 salary_total = Decimal(0)
                 
         elif location_info['type'] == 'district':
-            salary_total = SalaryPayment.objects.filter(
+            district_salary_total = SalaryPayment.objects.filter(
                 district__name__iexact=location_info['name'],
-                month__gte=start_date,
-                month__lt=end_date
+                month__gte=salary_period_start,
+                month__lt=salary_period_end
             ).aggregate(total=Sum("amount"))["total"] or Decimal(0)
+            salary_total = district_salary_total * proration_factor
             
         elif location_info['type'] == 'state':
-            salary_total = SalaryPayment.objects.filter(
+            state_salary_total = SalaryPayment.objects.filter(
                 district__state__name__iexact=location_info['name'],
-                month__gte=start_date,
-                month__lt=end_date
+                month__gte=salary_period_start,
+                month__lt=salary_period_end
             ).aggregate(total=Sum("amount"))["total"] or Decimal(0)
+            salary_total = state_salary_total * proration_factor
             
         else:
             # Global salaries
-            salary_total = SalaryPayment.objects.filter(
-                month__gte=start_date,
-                month__lt=end_date
+            global_salary_total = SalaryPayment.objects.filter(
+                month__gte=salary_period_start,
+                month__lt=salary_period_end
             ).aggregate(total=Sum("amount"))["total"] or Decimal(0)
+            salary_total = global_salary_total * proration_factor
 
         # NBET Invoice (allocated proportionally based on energy share)
-        nbet_total_invoice = NBETInvoice.objects.filter(
-            month__gte=start_date,
-            month__lt=end_date
+        # Handle periods shorter than a month by prorating
+        nbet_period_start = start_date.replace(day=1)
+        nbet_period_end = end_date.replace(day=1) + relativedelta(months=1) if end_date.day > 1 else end_date.replace(day=1)
+        
+        nbet_monthly_total = NBETInvoice.objects.filter(
+            month__gte=nbet_period_start,
+            month__lt=nbet_period_end
         ).aggregate(total=Sum("amount"))["total"] or Decimal(0)
-        nbet_allocated = nbet_total_invoice * energy_share
+        
+        nbet_allocated = (nbet_monthly_total * proration_factor) * energy_share
 
         # MO Invoice (allocated proportionally based on energy share)
-        mo_total_invoice = MOInvoice.objects.filter(
-            month__gte=start_date,
-            month__lt=end_date
+        mo_monthly_total = MOInvoice.objects.filter(
+            month__gte=nbet_period_start,
+            month__lt=nbet_period_end
         ).aggregate(total=Sum("amount"))["total"] or Decimal(0)
-        mo_allocated = mo_total_invoice * energy_share
+        
+        mo_allocated = (mo_monthly_total * proration_factor) * energy_share
 
         total_cost = combined_opex_total + salary_total + nbet_allocated + mo_allocated
 
@@ -340,43 +478,87 @@ def financial_overview_view(request):
 
     def get_revenue_for_period(start_date, end_date):
         """Get revenue data for a given period"""
-        if commercial_transformers is not None:
-            # Filtered by specific transformers
-            revenue_data = MonthlyCommercialSummary.objects.filter(
-                transformer__in=commercial_transformers,
-                month__gte=start_date,
-                month__lt=end_date
-            ).aggregate(
-                revenue_billed=Sum("revenue_billed"),
-                revenue_collected=Sum("revenue_collected"),
-            )
+        # For daily/weekly modes, use DailyCollection for more accurate data
+        if mode in ["daily", "weekly"] and (end_date - start_date).days <= 7:
+            if commercial_transformers is not None:
+                # Filtered by specific transformers
+                daily_revenue = DailyCollection.objects.filter(
+                    transformer__in=commercial_transformers,
+                    date__gte=start_date,
+                    date__lt=end_date
+                ).aggregate(revenue_collected=Sum("amount"))
+                
+                # For billed, we still need MonthlyCommercialSummary
+                monthly_revenue = MonthlyCommercialSummary.objects.filter(
+                    transformer__in=commercial_transformers,
+                    month__gte=start_date.replace(day=1),
+                    month__lt=end_date
+                ).aggregate(revenue_billed=Sum("revenue_billed"))
+                
+                return {
+                    "billed": safe_float(monthly_revenue["revenue_billed"]) * ((end_date - start_date).days / 30.0),  # Prorate monthly to period
+                    "collected": safe_float(daily_revenue["revenue_collected"])
+                }
+            else:
+                # Global revenue
+                daily_revenue = DailyCollection.objects.filter(
+                    date__gte=start_date,
+                    date__lt=end_date
+                ).aggregate(revenue_collected=Sum("amount"))
+                
+                monthly_revenue = MonthlyCommercialSummary.objects.filter(
+                    month__gte=start_date.replace(day=1),
+                    month__lt=end_date
+                ).aggregate(revenue_billed=Sum("revenue_billed"))
+                
+                return {
+                    "billed": safe_float(monthly_revenue["revenue_billed"]) * ((end_date - start_date).days / 30.0),  # Prorate monthly to period
+                    "collected": safe_float(daily_revenue["revenue_collected"])
+                }
         else:
-            # Global revenue
-            revenue_data = MonthlyCommercialSummary.objects.filter(
-                month__gte=start_date,
-                month__lt=end_date
-            ).aggregate(
-                revenue_billed=Sum("revenue_billed"),
-                revenue_collected=Sum("revenue_collected"),
-            )
-            
-        return {
-            "billed": safe_float(revenue_data["revenue_billed"]),
-            "collected": safe_float(revenue_data["revenue_collected"])
-        }
+            # Use MonthlyCommercialSummary for longer periods
+            if commercial_transformers is not None:
+                # Filtered by specific transformers
+                revenue_data = MonthlyCommercialSummary.objects.filter(
+                    transformer__in=commercial_transformers,
+                    month__gte=start_date,
+                    month__lt=end_date
+                ).aggregate(
+                    revenue_billed=Sum("revenue_billed"),
+                    revenue_collected=Sum("revenue_collected"),
+                )
+            else:
+                # Global revenue
+                revenue_data = MonthlyCommercialSummary.objects.filter(
+                    month__gte=start_date,
+                    month__lt=end_date
+                ).aggregate(
+                    revenue_billed=Sum("revenue_billed"),
+                    revenue_collected=Sum("revenue_collected"),
+                )
+                
+            return {
+                "billed": safe_float(revenue_data["revenue_billed"]),
+                "collected": safe_float(revenue_data["revenue_collected"])
+            }
 
-    # ─── 2) OPERATING EXPENDITURE (Selected Month + Delta) ─────────────────────
-    current_costs = get_costs_for_period(selected_date, selected_end)
-    prev_costs = get_costs_for_period(prev_date, selected_date)
+    # ─── 3) GET CURRENT AND PREVIOUS PERIOD DATA ──────────────────────────────
+    # Get previous period for delta calculations
+    historical_periods = get_historical_periods(mode, from_date, to_date, count=1)
+    prev_start, prev_end = historical_periods[0] if historical_periods else (from_date, to_date)
     
+    current_costs = get_costs_for_period(from_date, to_date)
+    prev_costs = get_costs_for_period(prev_start, prev_end)
+    
+    # ─── 4) OPERATING EXPENDITURE (Current Period + Delta) ─────────────────────
     operating_expenditure = {
         "value": current_costs["total"],
         "delta": calculate_delta(current_costs["total"], prev_costs["total"])
     }
 
-    # ─── 3) PROFIT MARGIN (Selected Month + Delta) ─────────────────────────────
-    current_revenue = get_revenue_for_period(selected_date, selected_end)
-    prev_revenue = get_revenue_for_period(prev_date, selected_date)
+    # ─── 5) PROFIT MARGIN (Current Period + Delta) ─────────────────────────────
+    current_revenue = get_revenue_for_period(from_date, to_date)
+    prev_revenue = get_revenue_for_period(prev_start, prev_end)
 
     current_profit = current_revenue["collected"] - current_costs["total"]
     current_profit_margin = (current_profit / current_revenue["collected"] * 100) if current_revenue["collected"] else 0
@@ -389,8 +571,8 @@ def financial_overview_view(request):
         "delta": calculate_delta(current_profit_margin, prev_profit_margin)
     }
 
-    # ─── 4) HISTORICAL DATA (4 PREVIOUS MONTHS EXCLUDING SELECTED) ────────────
-    history_periods = [selected_date - relativedelta(months=i) for i in range(4, 0, -1)]
+    # ─── 6) HISTORICAL DATA (4 PREVIOUS PERIODS EXCLUDING CURRENT) ────────────
+    history_periods = get_historical_periods(mode, from_date, to_date, count=4)
     
     total_cost_history = []
     revenue_billed_history = []
@@ -400,30 +582,30 @@ def financial_overview_view(request):
     prev_revenue_billed = None
     prev_collections = None
 
-    for period_date in history_periods:
-        period_end = period_date + relativedelta(months=1)
-        
-        period_costs = get_costs_for_period(period_date, period_end)
-        period_revenue = get_revenue_for_period(period_date, period_end)
+    for i, (period_start, period_end) in enumerate(history_periods):
+        period_costs = get_costs_for_period(period_start, period_end)
+        period_revenue = get_revenue_for_period(period_start, period_end)
         
         total_cost_delta = calculate_delta(period_costs["total"], prev_total_cost) if prev_total_cost is not None else None
         revenue_billed_delta = calculate_delta(period_revenue["billed"], prev_revenue_billed) if prev_revenue_billed is not None else None
         collections_delta = calculate_delta(period_revenue["collected"], prev_collections) if prev_collections is not None else None
         
+        period_label = format_period_label(mode, period_start, period_end, i)
+        
         total_cost_history.append({
-            "month": period_date.strftime("%b"),
+            "month": period_label,
             "value": period_costs["total"],
             "delta": total_cost_delta
         })
         
         revenue_billed_history.append({
-            "month": period_date.strftime("%b"),
+            "month": period_label,
             "value": period_revenue["billed"],
             "delta": revenue_billed_delta
         })
         
         collections_history.append({
-            "month": period_date.strftime("%b"),
+            "month": period_label,
             "value": period_revenue["collected"],
             "delta": collections_delta
         })
@@ -432,32 +614,112 @@ def financial_overview_view(request):
         prev_revenue_billed = period_revenue["billed"]
         prev_collections = period_revenue["collected"]
 
-    # ─── 5) MONTHLY COLLECTIONS FOR ENTIRE YEAR ───────────────────────────────
-    monthly_collections_year = []
+    # ─── 7) PERIOD COLLECTIONS FOR YEAR/LONGER PERIODS ───────────────────────
+    # Generate appropriate periods based on mode
+    yearly_periods = []
     
-    for m in range(1, 13):
-        month_start = date(year, m, 1)
-        month_end = month_start + relativedelta(months=1)
-        
-        month_revenue = get_revenue_for_period(month_start, month_end)
-        
-        monthly_collections_year.append({
-            "month": month_start.strftime("%b"),
-            "collections": month_revenue["collected"],
-            "billed": month_revenue["billed"]
+    if mode == "yearly":
+        # Generate monthly collections for the year
+        year = from_date.year
+        for m in range(1, 13):
+            month_start = date(year, m, 1)
+            month_end = month_start + relativedelta(months=1)
+            
+            # Only include months that are within our date range
+            if month_start >= from_date and month_start < to_date:
+                month_revenue = get_revenue_for_period(month_start, month_end)
+                
+                yearly_periods.append({
+                    "month": month_start.strftime("%b"),
+                    "collections": month_revenue["collected"],
+                    "billed": month_revenue["billed"]
+                })
+    elif mode == "monthly":
+        # Generate daily collections for the month
+        current_date = from_date
+        while current_date < to_date:
+            day_end = min(current_date + relativedelta(days=1), to_date)
+            
+            day_revenue = get_revenue_for_period(current_date, day_end)
+            
+            yearly_periods.append({
+                "month": current_date.strftime("%d"),
+                "collections": day_revenue["collected"],
+                "billed": day_revenue["billed"]
+            })
+            
+            current_date += relativedelta(days=1)
+    elif mode == "weekly":
+        # Generate daily collections for the week
+        current_date = from_date
+        day_count = 0
+        while current_date < to_date and day_count < 7:
+            day_end = min(current_date + relativedelta(days=1), to_date)
+            
+            day_revenue = get_revenue_for_period(current_date, day_end)
+            
+            yearly_periods.append({
+                "month": current_date.strftime("%a"),  # Mon, Tue, Wed, etc.
+                "collections": day_revenue["collected"],
+                "billed": day_revenue["billed"]
+            })
+            
+            current_date += relativedelta(days=1)
+            day_count += 1
+    elif mode == "daily":
+        # Single day - show daily data only
+        yearly_periods.append({
+            "month": from_date.strftime("%a"),
+            "collections": current_revenue["collected"],
+            "billed": current_revenue["billed"]
         })
+    else:
+        # For custom ranges, show breakdown based on duration
+        date_diff = (to_date - from_date).days
+        if date_diff <= 7:
+            # Show daily breakdown for short custom ranges
+            current_date = from_date
+            while current_date < to_date:
+                day_end = min(current_date + relativedelta(days=1), to_date)
+                
+                day_revenue = get_revenue_for_period(current_date, day_end)
+                
+                yearly_periods.append({
+                    "month": current_date.strftime("%m/%d"),
+                    "collections": day_revenue["collected"],
+                    "billed": day_revenue["billed"]
+                })
+                
+                current_date += relativedelta(days=1)
+        else:
+            # Show weekly breakdown for longer custom ranges
+            current_date = from_date
+            week_num = 1
+            while current_date < to_date:
+                week_end = min(current_date + relativedelta(days=7), to_date)
+                
+                week_revenue = get_revenue_for_period(current_date, week_end)
+                
+                yearly_periods.append({
+                    "month": f"W{week_num}",
+                    "collections": week_revenue["collected"],
+                    "billed": week_revenue["billed"]
+                })
+                
+                current_date += relativedelta(days=7)
+                week_num += 1
 
-    # ─── 6) COLLECTIONS BY VENDOR ──────────────────────────────────────────────
+    # ─── 8) COLLECTIONS BY VENDOR ──────────────────────────────────────────────
     if commercial_transformers is not None:
         vendor_collections = DailyCollection.objects.filter(
             transformer__in=commercial_transformers,
-            date__gte=selected_date, 
-            date__lt=selected_end
+            date__gte=from_date, 
+            date__lt=to_date
         ).values("vendor_name").annotate(amount=Sum("amount"))
     else:
         vendor_collections = DailyCollection.objects.filter(
-            date__gte=selected_date, 
-            date__lt=selected_end
+            date__gte=from_date, 
+            date__lt=to_date
         ).values("vendor_name").annotate(amount=Sum("amount"))
     
     if vendor_collections.exists():
@@ -470,13 +732,13 @@ def financial_overview_view(request):
             {"vendor": "Cash", "amount": current_revenue["collected"]}
         ]
 
-    # ─── 7) OPEX BREAKDOWN ─────────────────────────────────────────────────────
+    # ─── 9) OPEX BREAKDOWN WITH SEPARATE CATEGORIES ───────────────────────────
     def get_opex_breakdown():
         """Get OPEX breakdown by Opex and HQOpex with previous period comparison"""
-        current_start = selected_date
-        current_end = selected_end
-        prev_start = prev_date
-        prev_end = selected_date
+        current_start = from_date
+        current_end = to_date
+        previous_start = prev_start
+        previous_end = prev_end
         
         # Current period breakdown
         def get_opex_by_category(queryset, is_hq=False):
@@ -496,23 +758,23 @@ def financial_overview_view(request):
             district = location_info.get('district')
             if district:
                 current_opex_qs = Opex.objects.filter(district=district, date__gte=current_start, date__lt=current_end)
-                prev_opex_qs = Opex.objects.filter(district=district, date__gte=prev_start, date__lt=prev_end)
+                prev_opex_qs = Opex.objects.filter(district=district, date__gte=previous_start, date__lt=previous_end)
             else:
                 current_opex_qs = Opex.objects.none()
                 prev_opex_qs = Opex.objects.none()
         elif location_info['type'] == 'district':
             current_opex_qs = Opex.objects.filter(district__name__iexact=location_info['name'], date__gte=current_start, date__lt=current_end)
-            prev_opex_qs = Opex.objects.filter(district__name__iexact=location_info['name'], date__gte=prev_start, date__lt=prev_end)
+            prev_opex_qs = Opex.objects.filter(district__name__iexact=location_info['name'], date__gte=previous_start, date__lt=previous_end)
         elif location_info['type'] == 'state':
             current_opex_qs = Opex.objects.filter(district__state__name__iexact=location_info['name'], date__gte=current_start, date__lt=current_end)
-            prev_opex_qs = Opex.objects.filter(district__state__name__iexact=location_info['name'], date__gte=prev_start, date__lt=prev_end)
+            prev_opex_qs = Opex.objects.filter(district__state__name__iexact=location_info['name'], date__gte=previous_start, date__lt=previous_end)
         else:
             current_opex_qs = Opex.objects.filter(date__gte=current_start, date__lt=current_end)
-            prev_opex_qs = Opex.objects.filter(date__gte=prev_start, date__lt=prev_end)
+            prev_opex_qs = Opex.objects.filter(date__gte=previous_start, date__lt=previous_end)
         
         # HQ OPEX queries (always global, allocated proportionally)
         current_hq_qs = HQOpex.objects.filter(date__gte=current_start, date__lt=current_end)
-        prev_hq_qs = HQOpex.objects.filter(date__gte=prev_start, date__lt=prev_end)
+        prev_hq_qs = HQOpex.objects.filter(date__gte=previous_start, date__lt=previous_end)
         
         # Get current period data
         current_opex_breakdown = get_opex_by_category(current_opex_qs, is_hq=False)
@@ -540,7 +802,7 @@ def financial_overview_view(request):
             prev_opex_amount = prev_opex_breakdown.get(category, {}).get("amount", 0)
             prev_hq_amount = prev_hq_breakdown.get(category, {}).get("amount", 0)
             
-            # Combined amounts
+            # Combined amounts (Opex + HQOpex combined for "all")
             current_total = current_opex_amount + current_hq_amount
             prev_total = prev_opex_amount + prev_hq_amount
             
@@ -584,24 +846,27 @@ def financial_overview_view(request):
     
     opex_breakdown = get_opex_breakdown()
 
-    # ─── 8) HISTORICAL COSTS BREAKDOWN (4 MONTHS INCLUDING SELECTED) ──────────
-    periods_including_selected = [selected_date - relativedelta(months=i) for i in range(3, -1, -1)]
+    # ─── 10) HISTORICAL COSTS BREAKDOWN (4 PERIODS INCLUDING CURRENT) ─────────
+    periods_including_current = get_historical_periods(mode, from_date, to_date, count=3)
+    periods_including_current.append((from_date, to_date))  # Add current period
+    
     historical_costs = []
     prev_month_total = None
     
-    for period_date in periods_including_selected:
-        period_end = period_date + relativedelta(months=1)
-        period_costs = get_costs_for_period(period_date, period_end)
+    for i, (period_start, period_end) in enumerate(periods_including_current):
+        period_costs = get_costs_for_period(period_start, period_end)
         
         month_total = period_costs["total"]
         month_delta = calculate_delta(month_total, prev_month_total) if prev_month_total is not None else None
         
+        period_label = format_period_label(mode, period_start, period_end, i)
+        
         historical_costs.append({
-            "month": period_date.strftime("%b"),
+            "month": period_label,
             "nbet": period_costs["nbet"],
             "mo": period_costs["mo"],
             "salaries": period_costs["salaries"],
-            "disco_opex": period_costs["disco_opex"],  # This now includes both Opex and HQOpex
+            "disco_opex": period_costs["disco_opex"],  # This now includes both Opex and HQOpex combined
             "total": month_total,
             "delta": month_delta,
             "energy_share": period_costs["energy_share"]
@@ -609,22 +874,20 @@ def financial_overview_view(request):
         
         prev_month_total = month_total
 
-    # ─── 9) HISTORICAL TARIFFS (4 MONTHS INCLUDING SELECTED) ───────────────────
+    # ─── 11) HISTORICAL TARIFFS (4 PERIODS INCLUDING CURRENT) ─────────────────
     historical_tariffs = []
     
-    for period_date in periods_including_selected:
-        period_end = period_date + relativedelta(months=1)
-        
+    for i, (period_start, period_end) in enumerate(periods_including_current):
         # Energy delivered for tariff calculations
         if energy_feeders:
             energy_delivered = get_energy_delivered_optimized(
-                Q(feeder__in=energy_feeders), period_date, period_end
+                Q(feeder__in=energy_feeders), period_start, period_end
             )
         else:
-            energy_delivered = get_energy_delivered_optimized(Q(), period_date, period_end)
+            energy_delivered = get_energy_delivered_optimized(Q(), period_start, period_end)
 
         # Commercial data for tariff calculations
-        period_revenue = get_revenue_for_period(period_date, period_end)
+        period_revenue = get_revenue_for_period(period_start, period_end)
         
         revenue_billed = safe_decimal(period_revenue["billed"])
         revenue_collected = safe_decimal(period_revenue["collected"])
@@ -644,19 +907,21 @@ def financial_overview_view(request):
 
         # Get MYTO tariff (assuming single band for now, can be enhanced)
         myto_tariff_obj = MYTOTariff.objects.filter(
-            effective_date__lte=period_date
+            effective_date__lte=period_start
         ).order_by("-effective_date").first()
         myto_tariff = safe_float(myto_tariff_obj.rate_per_kwh) if myto_tariff_obj else 60.0
 
+        period_label = format_period_label(mode, period_start, period_end, i)
+        
         historical_tariffs.append({
-            "month": period_date.strftime("%b"),
+            "month": period_label,
             "myto_tariff": myto_tariff,
             "billing_tariff": safe_float(billing_tariff),
             "collection_tariff": safe_float(collection_tariff),
             "tariff_loss": safe_float(tariff_loss),
         })
 
-    # ─── 10) BUILD RESPONSE ─────────────────────────────────────────────────────
+    # ─── 12) BUILD RESPONSE ─────────────────────────────────────────────────────
     return Response({
         "operating_expenditure": operating_expenditure,
         "profit_margin": profit_margin,
@@ -675,12 +940,15 @@ def financial_overview_view(request):
             "delta": calculate_delta(current_revenue["collected"], prev_revenue["collected"]),
             "history": collections_history
         },
-        "monthly_collections_year": monthly_collections_year,
+        "monthly_collections_year": yearly_periods,  # Renamed but maintains structure
         "collections_by_vendor": collections_by_vendor,
         "opex_breakdown": opex_breakdown,
         "historical_costs": historical_costs,
         "historical_tariffs": historical_tariffs,
         "filter_info": {
+            "mode": mode,
+            "from_date": from_date.isoformat(),
+            "to_date": to_date.isoformat(),
             "level": location_info['type'],
             "transformer": transformer_slug,
             "feeder": feeder_slug,
