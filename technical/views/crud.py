@@ -79,6 +79,7 @@ class HourlyLoadViewSet(viewsets.ModelViewSet):
             print(f"🔄 Received {len(records)} records for bulk update")
             
             if not records or not isinstance(records, list):
+                print('then I come into action')
                 return Response(
                     {"error": "Missing or invalid 'records' array"},
                     status=status.HTTP_400_BAD_REQUEST
@@ -129,10 +130,10 @@ class HourlyLoadViewSet(viewsets.ModelViewSet):
                         # Parse date
                         try:
                             if 'T' in date_str:
-                                date_obj = datetime.fromisoformat(date_str.replace('Z', '+00:00')).date()
+                                date_obj = datetime.datetime.fromisoformat(date_str.replace('Z', '+00:00')).date()
                                 date_obj = date_obj + timedelta(days=1)
                             else:
-                                date_obj = datetime.strptime(date_str, '%Y-%m-%d').date()
+                                date_obj = datetime.datetime.strptime(date_str, '%Y-%m-%d').date()
                         except ValueError:
                             errors.append(f"Record {i}: Invalid date format '{date_str}'")
                             continue
@@ -276,7 +277,7 @@ class FeederInterruptionViewSet(viewsets.ModelViewSet):
     def _find_interruption_by_time(self, slug, occurred_at):
         try:
             # Parse occurred_at as UTC
-            occurred_at_dt = timezone.datetime.fromisoformat(occurred_at.replace('Z', ''))
+            occurred_at_dt = timezone.datetime.datetime.fromisoformat(occurred_at.replace('Z', ''))
             occurred_at_dt = timezone.make_aware(occurred_at_dt, timezone=pytz.UTC)
             return FeederInterruption.objects.get(
                 feeder__slug=slug,
