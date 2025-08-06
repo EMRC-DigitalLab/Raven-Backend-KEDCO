@@ -4,7 +4,9 @@ from django.core.cache import cache
 from django.conf import settings
 from datetime import datetime, date
 from dateutil.relativedelta import relativedelta
+from django.db import models
 import json
+
 
 from analytics.signals import (
     trigger_full_summary_refresh,
