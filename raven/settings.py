@@ -195,5 +195,14 @@ SPECTACULAR_SETTINGS = {
 
 
 CORS_ALLOW_CREDENTIALS = True
-CSRF_TRUSTED_ORIGINS = ['http://localhost:8000', 'http://31.97.56.29']
+CSRF_TRUSTED_ORIGINS = ['http://localhost:8000', 'http://31.97.56.29', 'https://kedco-raven-backend-updated.onrender.com']
 
+
+# MIDDLEWARE = [
+#     "corsheaders.middleware.CorsMiddleware",
+#     # ...
+# ]
+
+# CORS_ALLOWED_ORIGINS = [
+#     "https://kedco-raven-backend-updated.onrender.com",
+# ]
