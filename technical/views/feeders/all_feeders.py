@@ -9,6 +9,8 @@ from analytics.models import MonthlyTechnicalSummary, DailyTechnicalSummary
 from technical.serializers import FeederAvailabilitySerializer
 from common.models import Feeder
 from technical.models import HourlyLoad, FeederInterruption
+from django.utils import timezone
+from datetime import datetime
 
 
 def _parse_iso_date(date_str):
@@ -87,7 +89,8 @@ def _get_feeder_metrics_from_summary(feeder, from_date, to_date, mode):
 
 
 def _get_monthly_summary_metrics_feeder(feeder, from_date):
-    """Get metrics from monthly summaries for single feeder"""
+    """Get metrics from monthly summaries for single feeder
+    UPDATED: Summary data now includes unresolved interruptions"""
     target_month = from_date
     
     try:
@@ -101,12 +104,14 @@ def _get_monthly_summary_metrics_feeder(feeder, from_date):
         
         return {
             "feeder_name": feeder.name,
+            "feeder_slug": feeder.slug,
             "voltage_level": feeder.voltage_level,
             "avg_hours_of_supply": round(float(summary.avg_hours_of_supply), 2),
             "duration_of_interruptions": round(float(summary.avg_interruption_duration), 2),
             "turnaround_time": round(float(summary.avg_fault_turnaround_time), 2),
             "ftc": summary.total_interruptions,
-            "_source": "monthly_summary"
+            "_source": "monthly_summary",
+            "_includes_unresolved": True  # Summary now includes unresolved
         }
         
     except MonthlyTechnicalSummary.DoesNotExist:
@@ -114,7 +119,8 @@ def _get_monthly_summary_metrics_feeder(feeder, from_date):
 
 
 def _get_yearly_summary_metrics_feeder(feeder, from_date):
-    """Get yearly metrics from aggregated monthly summaries for single feeder"""
+    """Get yearly metrics from aggregated monthly summaries for single feeder
+    UPDATED: Summary data now includes unresolved interruptions"""
     target_year = from_date.year
     
     # Get all months in the year
@@ -143,12 +149,14 @@ def _get_yearly_summary_metrics_feeder(feeder, from_date):
         
         return {
             "feeder_name": feeder.name,
+            "feeder_slug": feeder.slug,
             "voltage_level": feeder.voltage_level,
             "avg_hours_of_supply": round(float(avg_supply), 2),
             "duration_of_interruptions": round(float(avg_duration), 2),
             "turnaround_time": round(float(avg_turnaround), 2),
             "ftc": int(total_interruptions),
-            "_source": "yearly_summary"
+            "_source": "yearly_summary",
+            "_includes_unresolved": True  # Summary now includes unresolved
         }
         
     except Exception as e:
@@ -157,7 +165,8 @@ def _get_yearly_summary_metrics_feeder(feeder, from_date):
 
 
 def _get_daily_summary_metrics_feeder(feeder, from_date, to_date, mode):
-    """Get metrics from daily summaries for single feeder"""
+    """Get metrics from daily summaries for single feeder
+    UPDATED: Summary data now includes unresolved interruptions"""
     # Collect all dates in the range
     dates = []
     current = from_date
@@ -195,12 +204,14 @@ def _get_daily_summary_metrics_feeder(feeder, from_date, to_date, mode):
         
         return {
             "feeder_name": feeder.name,
+            "feeder_slug": feeder.slug,
             "voltage_level": feeder.voltage_level,
             "avg_hours_of_supply": round(float(avg_supply), 2),
             "duration_of_interruptions": round(float(avg_duration), 2),
             "turnaround_time": round(float(avg_turnaround), 2),
             "ftc": int(total_interruptions),
-            "_source": f"daily_summary_{mode}"
+            "_source": f"daily_summary_{mode}",
+            "_includes_unresolved": True  # Summary now includes unresolved
         }
         
     except Exception as e:
@@ -247,7 +258,8 @@ def get_feeder_availability_summary_enhanced(from_date, to_date, mode, state=Non
 
 
 def get_feeder_availability_realtime(feeder, from_date, to_date, mode):
-    """Calculate feeder availability metrics in real-time when summary data unavailable"""
+    """Calculate feeder availability metrics in real-time when summary data unavailable
+    UPDATED: Now includes unresolved interruptions in calculations"""
     
     # Build filters for the date range
     load_filters = Q(date__range=[from_date, to_date])
@@ -265,29 +277,45 @@ def get_feeder_availability_realtime(feeder, from_date, to_date, mode):
     
     avg_supply = round(sum(daily_hours.values()) / len(daily_hours), 2) if daily_hours else 0
     
-    # Compute average duration of interruptions
-    durations = [
-        (i.restored_at - i.occurred_at).total_seconds() / 3600
-        for i in interruption_data
-        if i.occurred_at and i.restored_at
-    ]
-    avg_duration = round(sum(durations) / len(durations), 2) if durations else 0
-    avg_turnaround = avg_duration
+    # UPDATED: Compute average duration of interruptions - INCLUDING UNRESOLVED
+    current_time = timezone.now()
+    total_duration_hours = 0
+    interruption_count = interruption_data.count()
+    
+    if interruption_count > 0:
+        for interrupt in interruption_data:
+            if interrupt.restored_at:
+                # Resolved interruption - use actual duration
+                duration_hours = (interrupt.restored_at - interrupt.occurred_at).total_seconds() / 3600
+            else:
+                # Unresolved interruption - use time since occurrence
+                duration_hours = (current_time - interrupt.occurred_at).total_seconds() / 3600
+            
+            total_duration_hours += duration_hours
+        
+        avg_duration = round(total_duration_hours / interruption_count, 2)
+    else:
+        avg_duration = 0
+    
+    avg_turnaround = avg_duration  # Same calculation for now
     
     return {
         "feeder_name": feeder.name,
+        "feeder_slug": feeder.slug,
         "voltage_level": feeder.voltage_level,
         "avg_hours_of_supply": avg_supply,
         "duration_of_interruptions": avg_duration,
         "turnaround_time": avg_turnaround,
-        "ftc": interruption_data.count(),
-        "_source": f"realtime_{mode}"
+        "ftc": interruption_count,
+        "_source": f"realtime_{mode}",
+        "_includes_unresolved": True
     }
 
 
 # Legacy function maintained for backward compatibility
 def get_feeder_availability_summary(month=None, year=None, from_date=None, to_date=None, state=None, business_district=None):
-    """Legacy function maintained for backward compatibility"""
+    """Legacy function maintained for backward compatibility
+    UPDATED: Now includes unresolved interruptions in calculations"""
     
     load_filters = Q()
     if month and year:
@@ -309,6 +337,8 @@ def get_feeder_availability_summary(month=None, year=None, from_date=None, to_da
         feeders = Feeder.objects.all()
 
     result = []
+    current_time = timezone.now()
+    
     for feeder in feeders:
         load_data = HourlyLoad.objects.filter(feeder=feeder).filter(load_filters)
         interruption_data = FeederInterruption.objects.filter(feeder=feeder).filter(interruption_filters)
@@ -322,22 +352,37 @@ def get_feeder_availability_summary(month=None, year=None, from_date=None, to_da
 
         avg_supply = round(sum(daily_hours.values()) / len(daily_hours), 2) if daily_hours else 0
 
-        # Compute average duration of interruptions
-        durations = [
-            (i.restored_at - i.occurred_at).total_seconds() / 3600
-            for i in interruption_data
-            if i.occurred_at and i.restored_at
-        ]
-        avg_duration = round(sum(durations) / len(durations), 2) if durations else 0
-        avg_turnaround = avg_duration
+        # UPDATED: Compute average duration of interruptions - INCLUDING UNRESOLVED
+        interruption_count = interruption_data.count()
+        
+        if interruption_count > 0:
+            total_duration_hours = 0
+            
+            for interrupt in interruption_data:
+                if interrupt.restored_at:
+                    # Resolved interruption - use actual duration
+                    duration_hours = (interrupt.restored_at - interrupt.occurred_at).total_seconds() / 3600
+                else:
+                    # Unresolved interruption - use time since occurrence
+                    duration_hours = (current_time - interrupt.occurred_at).total_seconds() / 3600
+                
+                total_duration_hours += duration_hours
+            
+            avg_duration = round(total_duration_hours / interruption_count, 2)
+        else:
+            avg_duration = 0
+        
+        avg_turnaround = avg_duration  # Same calculation for now
 
         result.append({
             "feeder_name": feeder.name,
+            "feeder_slug": feeder.slug,
             "voltage_level": feeder.voltage_level,
             "avg_hours_of_supply": avg_supply,
             "duration_of_interruptions": avg_duration,
             "turnaround_time": avg_turnaround,
-            "ftc": interruption_data.count(),
+            "ftc": interruption_count,
+            "_includes_unresolved": True
         })
 
     return result
@@ -460,12 +505,19 @@ class FeederAvailabilityOverview(APIView):
         serializer = FeederAvailabilitySerializer(clean_data, many=True)
         response_data = serializer.data
         
-        # Cache for different durations based on mode and whether it includes current data
+        # # Cache for different durations based on mode and whether it includes current data
+        # today = datetime.now().date()
+        # if to_date >= today:
+        #     cache_timeout = 300  # 5 minutes for current data
+        # else:
+        #     cache_timeout = 1800  # 30 minutes for historical data
+
         today = datetime.now().date()
         if to_date >= today:
-            cache_timeout = 300  # 5 minutes for current data
+            cache_timeout = 1 
         else:
-            cache_timeout = 1800  # 30 minutes for historical data
+            cache_timeout = 1 
+        
         
         cache.set(cache_key, response_data, cache_timeout)
         print(f"DEBUG: Cached response with key: {cache_key} for {cache_timeout} seconds")

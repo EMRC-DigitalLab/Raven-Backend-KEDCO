@@ -49,6 +49,7 @@ class DailyHoursOfSupplySerializer(serializers.ModelSerializer):
 
 class FeederAvailabilitySerializer(serializers.Serializer):
     feeder_name = serializers.CharField()
+    feeder_slug = serializers.CharField()
     voltage_level = serializers.CharField()
     avg_hours_of_supply = serializers.FloatField()
     duration_of_interruptions = serializers.FloatField()

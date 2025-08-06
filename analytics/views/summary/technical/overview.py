@@ -2,11 +2,13 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from django.core.cache import cache
 from django.db.models import Sum, Avg, Max, Count
+from django.db.models.functions import Extract
 from django.utils import timezone
 from datetime import datetime, date, timedelta
 from dateutil.relativedelta import relativedelta
 import logging
 import hashlib
+from calendar import monthrange
 
 from analytics.models import MonthlyTechnicalSummary, DailyTechnicalSummary
 from common.models import State, BusinessDistrict, Feeder
@@ -18,6 +20,34 @@ class OptimizedTechnicalOverviewAPIView(APIView):
     """
     Fixed technical overview API using pre-calculated summary data.
     Properly aggregates data across multiple entities and handles filtering correctly.
+    
+    Supported Query Parameters:
+    - mode: 'monthly', 'yearly', 'daily', 'weekly', 'custom' (auto-detected if not provided)
+    - year: Year for monthly/yearly modes (default: current year)
+    - month: Month for monthly mode (default: current month)
+    - from_date: Start date for daily/weekly/custom modes (ISO format: YYYY-MM-DD)
+    - to_date: End date for daily/weekly/custom modes (ISO format: YYYY-MM-DD)
+    
+    Geographic Filters (hierarchical):
+    - state: State name (case-insensitive)
+    - district: Business district name (case-insensitive)
+    - feeder: Feeder slug (exact match)
+    
+    Examples:
+    - National overview: /api/technical/overview/
+    - State level: /api/technical/overview/?state=Lagos
+    - District level: /api/technical/overview/?state=Lagos&district=Ikeja
+    - Specific feeder: /api/technical/overview/?feeder=ikeja-feeder-01
+    - Monthly view: /api/technical/overview/?mode=monthly&year=2024&month=8
+    - Daily view: /api/technical/overview/?mode=daily&from_date=2024-08-06&to_date=2024-08-06
+    - Weekly view: /api/technical/overview/?mode=weekly&from_date=2024-08-05&to_date=2024-08-11
+    
+    Response includes:
+    - highlight_metrics: Key performance indicators with deltas
+    - supply_and_quality: Supply hours, interruption duration, turnaround time with history
+    - technical_breakdown: Detailed technical metrics
+    - interruption_sources: Breakdown of interruption causes
+    - load_trend: Time-series load data (always included, varies by mode)
     """
     
     def get(self, request):
@@ -36,14 +66,15 @@ class OptimizedTechnicalOverviewAPIView(APIView):
         # Parse dates based on mode
         date_info = self._parse_dates_by_mode(request, mode)
         
-        # Try cache first (but exclude load trend date from cache for now)
+        # Try cache first - REMOVED load trend date condition since we always return it
         cache_key = self._get_cache_key(mode, date_info, filter_params)
         cached_response = cache.get(cache_key)
         
-        # For load trend, always get fresh data if date parameter is provided
-        load_trend_date = request.GET.get("date") or request.GET.get("from_date")
-        if cached_response and not load_trend_date:
+        if cached_response:
             logger.debug(f"Returning cached technical data for mode: {mode}")
+            # Always get fresh load trend data (since it's fast and we want it current)
+            additional_data = self._get_additional_data(request, filter_params)
+            cached_response["load_trend"] = additional_data.get("load_trend", {"series": [], "date": None})
             return Response(cached_response)
         
         # Fetch data based on mode
@@ -54,21 +85,19 @@ class OptimizedTechnicalOverviewAPIView(APIView):
         else:
             overview_data = self._fetch_daily_data(date_info['periods'], filter_params, mode)
         
-        # Get additional data (load trend, etc.)
+        # Get additional data (load trend, etc.) - now always included
         additional_data = self._get_additional_data(request, filter_params)
         
         # Format response
         response_data = self._format_response_data(overview_data, additional_data, mode, date_info)
         
         # Cache response (shorter cache for current periods)
-        if not load_trend_date:  # Only cache if no specific load trend date requested
-            cache_timeout = 300 if self._is_current_period(date_info) else 1800
-            cache.set(cache_key, response_data, cache_timeout)
-        
-        # If we had cached data but needed fresh load trend, update just that part
-        if cached_response and load_trend_date:
-            cached_response["load_trend"] = additional_data.get("load_trend", {"series": [], "date": None})
-            return Response(cached_response)
+        # cache_timeout = 300 if self._is_current_period(date_info) else 1800
+        cache_timeout = 1 if self._is_current_period(date_info) else 1
+        # Cache without load_trend since we always get it fresh
+        cached_data = response_data.copy()
+        cached_data.pop("load_trend", None)  # Remove load_trend before caching
+        cache.set(cache_key, cached_data, cache_timeout)
         
         return Response(response_data)
     
@@ -138,7 +167,9 @@ class OptimizedTechnicalOverviewAPIView(APIView):
         if state_name:
             try:
                 filter_params['state'] = State.objects.get(name__iexact=state_name)
+                logger.debug(f"State filter applied: {filter_params['state'].name}")
             except State.DoesNotExist:
+                logger.warning(f"Invalid state name provided: {state_name}")
                 pass  # Ignore invalid state names
         
         # Parse district filter
@@ -149,21 +180,54 @@ class OptimizedTechnicalOverviewAPIView(APIView):
                 if filter_params['state']:
                     qs = qs.filter(state=filter_params['state'])
                 filter_params['business_district'] = qs.first()
-            except BusinessDistrict.DoesNotExist:
+                if filter_params['business_district']:
+                    logger.debug(f"Business district filter applied: {filter_params['business_district'].name}")
+                else:
+                    logger.warning(f"Business district not found: {district_name}")
+            except Exception as e:
+                logger.warning(f"Error parsing district filter: {e}")
                 pass
         
-        # Parse feeder filter
+        # Parse feeder filter by slug
         feeder_slug = request.GET.get('feeder')
         if feeder_slug:
             try:
                 qs = Feeder.objects.filter(slug=feeder_slug)
+                
+                # Apply hierarchical filtering to ensure consistency
                 if filter_params['business_district']:
                     qs = qs.filter(business_district=filter_params['business_district'])
                 elif filter_params['state']:
                     qs = qs.filter(business_district__state=filter_params['state'])
+                
                 filter_params['feeder'] = qs.first()
-            except Feeder.DoesNotExist:
+                
+                if filter_params['feeder']:
+                    logger.debug(f"Feeder filter applied: {filter_params['feeder'].name} (slug: {feeder_slug})")
+                    # When feeder is specified, override higher-level filters for consistency
+                    if not filter_params['business_district']:
+                        filter_params['business_district'] = filter_params['feeder'].business_district
+                    if not filter_params['state']:
+                        filter_params['state'] = filter_params['feeder'].business_district.state
+                else:
+                    logger.warning(f"Feeder not found with slug: {feeder_slug}")
+                    
+            except Exception as e:
+                logger.warning(f"Error parsing feeder filter: {e}")
                 pass
+        
+        # Log final filter configuration
+        filter_summary = []
+        if filter_params['feeder']:
+            filter_summary.append(f"Feeder: {filter_params['feeder'].name}")
+        elif filter_params['business_district']:
+            filter_summary.append(f"District: {filter_params['business_district'].name}")
+        elif filter_params['state']:
+            filter_summary.append(f"State: {filter_params['state'].name}")
+        else:
+            filter_summary.append("National")
+            
+        logger.info(f"Applied filters: {', '.join(filter_summary)}")
         
         return filter_params
     
@@ -1095,23 +1159,50 @@ class OptimizedTechnicalOverviewAPIView(APIView):
         }
     
     def _get_additional_data(self, request, filter_params):
-        """Get additional data like load trends"""
+        """Get additional data like load trends - MODIFIED to always return load trend"""
         additional = {}
         
-        # Load trend data if date specified
-        trend_date_str = request.GET.get("date") or request.GET.get("from_date")
-        if trend_date_str:
-            try:
-                trend_date_obj = self._parse_iso_date(trend_date_str)
-                additional["load_trend"] = self._get_load_trend(trend_date_obj, filter_params)
-            except ValueError:
-                additional["load_trend"] = {"series": [], "date": None}
-        else:
-            additional["load_trend"] = {"series": [], "date": None}
+        # Parse mode and date parameters to determine what load trend to return
+        mode = request.GET.get('mode')
+        if not mode and (request.GET.get('from_date') or request.GET.get('to_date')):
+            mode = self._determine_mode_from_dates(request)
+        elif not mode:
+            mode = 'monthly'  # Default mode
+        
+        # Parse dates based on mode to get the target date for load trend
+        date_info = self._parse_dates_by_mode(request, mode)
+        
+        # Always get load trend data based on mode and date configuration
+        additional["load_trend"] = self._get_load_trend_for_mode(mode, date_info, filter_params)
         
         return additional
-    
-    def _get_load_trend(self, trend_date, filter_params):
+
+    def _get_load_trend_for_mode(self, mode, date_info, filter_params):
+        """Get load trend data based on mode and date configuration"""
+        
+        if mode == 'monthly':
+            # For monthly mode, return load trend for the target month
+            target_month = date_info.get('target_date', date.today().replace(day=1))
+            return self._get_monthly_load_trend(target_month, filter_params)
+        
+        elif mode == 'yearly':
+            # For yearly mode, return monthly averages for the target year
+            target_year = date_info.get('target_date', date.today().replace(month=1, day=1))
+            return self._get_yearly_load_trend(target_year, filter_params)
+        
+        elif mode in ['daily', 'weekly', 'custom']:
+            # For daily/weekly/custom modes, return hourly data for the target date
+            target_date = date_info.get('target_date', date.today())
+            if mode == 'weekly':
+                # For weekly, use the last day of the week
+                target_date = date_info.get('to_date', date.today())
+            return self._get_daily_load_trend(target_date, filter_params)
+        
+        else:
+            # Fallback
+            return {"series": [], "date": None, "unit": "MW"}
+
+    def _get_daily_load_trend(self, trend_date, filter_params):
         """Get hourly load trend for a specific date"""
         # Build feeder filter
         feeder_filter = {}
@@ -1135,10 +1226,105 @@ class OptimizedTechnicalOverviewAPIView(APIView):
             for entry in hourly_data
         ]
         
+        # Fill missing hours with 0 if needed
+        hours_dict = {entry["hour"]: entry["value"] for entry in series}
+        complete_series = [
+            {"hour": hour, "value": hours_dict.get(hour, 0)}
+            for hour in range(24)
+        ]
+        
         return {
             "unit": "MW",
             "date": trend_date.strftime("%Y-%m-%d"),
-            "series": series
+            "series": complete_series,
+            "type": "hourly"
+        }
+
+    def _get_monthly_load_trend(self, target_month, filter_params):
+        """Get daily average load trend for a specific month"""
+        # Build feeder filter
+        feeder_filter = {}
+        if filter_params['feeder']:
+            feeder_filter['feeder'] = filter_params['feeder']
+        elif filter_params['business_district']:
+            feeder_filter['feeder__business_district'] = filter_params['business_district']
+        elif filter_params['state']:
+            feeder_filter['feeder__business_district__state'] = filter_params['state']
+        
+        # Calculate the date range for the month
+        days_in_month = monthrange(target_month.year, target_month.month)[1]
+        month_start = target_month
+        month_end = target_month.replace(day=days_in_month)
+        
+        # Get daily average loads for the month
+        daily_data = HourlyLoad.objects.filter(
+            date__range=(month_start, month_end),
+            **feeder_filter
+        ).values('date').annotate(
+            avg_load=Avg('load_mw')
+        ).order_by('date')
+        
+        series = [
+            {"day": entry["date"].day, "value": round(float(entry["avg_load"] or 0), 2)}
+            for entry in daily_data
+        ]
+        
+        # Fill missing days with 0 if needed
+        days_dict = {entry["day"]: entry["value"] for entry in series}
+        complete_series = [
+            {"day": day, "value": days_dict.get(day, 0)}
+            for day in range(1, days_in_month + 1)
+        ]
+        
+        return {
+            "unit": "MW",
+            "date": target_month.strftime("%Y-%m"),
+            "series": complete_series,
+            "type": "daily_in_month"
+        }
+
+    def _get_yearly_load_trend(self, target_year, filter_params):
+        """Get monthly average load trend for a specific year"""
+        # Build feeder filter
+        feeder_filter = {}
+        if filter_params['feeder']:
+            feeder_filter['feeder'] = filter_params['feeder']
+        elif filter_params['business_district']:
+            feeder_filter['feeder__business_district'] = filter_params['business_district']
+        elif filter_params['state']:
+            feeder_filter['feeder__business_district__state'] = filter_params['state']
+        
+        # Calculate the date range for the year
+        year_start = target_year.replace(month=1, day=1)
+        year_end = target_year.replace(month=12, day=31)
+        
+        # Get monthly average loads for the year
+        monthly_data = HourlyLoad.objects.filter(
+            date__range=(year_start, year_end),
+            **feeder_filter
+        ).annotate(
+            month=Extract('date__month')
+        ).values('month').annotate(
+            avg_load=Avg('load_mw')
+        ).order_by('month')
+        
+        series = [
+            {"month": entry["month"], "value": round(float(entry["avg_load"] or 0), 2)}
+            for entry in monthly_data
+        ]
+        
+        # Fill missing months with 0 if needed
+        months_dict = {entry["month"]: entry["value"] for entry in series}
+        complete_series = [
+            {"month": month, "value": months_dict.get(month, 0)}
+            for month in range(1, 13)
+        ]
+        
+        return {
+            "unit": "MW",
+            "date": str(target_year.year),
+            "series": complete_series,
+            "type": "monthly_in_year"
         }
     
     def _format_response_data(self, overview_data, additional_data, mode, date_info):

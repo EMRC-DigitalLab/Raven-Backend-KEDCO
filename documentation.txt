@@ -1,0 +1,14 @@
+# Check current status
+python manage.py manage_analytics_signals status
+
+# Disable signals during bulk import
+python manage.py manage_analytics_signals disable
+
+# Re-enable signals
+python manage.py manage_analytics_signals enable
+
+# Trigger full refresh for specific date range
+python manage.py manage_analytics_signals refresh --start-date 2024-01-01 --end-date 2024-12-31
+
+# View statistics
+python manage.py manage_analytics_signals stats
