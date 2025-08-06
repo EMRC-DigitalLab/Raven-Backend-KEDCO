@@ -461,9 +461,9 @@ class FeederAvailabilityOverview(APIView):
                 return Response({"error": str(e)}, status=400)
         
         # Debug logging
-        print(f"DEBUG: Request params: {dict(request.GET)}")
-        print(f"DEBUG: Calculated date range: {from_date} to {to_date}, mode: {mode}")
-        print(f"DEBUG: Filters - state: {state}, business_district: {business_district}")
+        # print(f"DEBUG: Request params: {dict(request.GET)}")
+        # print(f"DEBUG: Calculated date range: {from_date} to {to_date}, mode: {mode}")
+        # print(f"DEBUG: Filters - state: {state}, business_district: {business_district}")
         
         # Check cache
         cache_key = _get_feeder_cache_key(from_date, to_date, mode, state, business_district)
