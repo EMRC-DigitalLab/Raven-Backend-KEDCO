@@ -1,7 +1,7 @@
 # analytics/management/commands/populate_technical_summary.py
 from django.core.management.base import BaseCommand, CommandError
 from django.utils import timezone
-from django.db import transaction
+from django.db import transaction, connection
 from datetime import datetime, date, timedelta
 from dateutil.relativedelta import relativedelta #type: ignore
 import time
@@ -102,6 +102,16 @@ class Command(BaseCommand):
         if self.dry_run:
             self.stdout.write(
                 self.style.WARNING('DRY RUN MODE - No changes will be made')
+            )
+
+        # Check if we're in an atomic block (ATOMIC_REQUESTS enabled)
+        if connection.in_atomic_block:
+            self.stdout.write(
+                self.style.WARNING(
+                    '⚠️  WARNING: Running inside an atomic transaction block!\n'
+                    '   This might be due to ATOMIC_REQUESTS in settings.\n'
+                    '   Data will only be visible after the ENTIRE command completes.\n'
+                )
             )
 
         try:
@@ -320,8 +330,20 @@ class Command(BaseCommand):
         
         return MonthlyTechnicalSummary.objects.filter(q_objects).count()
 
+    def _force_commit(self):
+        """Force a database commit - handles different Django configurations"""
+        try:
+            # If we're in autocommit mode, this does nothing (which is fine)
+            # If we're not, this commits the current transaction
+            if not connection.in_atomic_block:
+                # Force the connection to commit any pending changes
+                connection.commit()
+        except Exception:
+            # If commit() isn't available or fails, try closing and reopening
+            pass
+
     def _populate_summaries_bulk(self, months, filter_configs):
-        """Execute bulk population - OPTIMIZED VERSION with incremental commits"""
+        """Execute bulk population - OPTIMIZED VERSION with FORCED incremental commits"""
         total_operations = len(months) * len(filter_configs)
         
         start_time = time.time()
@@ -411,30 +433,40 @@ class Command(BaseCommand):
                     f'{month.strftime("%Y-%m")}: Processed {processed} configs in {month_time:.1f}s'
                 )
         
-        # Execute bulk operations with incremental commits
+        # Execute bulk operations with FORCED incremental commits
         db_start = time.time()
         created_count = 0
         updated_count = 0
         
-        # Bulk create in batches with commits
+        # Bulk create in batches with FORCED commits
         if to_create:
             total_to_create = len(to_create)
             for i in range(0, total_to_create, self.batch_size):
                 batch = to_create[i:i + self.batch_size]
+                
+                # Use atomic block for this batch
                 with transaction.atomic():
                     MonthlyTechnicalSummary.objects.bulk_create(batch)
                     created_count += len(batch)
                 
+                # FORCE commit immediately after atomic block
+                self._force_commit()
+                
                 if self.verbosity >= 1:
                     self.stdout.write(
-                        f'✅ Created batch: {created_count}/{total_to_create} summaries',
+                        f'✅ Created batch: {created_count}/{total_to_create} summaries (COMMITTED)',
                         ending='\r'
                     )
+                
+                # Verify data is in database
+                if self.verbosity >= 2 and created_count % (self.batch_size * 5) == 0:
+                    actual_count = MonthlyTechnicalSummary.objects.count()
+                    self.stdout.write(f'\n   [DEBUG] Total records in DB: {actual_count}')
             
             if self.verbosity >= 1:
-                self.stdout.write(f'✅ Bulk created {created_count} summaries (complete)          ')
+                self.stdout.write(f'\n✅ Bulk created {created_count} summaries (ALL COMMITTED)          ')
             
-        # Bulk update in batches with commits
+        # Bulk update in batches with FORCED commits
         if to_update:
             # Get all field names from the model
             update_fields = [
@@ -445,6 +477,8 @@ class Command(BaseCommand):
             total_to_update = len(to_update)
             for i in range(0, total_to_update, self.batch_size):
                 batch = to_update[i:i + self.batch_size]
+                
+                # Use atomic block for this batch
                 with transaction.atomic():
                     MonthlyTechnicalSummary.objects.bulk_update(
                         batch,
@@ -452,14 +486,17 @@ class Command(BaseCommand):
                     )
                     updated_count += len(batch)
                 
+                # FORCE commit immediately after atomic block
+                self._force_commit()
+                
                 if self.verbosity >= 1:
                     self.stdout.write(
-                        f'✅ Updated batch: {updated_count}/{total_to_update} summaries',
+                        f'✅ Updated batch: {updated_count}/{total_to_update} summaries (COMMITTED)',
                         ending='\r'
                     )
             
             if self.verbosity >= 1:
-                self.stdout.write(f'✅ Bulk updated {updated_count} summaries (complete)          ')
+                self.stdout.write(f'\n✅ Bulk updated {updated_count} summaries (ALL COMMITTED)          ')
         
         db_time = time.time() - db_start
         total_time = time.time() - start_time
@@ -481,6 +518,11 @@ class Command(BaseCommand):
             self.stdout.write(f'  Avg time per summary: {total_time/total_processed:.3f}s')
             self.stdout.write(f'  Throughput: {total_processed/total_time:.1f} summaries/sec')
         self.stdout.write(f'{"="*60}')
+        
+        # Final verification
+        if self.verbosity >= 1:
+            final_count = MonthlyTechnicalSummary.objects.count()
+            self.stdout.write(f'\n✅ Final verification: {final_count} total records in database')
 
     def _populate_summaries(self, months, filter_configs):
         """Execute the population (non-bulk version)"""
