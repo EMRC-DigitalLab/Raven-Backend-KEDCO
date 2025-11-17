@@ -321,7 +321,7 @@ class Command(BaseCommand):
         return MonthlyTechnicalSummary.objects.filter(q_objects).count()
 
     def _populate_summaries_bulk(self, months, filter_configs):
-        """Execute bulk population - OPTIMIZED VERSION"""
+        """Execute bulk population - OPTIMIZED VERSION with incremental commits"""
         total_operations = len(months) * len(filter_configs)
         
         start_time = time.time()
@@ -411,38 +411,55 @@ class Command(BaseCommand):
                     f'{month.strftime("%Y-%m")}: Processed {processed} configs in {month_time:.1f}s'
                 )
         
-        # Execute bulk operations
+        # Execute bulk operations with incremental commits
         db_start = time.time()
         created_count = 0
         updated_count = 0
         
-        # with transaction.atomic():
-        # Bulk create
+        # Bulk create in batches with commits
         if to_create:
-            MonthlyTechnicalSummary.objects.bulk_create(
-                to_create,
-                batch_size=self.batch_size
-            )
-            created_count = len(to_create)
-            if self.verbosity >= 1:
-                self.stdout.write(f'✅ Bulk created {created_count} summaries')
+            total_to_create = len(to_create)
+            for i in range(0, total_to_create, self.batch_size):
+                batch = to_create[i:i + self.batch_size]
+                with transaction.atomic():
+                    MonthlyTechnicalSummary.objects.bulk_create(batch)
+                    created_count += len(batch)
+                
+                if self.verbosity >= 1:
+                    self.stdout.write(
+                        f'✅ Created batch: {created_count}/{total_to_create} summaries',
+                        ending='\r'
+                    )
             
-        # Bulk update
+            if self.verbosity >= 1:
+                self.stdout.write(f'✅ Bulk created {created_count} summaries (complete)          ')
+            
+        # Bulk update in batches with commits
         if to_update:
             # Get all field names from the model
             update_fields = [
                 f.name for f in MonthlyTechnicalSummary._meta.fields
                 if f.name not in ['id', 'created_at', 'month', 'state', 'business_district', 'feeder']
             ]
+            
+            total_to_update = len(to_update)
+            for i in range(0, total_to_update, self.batch_size):
+                batch = to_update[i:i + self.batch_size]
+                with transaction.atomic():
+                    MonthlyTechnicalSummary.objects.bulk_update(
+                        batch,
+                        update_fields
+                    )
+                    updated_count += len(batch)
                 
-            MonthlyTechnicalSummary.objects.bulk_update(
-                to_update,
-                update_fields,
-                batch_size=self.batch_size
-            )
-            updated_count = len(to_update)
+                if self.verbosity >= 1:
+                    self.stdout.write(
+                        f'✅ Updated batch: {updated_count}/{total_to_update} summaries',
+                        ending='\r'
+                    )
+            
             if self.verbosity >= 1:
-                self.stdout.write(f'✅ Bulk updated {updated_count} summaries')
+                self.stdout.write(f'✅ Bulk updated {updated_count} summaries (complete)          ')
         
         db_time = time.time() - db_start
         total_time = time.time() - start_time
