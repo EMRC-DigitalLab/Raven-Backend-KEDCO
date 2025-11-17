@@ -70,12 +70,12 @@ class OptimizedTechnicalOverviewAPIView(APIView):
         cache_key = self._get_cache_key(mode, date_info, filter_params)
         cached_response = cache.get(cache_key)
         
-        if cached_response:
-            logger.debug(f"Returning cached technical data for mode: {mode}")
-            # Always get fresh load trend data (since it's fast and we want it current)
-            additional_data = self._get_additional_data(request, filter_params)
-            cached_response["load_trend"] = additional_data.get("load_trend", {"series": [], "date": None})
-            return Response(cached_response)
+        # if cached_response:
+        #     logger.debug(f"Returning cached technical data for mode: {mode}")
+        #     # Always get fresh load trend data (since it's fast and we want it current)
+        #     additional_data = self._get_additional_data(request, filter_params)
+        #     cached_response["load_trend"] = additional_data.get("load_trend", {"series": [], "date": None})
+        #     return Response(cached_response)
         
         # Fetch data based on mode
         if mode == 'monthly':
