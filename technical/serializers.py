@@ -1,3 +1,4 @@
+# technical/serializers.py
 from rest_framework import serializers
 from .models import *
 
@@ -6,10 +7,13 @@ class EnergyDeliveredSerializer(serializers.ModelSerializer):
         queryset=Feeder.objects.all(),
         slug_field='slug'
     )
+    date = serializers.DateField()
+    energy_mwh = serializers.DecimalField(max_digits=14, decimal_places=4)
 
     class Meta:
         model = EnergyDelivered
-        fields = '__all__'
+        fields = ['feeder', 'date', 'energy_mwh']
+        # Remove '__all__' — we don't want to expose internal fields
 
 
 class HourlyLoadSerializer(serializers.ModelSerializer):

@@ -4,10 +4,121 @@ from common.models import UUIDModel, Feeder
 from django.utils import timezone
 
 
+class CumulativeMeterReading(UUIDModel, models.Model):
+    """
+    Stores the raw cumulative meter readings as received from the meter.
+    This is the source of truth from the physical meter.
+    
+    IMPORTANT: Store readings in the same units your meters use!
+    - If meters report in MWh, use cumulative_mwh field
+    - If meters report in kWh, convert and use cumulative_mwh (divide by 1000)
+    """
+    feeder = models.ForeignKey(Feeder, on_delete=models.CASCADE, related_name='meter_readings')
+    reading_date = models.DateField(db_index=True)
+    cumulative_mwh = models.DecimalField(
+        max_digits=15, 
+        decimal_places=4,
+        help_text="Cumulative meter reading in MWh (like an odometer)"
+    )
+    reading_time = models.DateTimeField(
+        null=True, 
+        blank=True,
+        help_text="Exact time of meter reading"
+    )
+    is_estimated = models.BooleanField(
+        default=False,
+        help_text="Flag if this reading is estimated (e.g., for missing data)"
+    )
+    notes = models.TextField(blank=True)
+    
+    class Meta:
+        unique_together = ('feeder', 'reading_date')
+        ordering = ['feeder', 'reading_date']
+        indexes = [
+            models.Index(fields=['feeder', 'reading_date']),
+            models.Index(fields=['reading_date']),
+        ]
+    
+    def __str__(self):
+        return f"{self.feeder.name} - {self.reading_date} - {self.cumulative_mwh} MWh"
+    
+    def calculate_daily_consumption(self):
+        """
+        Calculate daily consumption by comparing with previous day's reading.
+        Returns energy in MWh.
+        """
+        from datetime import timedelta
+        
+        previous_date = self.reading_date - timedelta(days=1)
+        
+        try:
+            previous_reading = CumulativeMeterReading.objects.get(
+                feeder=self.feeder,
+                reading_date=previous_date
+            )
+            
+            # Calculate difference in MWh
+            consumption_mwh = self.cumulative_mwh - previous_reading.cumulative_mwh
+            
+            # Handle meter rollover or reset
+            if consumption_mwh < 0:
+                # Meter may have been reset or there's an error
+                # You can implement rollover logic here if meters have a max value
+                return None  # or raise an error
+            
+            return consumption_mwh
+            
+        except CumulativeMeterReading.DoesNotExist:
+            # No previous reading exists
+            return None
+    
+    def save(self, *args, **kwargs):
+        """
+        Override save to automatically create/update EnergyDelivered record
+        """
+        super().save(*args, **kwargs)
+        
+        # Calculate and store daily consumption
+        daily_consumption = self.calculate_daily_consumption()
+        
+        if daily_consumption is not None and daily_consumption >= 0:
+            # Create or update EnergyDelivered record
+            EnergyDelivered.objects.update_or_create(
+                feeder=self.feeder,
+                date=self.reading_date,
+                defaults={
+                    'energy_mwh': daily_consumption
+                }
+            )
+
+
 class EnergyDelivered(UUIDModel, models.Model):
+    """
+    Stores the ACTUAL daily energy consumption (not cumulative).
+    This is calculated from the difference between consecutive meter readings.
+    """
     feeder = models.ForeignKey(Feeder, on_delete=models.CASCADE)
     date = models.DateField()
-    energy_mwh = models.DecimalField(max_digits=10, decimal_places=2)
+    energy_mwh = models.DecimalField(
+        max_digits=10, 
+        decimal_places=2,
+        help_text="ACTUAL energy delivered on this date (not cumulative)"
+    )
+    
+    # Add these fields to track data quality
+    is_calculated = models.BooleanField(
+        default=True,
+        help_text="True if calculated from meter readings, False if manually entered"
+    )
+    calculation_method = models.CharField(
+        max_length=50,
+        default='meter_difference',
+        choices=[
+            ('meter_difference', 'Calculated from meter difference'),
+            ('manual_entry', 'Manually entered'),
+            ('estimated', 'Estimated from historical data'),
+        ]
+    )
 
     class Meta:
         unique_together = ('feeder', 'date')
@@ -22,10 +133,6 @@ class HourlyLoad(UUIDModel, models.Model):
     class Meta:
         unique_together = ('feeder', 'date', 'hour')
 
-
-from django.db import models
-from common.models import UUIDModel, Feeder
-from django.utils import timezone
 
 class FeederInterruption(UUIDModel, models.Model):
     INTERRUPTION_TYPES = [
@@ -123,19 +230,27 @@ class FeederInterruption(UUIDModel, models.Model):
         return f"{self.feeder.name} - {self.interruption_type} - {status}"
 
 
-# Utility functions for duration calculations
+# Utility function for duration calculations
 
-def calculate_interruption_metrics(interruptions, reference_time=None, exclude_load_shedding=False):
+def calculate_interruption_metrics(interruptions, reference_time=None):
     """
-    Calculate comprehensive interruption metrics for a queryset of interruptions
+    Calculate comprehensive interruption metrics for a queryset of interruptions.
+    
+    IMPORTANT DISTINCTIONS:
+    - Interruption Duration: ALL interruptions (including L/S and TCN)
+    - Turnaround Time: ONLY local faults (excludes L/S and TCN issues)
     
     Args:
         interruptions: QuerySet of FeederInterruption objects
         reference_time: datetime to calculate metrics at (defaults to now)
-        exclude_load_shedding: bool, whether to exclude load shedding from fault calculations
         
     Returns:
-        dict: Dictionary containing various metrics
+        dict: Dictionary containing various metrics including:
+            - total_interruptions: Total count of all interruptions
+            - avg_duration_hours: Average duration of ALL interruptions
+            - avg_turnaround_time: Average time to restore LOCAL faults only
+            - turnaround_count: Count of local faults (excludes L/S and TCN)
+            - breakdown_by_type: Detailed breakdown by fault type
     """
     if reference_time is None:
         reference_time = timezone.now()
@@ -152,8 +267,20 @@ def calculate_interruption_metrics(interruptions, reference_time=None, exclude_l
             'fault_count': 0,
             'fault_hours': 0,
             'avg_fault_duration': 0,
+            'avg_turnaround_time': 0,
+            'turnaround_count': 0,
+            'turnaround_hours': 0,
             'breakdown_by_type': {}
         }
+    
+    # Define interruption categories
+    LOAD_SHEDDING_TYPES = ['L/S', 'L/S GS', '330KV L/S', 'T/LS']
+    
+    # TCN/Grid issues (not under our control)
+    TCN_TYPES = ['132KV E/F', '132KV CB/F', '330KV L/F', '132KV L/F', 'tcn', '330KV L/S']
+    
+    # Combined exclusions for turnaround time
+    TURNAROUND_EXCLUSIONS = set(LOAD_SHEDDING_TYPES + TCN_TYPES)
     
     total_count = interruptions.count()
     total_duration = 0
@@ -163,6 +290,8 @@ def calculate_interruption_metrics(interruptions, reference_time=None, exclude_l
     load_shedding_hours = 0
     fault_count = 0
     fault_hours = 0
+    turnaround_hours = 0
+    turnaround_count = 0
     breakdown_by_type = {}
     
     for interruption in interruptions:
@@ -177,24 +306,37 @@ def calculate_interruption_metrics(interruptions, reference_time=None, exclude_l
         
         # Categorize by type
         interrupt_type = interruption.interruption_type or 'Unknown'
-        breakdown_by_type[interrupt_type] = breakdown_by_type.get(interrupt_type, {
-            'count': 0,
-            'duration': 0
-        })
+        
+        if interrupt_type not in breakdown_by_type:
+            breakdown_by_type[interrupt_type] = {
+                'count': 0,
+                'duration': 0
+            }
+        
         breakdown_by_type[interrupt_type]['count'] += 1
         breakdown_by_type[interrupt_type]['duration'] += duration
         
         # Load shedding vs faults
-        if interruption.is_load_shedding:
+        if interrupt_type in LOAD_SHEDDING_TYPES:
             load_shedding_count += 1
             load_shedding_hours += duration
         else:
             fault_count += 1
             fault_hours += duration
+        
+        # Turnaround time calculation (exclude L/S and TCN)
+        if interrupt_type not in TURNAROUND_EXCLUSIONS:
+            turnaround_hours += duration
+            turnaround_count += 1
     
     # Calculate averages
     avg_duration = total_duration / total_count if total_count > 0 else 0
     avg_fault_duration = fault_hours / fault_count if fault_count > 0 else 0
+    avg_turnaround = turnaround_hours / turnaround_count if turnaround_count > 0 else 0
+    
+    # Add average duration to each type in breakdown
+    for k, v in breakdown_by_type.items():
+        v['avg_duration'] = round(v['duration'] / v['count'], 2) if v['count'] > 0 else 0
     
     return {
         'total_interruptions': total_count,
@@ -207,15 +349,19 @@ def calculate_interruption_metrics(interruptions, reference_time=None, exclude_l
         'fault_count': fault_count,
         'fault_hours': round(fault_hours, 2),
         'avg_fault_duration': round(avg_fault_duration, 2),
+        'avg_turnaround_time': round(avg_turnaround, 2),
+        'turnaround_count': turnaround_count,
+        'turnaround_hours': round(turnaround_hours, 2),
         'breakdown_by_type': {
             k: {
                 'count': v['count'],
                 'duration': round(v['duration'], 2),
-                'avg_duration': round(v['duration'] / v['count'], 2) if v['count'] > 0 else 0
+                'avg_duration': v['avg_duration']
             }
             for k, v in breakdown_by_type.items()
         }
     }
+
 
 class DailyHoursOfSupply(UUIDModel, models.Model):
     feeder = models.ForeignKey(Feeder, on_delete=models.CASCADE)

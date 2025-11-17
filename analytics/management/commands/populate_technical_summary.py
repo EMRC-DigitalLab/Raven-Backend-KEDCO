@@ -1,6 +1,7 @@
 # analytics/management/commands/populate_technical_summary.py
 from django.core.management.base import BaseCommand, CommandError
 from django.utils import timezone
+from django.db import transaction
 from datetime import datetime, date, timedelta
 from dateutil.relativedelta import relativedelta #type: ignore
 import time
@@ -11,7 +12,7 @@ from common.models import State, BusinessDistrict, Feeder
 
 
 class Command(BaseCommand):
-    help = 'Populate or update monthly technical summary data'
+    help = 'Populate or update monthly technical summary data (OPTIMIZED with bulk operations)'
 
     def add_arguments(self, parser):
         # Date arguments
@@ -82,8 +83,13 @@ class Command(BaseCommand):
         parser.add_argument(
             '--batch-size',
             type=int,
-            default=50,
-            help='Number of summaries to process in each batch (default: 50)'
+            default=100,
+            help='Number of summaries to create/update in bulk (default: 100)'
+        )
+        parser.add_argument(
+            '--use-bulk',
+            action='store_true',
+            help='Use optimized bulk operations (much faster for many records)'
         )
 
     def handle(self, *args, **options):
@@ -91,6 +97,7 @@ class Command(BaseCommand):
         self.dry_run = options['dry_run']
         self.force = options['force']
         self.batch_size = options['batch_size']
+        self.use_bulk = options['use_bulk']
 
         if self.dry_run:
             self.stdout.write(
@@ -109,10 +116,13 @@ class Command(BaseCommand):
             
             if not self.dry_run:
                 # Execute the population
-                self._populate_summaries(months, filter_configs)
+                if self.use_bulk and len(months) * len(filter_configs) > 10:
+                    self._populate_summaries_bulk(months, filter_configs)
+                else:
+                    self._populate_summaries(months, filter_configs)
             
             self.stdout.write(
-                self.style.SUCCESS('Technical summary population completed successfully')
+                self.style.SUCCESS('✅ Technical summary population completed successfully')
             )
 
         except Exception as e:
@@ -212,7 +222,7 @@ class Command(BaseCommand):
         return filter_configs
 
     def _generate_all_filter_combinations(self):
-        """Generate all possible filter combinations for comprehensive population"""
+        """Generate all possible filter combinations - OPTIMIZED"""
         configs = []
 
         # National level
@@ -222,8 +232,13 @@ class Command(BaseCommand):
             'feeder': None
         })
 
+        # Pre-fetch all relationships in single queries
+        states = list(State.objects.all())
+        districts = list(BusinessDistrict.objects.select_related('state').all())
+        feeders = list(Feeder.objects.select_related('business_district__state').all())
+
         # State level
-        for state in State.objects.all():
+        for state in states:
             configs.append({
                 'state': state,
                 'business_district': None,
@@ -231,7 +246,7 @@ class Command(BaseCommand):
             })
 
         # District level
-        for district in BusinessDistrict.objects.select_related('state'):
+        for district in districts:
             configs.append({
                 'state': district.state,
                 'business_district': district,
@@ -239,7 +254,7 @@ class Command(BaseCommand):
             })
 
         # Feeder level
-        for feeder in Feeder.objects.select_related('business_district__state'):
+        for feeder in feeders:
             if feeder.business_district:
                 configs.append({
                     'state': feeder.business_district.state,
@@ -258,6 +273,9 @@ class Command(BaseCommand):
         self.stdout.write(f'  Filter configurations: {len(filter_configs)}')
         self.stdout.write(f'  Total operations: {total_operations}')
         
+        if self.use_bulk:
+            self.stdout.write(self.style.SUCCESS(f'  Mode: BULK (optimized)'))
+        
         if self.verbosity >= 2:
             self.stdout.write('\nMonths:')
             for month in months[:5]:  # Show first 5
@@ -272,9 +290,9 @@ class Command(BaseCommand):
             if len(filter_configs) > 5:
                 self.stdout.write(f'  ... and {len(filter_configs) - 5} more')
 
-        # Check existing summaries
+        # Check existing summaries - OPTIMIZED
         if not self.force:
-            existing_count = self._count_existing_summaries(months, filter_configs)
+            existing_count = self._count_existing_summaries_bulk(months, filter_configs)
             if existing_count > 0:
                 self.stdout.write(
                     self.style.WARNING(
@@ -285,23 +303,170 @@ class Command(BaseCommand):
 
         self.stdout.write('')
 
-    def _count_existing_summaries(self, months, filter_configs):
-        """Count how many summaries already exist"""
-        count = 0
+    def _count_existing_summaries_bulk(self, months, filter_configs):
+        """Count existing summaries using a single optimized query"""
+        from django.db.models import Q
+        
+        # Build Q object for all combinations
+        q_objects = Q()
         for month in months:
             for config in filter_configs:
-                exists = MonthlyTechnicalSummary.objects.filter(
+                q_objects |= Q(
                     month=month,
                     state=config['state'],
                     business_district=config['business_district'],
                     feeder=config['feeder']
-                ).exists()
-                if exists:
-                    count += 1
-        return count
+                )
+        
+        return MonthlyTechnicalSummary.objects.filter(q_objects).count()
+
+    def _populate_summaries_bulk(self, months, filter_configs):
+        """Execute bulk population - OPTIMIZED VERSION"""
+        total_operations = len(months) * len(filter_configs)
+        
+        start_time = time.time()
+        
+        if self.verbosity >= 1:
+            self.stdout.write(f'Using BULK mode for {total_operations} operations...')
+        
+        # Pre-fetch existing summaries in ONE query
+        existing_summaries = {}
+        if not self.force:
+            existing_qs = MonthlyTechnicalSummary.objects.all()
+            for summary in existing_qs:
+                key = (
+                    summary.month,
+                    summary.state_id,
+                    summary.business_district_id,
+                    summary.feeder_id
+                )
+                existing_summaries[key] = summary
+        
+        # Process all combinations
+        to_create = []
+        to_update = []
+        skipped = 0
+        errors = 0
+        
+        total_calc_time = 0
+        
+        for month in months:
+            month_start = time.time()
+            
+            for config in filter_configs:
+                try:
+                    # Create lookup key
+                    key = (
+                        month,
+                        config['state'].id if config['state'] else None,
+                        config['business_district'].id if config['business_district'] else None,
+                        config['feeder'].id if config['feeder'] else None
+                    )
+                    
+                    # Check if exists
+                    existing = existing_summaries.get(key)
+                    
+                    if existing and not self.force:
+                        skipped += 1
+                        continue
+                    
+                    # Calculate metrics
+                    calc_start = time.time()
+                    calculator = TechnicalCalculator(
+                        month_date=month,
+                        state=config['state'],
+                        business_district=config['business_district'],
+                        feeder=config['feeder']
+                    )
+                    metrics = calculator.calculate_all_metrics()
+                    total_calc_time += (time.time() - calc_start)
+                    
+                    if existing:
+                        # Update existing
+                        for key_name, value in metrics.items():
+                            setattr(existing, key_name, value)
+                        to_update.append(existing)
+                    else:
+                        # Create new
+                        to_create.append(MonthlyTechnicalSummary(
+                            month=month,
+                            state=config['state'],
+                            business_district=config['business_district'],
+                            feeder=config['feeder'],
+                            **metrics
+                        ))
+                
+                except Exception as e:
+                    errors += 1
+                    if self.verbosity >= 1:
+                        filter_desc = self._get_filter_description(config)
+                        self.stderr.write(
+                            f'Error processing {month.strftime("%Y-%m")} - {filter_desc}: {str(e)}'
+                        )
+            
+            if self.verbosity >= 1:
+                month_time = time.time() - month_start
+                processed = len(to_create) + len(to_update) + skipped
+                self.stdout.write(
+                    f'{month.strftime("%Y-%m")}: Processed {processed} configs in {month_time:.1f}s'
+                )
+        
+        # Execute bulk operations
+        db_start = time.time()
+        created_count = 0
+        updated_count = 0
+        
+        with transaction.atomic():
+            # Bulk create
+            if to_create:
+                MonthlyTechnicalSummary.objects.bulk_create(
+                    to_create,
+                    batch_size=self.batch_size
+                )
+                created_count = len(to_create)
+                if self.verbosity >= 1:
+                    self.stdout.write(f'✅ Bulk created {created_count} summaries')
+            
+            # Bulk update
+            if to_update:
+                # Get all field names from the model
+                update_fields = [
+                    f.name for f in MonthlyTechnicalSummary._meta.fields
+                    if f.name not in ['id', 'created_at', 'month', 'state', 'business_district', 'feeder']
+                ]
+                
+                MonthlyTechnicalSummary.objects.bulk_update(
+                    to_update,
+                    update_fields,
+                    batch_size=self.batch_size
+                )
+                updated_count = len(to_update)
+                if self.verbosity >= 1:
+                    self.stdout.write(f'✅ Bulk updated {updated_count} summaries')
+        
+        db_time = time.time() - db_start
+        total_time = time.time() - start_time
+        
+        # Final summary
+        self.stdout.write(f'\n{"="*60}')
+        self.stdout.write(f'Final Results:')
+        self.stdout.write(f'  Created: {created_count}')
+        self.stdout.write(f'  Updated: {updated_count}')
+        self.stdout.write(f'  Skipped: {skipped}')
+        self.stdout.write(f'  Errors: {errors}')
+        self.stdout.write(f'\nPerformance:')
+        self.stdout.write(f'  Total time: {total_time:.1f}s')
+        self.stdout.write(f'  Calculation time: {total_calc_time:.1f}s ({total_calc_time/total_time*100:.1f}%)')
+        self.stdout.write(f'  Database time: {db_time:.1f}s ({db_time/total_time*100:.1f}%)')
+        
+        total_processed = created_count + updated_count
+        if total_processed > 0:
+            self.stdout.write(f'  Avg time per summary: {total_time/total_processed:.3f}s')
+            self.stdout.write(f'  Throughput: {total_processed/total_time:.1f} summaries/sec')
+        self.stdout.write(f'{"="*60}')
 
     def _populate_summaries(self, months, filter_configs):
-        """Execute the actual population"""
+        """Execute the population (non-bulk version)"""
         total_operations = len(months) * len(filter_configs)
         processed = 0
         created = 0
@@ -347,7 +512,7 @@ class Command(BaseCommand):
                         )
 
                 # Progress reporting
-                if processed % self.batch_size == 0 or processed == total_operations:
+                if processed % 50 == 0 or processed == total_operations:
                     self._show_progress(processed, total_operations, start_time)
 
             # Month summary

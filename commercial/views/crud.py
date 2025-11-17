@@ -14,6 +14,7 @@ from common.models import DistributionTransformer
 from commercial.models import (
     DailyCollection, MonthlyEnergyBilled
 )
+from technical.models import EnergyDelivered
 from commercial.date_filters import get_date_range_from_request
 from commercial.mixins import FeederFilteredQuerySetMixin
 from commercial.utils import get_filtered_customers
@@ -48,23 +49,6 @@ class CustomerViewSet(viewsets.ViewSet):
             count = customers.count()
             return Response({"count": count})
 
-
-class DailyEnergyDeliveredViewSet(FeederFilteredQuerySetMixin, viewsets.ModelViewSet):
-    serializer_class = DailyEnergyDeliveredSerializer
-
-    def get_queryset(self):
-        queryset = DailyEnergyDelivered.objects.all()
-        queryset = self.filter_by_location(queryset)
-        date_from, date_to = get_date_range_from_request(self.request, 'date')
-
-        if date_from and date_to:
-            queryset = queryset.filter(date__range=(date_from, date_to))
-        elif date_from:
-            queryset = queryset.filter(date__gte=date_from)
-        elif date_to:
-            queryset = queryset.filter(date__lte=date_to)
-
-        return queryset
 
 
 class MonthlyRevenueBilledViewSet(viewsets.ModelViewSet):
@@ -1071,7 +1055,7 @@ class FeederMetricsView(APIView):
                 month__range=(month_from, month_to)
             ).aggregate(total=Sum('energy_mwh'))['total'] or 0
 
-            energy_delivered = DailyEnergyDelivered.objects.filter(
+            energy_delivered = EnergyDelivered.objects.filter(
                 feeder=feeder,
                 date__range=(date_from, date_to)
             ).aggregate(total=Sum('energy_mwh'))['total'] or 0

@@ -52,11 +52,6 @@ Each model uses a UUID as the primary key.
 - **Endpoint:** `/api/commercial/customers/`
 - **Fields:** `name`, `category`, `metering_type`, `band`, `transformer`, `joined_date`
 
-### 2. **DailyEnergyDelivered**
-
-- **Endpoint:** `/api/commercial/daily-energy-delivered/`
-- **Fields:** `feeder`, `date`, `energy_mwh`
-
 ### 3. **DailyRevenueCollected**
 
 - **Endpoint:** `/api/commercial/daily-revenue-collected/`

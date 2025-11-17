@@ -1,7 +1,9 @@
+# technical/admin.py
 from django.contrib import admin
 from django.db.models import Max, Min, Avg, Sum
 from django.utils.html import format_html
 from .models import (
+    CumulativeMeterReading,
     EnergyDelivered,
     HourlyLoad,
     FeederInterruption,
@@ -9,9 +11,72 @@ from .models import (
     FeederEnergyDaily,
     FeederEnergyMonthly,
 )
-
+from datetime import timedelta
 
 # Custom filters
+class MeterReadingTypeFilter(admin.SimpleListFilter):
+    title = 'Reading Type'
+    parameter_name = 'reading_type'
+
+    def lookups(self, request, model_admin):
+        return [
+            ('actual', 'Actual Readings'),
+            ('estimated', 'Estimated Readings'),
+        ]
+
+    def queryset(self, request, queryset):
+        if self.value() == 'actual':
+            return queryset.filter(is_estimated=False)
+        if self.value() == 'estimated':
+            return queryset.filter(is_estimated=True)
+
+
+class MeterReadingAnomalyFilter(admin.SimpleListFilter):
+    title = 'Data Quality'
+    parameter_name = 'anomaly'
+
+    def lookups(self, request, model_admin):
+        return [
+            ('normal', 'Normal Readings'),
+            ('potential_rollover', 'Potential Meter Rollover'),
+            ('negative_consumption', 'Negative Consumption'),
+            ('high_consumption', 'Unusually High Consumption'),
+        ]
+
+    def queryset(self, request, queryset):
+        from datetime import timedelta
+        
+        if self.value() == 'normal':
+            # Filter to show only normal readings (this is complex, simplified here)
+            return queryset
+        
+        if self.value() in ['potential_rollover', 'negative_consumption', 'high_consumption']:
+            filtered_ids = []
+            
+            for reading in queryset.select_related('feeder'):
+                consumption = reading.calculate_daily_consumption()
+                
+                if consumption is None:
+                    continue
+                
+                if self.value() == 'negative_consumption' and consumption < 0:
+                    filtered_ids.append(reading.id)
+                elif self.value() == 'potential_rollover' and consumption < 0:
+                    filtered_ids.append(reading.id)
+                elif self.value() == 'high_consumption':
+                    # Get average for this feeder
+                    avg_consumption = CumulativeMeterReading.objects.filter(
+                        feeder=reading.feeder
+                    ).aggregate(
+                        avg=Avg('cumulative_mwh')
+                    )['avg'] or 0
+                    
+                    if consumption > avg_consumption * 2:
+                        filtered_ids.append(reading.id)
+            
+            return queryset.filter(id__in=filtered_ids)
+
+
 class LoadRangeFilter(admin.SimpleListFilter):
     title = 'Load Range (MW)'
     parameter_name = 'load_range'
@@ -97,28 +162,347 @@ class DurationFilter(admin.SimpleListFilter):
         ]
 
     def queryset(self, request, queryset):
+        from django.db.models import F, ExpressionWrapper, fields
+        from django.db.models.functions import Coalesce
         from django.utils import timezone
-        from datetime import timedelta
         
-        now = timezone.now()
-        filtered_ids = []
+        # Annotate with duration in seconds
+        queryset = queryset.annotate(
+            duration_seconds=ExpressionWrapper(
+                (Coalesce(F('restored_at'), timezone.now()) - F('occurred_at')),
+                output_field=fields.DurationField()
+            )
+        )
         
-        for interruption in queryset:
-            duration = interruption.duration_hours
-            
-            if self.value() == 'short' and duration < 1:
-                filtered_ids.append(interruption.id)
-            elif self.value() == 'medium' and 1 <= duration < 4:
-                filtered_ids.append(interruption.id)
-            elif self.value() == 'long' and 4 <= duration < 12:
-                filtered_ids.append(interruption.id)
-            elif self.value() == 'very_long' and duration >= 12:
-                filtered_ids.append(interruption.id)
-        
-        return queryset.filter(id__in=filtered_ids)
+        if self.value() == 'short':
+            return queryset.filter(duration_seconds__lt=timedelta(hours=1))
+        elif self.value() == 'medium':
+            return queryset.filter(duration_seconds__gte=timedelta(hours=1), duration_seconds__lt=timedelta(hours=4))
+        elif self.value() == 'long':
+            return queryset.filter(duration_seconds__gte=timedelta(hours=4), duration_seconds__lt=timedelta(hours=12))
+        elif self.value() == 'very_long':
+            return queryset.filter(duration_seconds__gte=timedelta(hours=12))
 
 
 # Admin classes
+@admin.register(CumulativeMeterReading)
+class CumulativeMeterReadingAdmin(admin.ModelAdmin):
+    list_display = [
+        'feeder', 'reading_date', 'cumulative_mwh_display', 
+        'daily_consumption_display', 'reading_status', 'data_quality_indicator'
+    ]
+    list_filter = [
+        'feeder', 'reading_date', 'is_estimated', 
+        MeterReadingTypeFilter, MeterReadingAnomalyFilter
+    ]
+    date_hierarchy = 'reading_date'
+    search_fields = ['feeder__name', 'notes']
+    list_per_page = 50
+    readonly_fields = ['daily_consumption_display', 'data_quality_indicator']
+    
+    fieldsets = (
+        ('Meter Information', {
+            'fields': ('feeder', 'reading_date', 'cumulative_mwh', 'reading_time')
+        }),
+        ('Data Quality', {
+            'fields': ('is_estimated', 'notes')
+        }),
+        ('Calculated Fields', {
+            'fields': ('daily_consumption_display', 'data_quality_indicator'),
+            'classes': ('collapse',)
+        }),
+    )
+    
+    actions = [
+        'validate_readings', 'calculate_consumption_stats', 
+        'detect_anomalies', 'export_meter_readings'
+    ]
+    
+    def cumulative_mwh_display(self, obj):
+        """Display cumulative reading with formatting"""
+        # Format the value first, then pass to format_html
+        formatted_value = f'{float(obj.cumulative_mwh):,.4f} MWh'
+        return format_html(
+            '<span style="font-family: monospace; font-weight: bold;">{}</span>',
+            formatted_value
+        )
+    cumulative_mwh_display.short_description = 'Cumulative Reading'
+    cumulative_mwh_display.admin_order_field = 'cumulative_mwh'
+    
+    def daily_consumption_display(self, obj):
+        """Display calculated daily consumption"""
+        # Check if object has been saved (has an ID)
+        if not obj.pk:
+            return format_html(
+                '<span style="color: gray; font-style: italic;">Save to calculate</span>'
+            )
+        
+        try:
+            consumption = obj.calculate_daily_consumption()
+        except Exception as e:
+            return format_html(
+                '<span style="color: gray; font-style: italic;">Error: {}</span>',
+                str(e)
+            )
+        
+        if consumption is None:
+            return format_html(
+                '<span style="color: gray; font-style: italic;">No previous reading</span>'
+            )
+        
+        # Format the consumption value BEFORE passing to format_html
+        consumption_float = float(consumption)
+        if consumption < 0:
+            color = 'red'
+            icon = '⚠️'
+            text = f'{icon} {consumption_float:.2f} MWh (ANOMALY)'
+        elif consumption > 1000:  # Adjust threshold as needed
+            color = 'orange'
+            icon = '⚡'
+            text = f'{icon} {consumption_float:.2f} MWh (High)'
+        else:
+            color = 'green'
+            icon = '✓'
+            text = f'{icon} {consumption_float:.2f} MWh'
+        
+        return format_html(
+            '<span style="color: {}; font-weight: bold;">{}</span>',
+            color, text
+        )
+    daily_consumption_display.short_description = 'Daily Consumption'
+    
+    def reading_status(self, obj):
+        """Display reading status badge"""
+        if obj.is_estimated:
+            color = 'orange'
+            text = 'ESTIMATED'
+        else:
+            color = 'green'
+            text = 'ACTUAL'
+        
+        return format_html(
+            '<span style="background-color: {}; color: white; padding: 3px 8px; '
+            'border-radius: 3px; font-size: 11px; font-weight: bold;">{}</span>',
+            color, text
+        )
+    reading_status.short_description = 'Status'
+    
+    def data_quality_indicator(self, obj):
+        """Display data quality indicator"""
+        # Check if object has been saved (has an ID)
+        if not obj.pk:
+            return format_html(
+                '<span style="color: gray;">⚪ Not saved yet</span>'
+            )
+        
+        try:
+            consumption = obj.calculate_daily_consumption()
+        except Exception as e:
+            error_msg = str(e)[:50]
+            return format_html(
+                '<span style="color: red;">❌ Error calculating: {}</span>',
+                error_msg
+            )
+        
+        if consumption is None:
+            return format_html(
+                '<span style="color: gray;">⚪ No previous data</span>'
+            )
+        
+        issues = []
+        
+        # Check for negative consumption (potential meter rollover)
+        if consumption < 0:
+            issues.append('❌ Negative consumption detected')
+        
+        # Check for unusually high consumption
+        try:
+            from django.db.models import Avg
+            avg_consumption = CumulativeMeterReading.objects.filter(
+                feeder=obj.feeder
+            ).exclude(id=obj.id).aggregate(avg=Avg('cumulative_mwh'))['avg'] or 0
+            
+            if consumption > avg_consumption * 3:
+                issues.append('⚠️ Unusually high consumption')
+        except Exception:
+            pass  # Skip this check if there's an error
+        
+        # Check if reading is estimated
+        if obj.is_estimated:
+            issues.append('📊 Estimated reading')
+        
+        if not issues:
+            return format_html('<span style="color: green;">✅ Normal</span>')
+        else:
+            issues_text = '<br>'.join(issues)
+            return format_html(
+                '<span style="color: orange;">{}</span>',
+                issues_text
+            )
+    data_quality_indicator.short_description = 'Data Quality'
+    
+    def validate_readings(self, request, queryset):
+        """Validate selected meter readings"""
+        total = queryset.count()
+        issues_found = 0
+        negative_count = 0
+        high_consumption_count = 0
+        
+        for reading in queryset:
+            consumption = reading.calculate_daily_consumption()
+            
+            if consumption is not None:
+                if consumption < 0:
+                    issues_found += 1
+                    negative_count += 1
+                elif consumption > 1000:  # Adjust threshold
+                    issues_found += 1
+                    high_consumption_count += 1
+        
+        message = (
+            f"Validated {total} readings. "
+            f"Found {issues_found} potential issues: "
+            f"{negative_count} negative consumption, "
+            f"{high_consumption_count} unusually high consumption."
+        )
+        
+        if issues_found > 0:
+            self.message_user(request, message, level='warning')
+        else:
+            self.message_user(request, f"✅ All {total} readings validated successfully!")
+    validate_readings.short_description = "Validate selected readings"
+    
+    def calculate_consumption_stats(self, request, queryset):
+        """Calculate consumption statistics for selected readings"""
+        consumptions = []
+        
+        for reading in queryset:
+            consumption = reading.calculate_daily_consumption()
+            if consumption is not None and consumption >= 0:
+                consumptions.append(consumption)
+        
+        if not consumptions:
+            self.message_user(request, "No valid consumption data found", level='warning')
+            return
+        
+        from decimal import Decimal
+        import statistics
+        
+        total = sum(consumptions)
+        avg = statistics.mean(consumptions)
+        median = statistics.median(consumptions)
+        max_val = max(consumptions)
+        min_val = min(consumptions)
+        
+        message = (
+            f"Consumption Statistics ({len(consumptions)} readings):\n"
+            f"Total: {float(total):,.2f} MWh | "
+            f"Average: {float(avg):,.2f} MWh | "
+            f"Median: {float(median):,.2f} MWh | "
+            f"Max: {float(max_val):,.2f} MWh | "
+            f"Min: {float(min_val):,.2f} MWh"
+        )
+        self.message_user(request, message)
+    calculate_consumption_stats.short_description = "Calculate consumption statistics"
+    
+    def detect_anomalies(self, request, queryset):
+        """Detect anomalies in selected readings"""
+        anomalies = {
+            'negative': [],
+            'high': [],
+            'gaps': [],
+        }
+        
+        for reading in queryset.order_by('feeder', 'reading_date'):
+            consumption = reading.calculate_daily_consumption()
+            
+            if consumption is not None:
+                if consumption < 0:
+                    anomalies['negative'].append(reading)
+                elif consumption > 1000:  # Adjust threshold
+                    anomalies['high'].append(reading)
+        
+        message_parts = [
+            f"Anomaly Detection Results:",
+            f"❌ Negative consumption: {len(anomalies['negative'])} readings",
+            f"⚠️ High consumption: {len(anomalies['high'])} readings",
+        ]
+        
+        message = '\n'.join(message_parts)
+        level = 'warning' if sum(len(v) for v in anomalies.values()) > 0 else 'success'
+        self.message_user(request, message, level=level)
+    detect_anomalies.short_description = "Detect anomalies in readings"
+    
+    def export_meter_readings(self, request, queryset):
+        """Export meter readings with consumption data to CSV"""
+        from django.http import HttpResponse
+        import csv
+        
+        response = HttpResponse(content_type='text/csv')
+        response['Content-Disposition'] = 'attachment; filename="meter_readings.csv"'
+        
+        writer = csv.writer(response)
+        writer.writerow([
+            'Feeder', 'Date', 'Cumulative Reading (MWh)', 
+            'Daily Consumption (MWh)', 'Reading Time', 'Is Estimated', 'Notes'
+        ])
+        
+        for reading in queryset.order_by('feeder', 'reading_date'):
+            consumption = reading.calculate_daily_consumption()
+            consumption_str = f"{float(consumption):.2f}" if consumption is not None else "N/A"
+            
+            writer.writerow([
+                reading.feeder.name,
+                reading.reading_date,
+                f"{float(reading.cumulative_mwh):.4f}",
+                consumption_str,
+                reading.reading_time or "N/A",
+                "Yes" if reading.is_estimated else "No",
+                reading.notes or ""
+            ])
+        
+        return response
+    export_meter_readings.short_description = "Export readings to CSV"
+    
+    def changelist_view(self, request, extra_context=None):
+        """Add summary statistics to changelist"""
+        extra_context = extra_context or {}
+        
+        # Get current queryset based on filters
+        cl = self.get_changelist_instance(request)
+        queryset = cl.get_queryset(request)
+        
+        if queryset.exists():
+            from django.db.models import Count
+            
+            total_readings = queryset.count()
+            estimated_count = queryset.filter(is_estimated=True).count()
+            actual_count = total_readings - estimated_count
+            
+            # Calculate consumption stats
+            consumptions = []
+            anomaly_count = 0
+            
+            for reading in queryset[:100]:  # Limit to first 100 for performance
+                consumption = reading.calculate_daily_consumption()
+                if consumption is not None:
+                    consumptions.append(consumption)
+                    if consumption < 0 or consumption > 1000:
+                        anomaly_count += 1
+            
+            avg_consumption = sum(consumptions) / len(consumptions) if consumptions else 0
+            
+            extra_context['summary_stats'] = {
+                'total_readings': total_readings,
+                'actual_readings': actual_count,
+                'estimated_readings': estimated_count,
+                'avg_daily_consumption': avg_consumption,
+                'potential_anomalies': anomaly_count,
+            }
+        
+        return super().changelist_view(request, extra_context=extra_context)
+
+
 @admin.register(EnergyDelivered)
 class EnergyDeliveredAdmin(admin.ModelAdmin):
     list_display = ['feeder', 'date', 'energy_mwh', 'energy_colored']
@@ -127,16 +511,59 @@ class EnergyDeliveredAdmin(admin.ModelAdmin):
     search_fields = ['feeder__name']
     list_per_page = 50
     
+    actions = ['calculate_energy_stats', 'export_energy_data']
+    
     def energy_colored(self, obj):
         """Color code energy levels"""
         color = 'green' if obj.energy_mwh > 100 else 'orange' if obj.energy_mwh > 50 else 'red'
+        energy_text = f'{float(obj.energy_mwh)} MWh'
         return format_html(
-            '<span style="color: {};">{} MWh</span>',
+            '<span style="color: {}; font-weight: bold;">{}</span>',
             color,
-            obj.energy_mwh
+            energy_text
         )
     energy_colored.short_description = 'Energy (Colored)'
     energy_colored.admin_order_field = 'energy_mwh'
+    
+    def calculate_energy_stats(self, request, queryset):
+        """Calculate statistics for selected energy records"""
+        stats = queryset.aggregate(
+            total=Sum('energy_mwh'),
+            avg=Avg('energy_mwh'),
+            max=Max('energy_mwh'),
+            min=Min('energy_mwh')
+        )
+        
+        message = (
+            f"Energy Statistics ({queryset.count()} records):\n"
+            f"Total: {float(stats['total']):.2f} MWh | "
+            f"Average: {float(stats['avg']):.2f} MWh | "
+            f"Max: {float(stats['max']):.2f} MWh | "
+            f"Min: {float(stats['min']):.2f} MWh"
+        )
+        self.message_user(request, message)
+    calculate_energy_stats.short_description = "Calculate energy statistics"
+    
+    def export_energy_data(self, request, queryset):
+        """Export energy data to CSV"""
+        from django.http import HttpResponse
+        import csv
+        
+        response = HttpResponse(content_type='text/csv')
+        response['Content-Disposition'] = 'attachment; filename="energy_delivered.csv"'
+        
+        writer = csv.writer(response)
+        writer.writerow(['Feeder', 'Date', 'Energy (MWh)'])
+        
+        for record in queryset.order_by('feeder', 'date'):
+            writer.writerow([
+                record.feeder.name,
+                record.date,
+                f"{float(record.energy_mwh):.2f}"
+            ])
+        
+        return response
+    export_energy_data.short_description = "Export to CSV"
 
 
 @admin.register(HourlyLoad)
@@ -153,10 +580,11 @@ class HourlyLoadAdmin(admin.ModelAdmin):
     def load_colored(self, obj):
         """Color code load levels"""
         color = 'red' if obj.load_mw > 50 else 'orange' if obj.load_mw > 20 else 'green'
+        load_text = f'{float(obj.load_mw)} MW'
         return format_html(
-            '<span style="color: {}; font-weight: bold;">{} MW</span>',
+            '<span style="color: {}; font-weight: bold;">{}</span>',
             color,
-            obj.load_mw
+            load_text
         )
     load_colored.short_description = 'Load (Colored)'
     load_colored.admin_order_field = 'load_mw'
@@ -182,10 +610,10 @@ class HourlyLoadAdmin(admin.ModelAdmin):
         )
         
         message = (
-            f"Peak Load: {stats['max_load']} MW on {peak.date} at {peak.hour}:00 "
+            f"Peak Load: {float(stats['max_load'])} MW on {peak.date} at {peak.hour}:00 "
             f"(Feeder: {peak.feeder.name}) | "
-            f"Average: {stats['avg_load']:.2f} MW | "
-            f"Min: {stats['min_load']} MW"
+            f"Average: {float(stats['avg_load']):.2f} MW | "
+            f"Min: {float(stats['min_load'])} MW"
         )
         self.message_user(request, message)
     find_peak_loads.short_description = "Find peak loads in selection"
@@ -210,10 +638,10 @@ class HourlyLoadAdmin(admin.ModelAdmin):
             
             writer.writerow([
                 peak.feeder.name,
-                peak.load_mw,
+                float(peak.load_mw),
                 peak.date,
                 f"{peak.hour}:00",
-                f"{avg:.2f}"
+                f"{float(avg):.2f}"
             ])
         
         return response
@@ -234,7 +662,7 @@ class HourlyLoadAdmin(admin.ModelAdmin):
                 max_load=Max('load_mw'),
                 min_load=Min('load_mw'),
                 avg_load=Avg('load_mw'),
-                total_records=Count('id')  # Changed from Sum to Count
+                total_records=Count('id')
             )
         
             peak_record = queryset.order_by('-load_mw').first()
@@ -246,7 +674,7 @@ class HourlyLoadAdmin(admin.ModelAdmin):
                 'peak_feeder': peak_record.feeder.name if peak_record else None,
                 'avg_load': stats['avg_load'],
                 'min_load': stats['min_load'],
-                'total_records': stats['total_records'],  # Now this will work
+                'total_records': stats['total_records'],
             }
     
         return super().changelist_view(request, extra_context=extra_context)
@@ -260,7 +688,8 @@ class FeederInterruptionAdmin(admin.ModelAdmin):
     ]
     list_filter = [
         'feeder', 'interruption_type', InterruptionStatusFilter, 
-        DurationFilter, 'occurred_at'
+        DurationFilter,
+        'occurred_at'
     ]
     date_hierarchy = 'occurred_at'
     search_fields = ['feeder__name', 'description', 'interruption_type']
@@ -268,6 +697,7 @@ class FeederInterruptionAdmin(admin.ModelAdmin):
     readonly_fields = ['duration_display', 'status_badge']
     
     actions = ['mark_as_resolved', 'calculate_interruption_stats']
+    
     
     def duration_display(self, obj):
         """Display duration in a readable format"""
@@ -339,12 +769,13 @@ class DailyHoursOfSupplyAdmin(admin.ModelAdmin):
     
     def availability_percentage(self, obj):
         """Calculate and display availability as percentage"""
-        percentage = (obj.hours_supplied / 24) * 100
+        percentage = (float(obj.hours_supplied) / 24) * 100
         color = 'green' if percentage > 80 else 'orange' if percentage > 50 else 'red'
+        percentage_text = f'{percentage:.1f}%'
         
         return format_html(
-            '<span style="color: {}; font-weight: bold;">{:.1f}%</span>',
-            color, percentage
+            '<span style="color: {}; font-weight: bold;">{}</span>',
+            color, percentage_text
         )
     availability_percentage.short_description = 'Availability'
 
@@ -393,10 +824,10 @@ class FeederEnergyDailyAdmin(admin.ModelAdmin):
         )
         
         message = (
-            f"Total: {stats['total']:.2f} MWh | "
-            f"Average: {stats['avg']:.2f} MWh | "
-            f"Max: {stats['max']:.2f} MWh | "
-            f"Min: {stats['min']:.2f} MWh"
+            f"Total: {float(stats['total']):.2f} MWh | "
+            f"Average: {float(stats['avg']):.2f} MWh | "
+            f"Max: {float(stats['max']):.2f} MWh | "
+            f"Min: {float(stats['min']):.2f} MWh"
         )
         self.message_user(request, message)
     calculate_daily_stats.short_description = "Calculate energy statistics"

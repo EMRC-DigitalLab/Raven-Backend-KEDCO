@@ -149,60 +149,37 @@ class TechnicalCalculator:
         }
     
     def calculate_interruption_metrics(self):
-        """Calculate interruption-related metrics"""
+        """
+        Calculate interruption-related metrics with CORRECT monthly averaging.
+        
+        CRITICAL: For monthly summaries, we calculate DAILY averages first,
+        then average those to get the monthly average. This ensures values
+        stay realistic (< 24 hours for duration).
+        
+        Returns metrics for:
+        - All interruptions (duration)
+        - Local faults only (turnaround time - excludes L/S and TCN)
+        """
+        from technical.models import calculate_interruption_metrics as calc_metrics
+        import calendar
+        
+        # Get all interruptions for the month - use explicit datetime range
+        start_of_month = datetime.combine(self.start_date, datetime.min.time())
+        end_of_month_date = self.end_date
+        end_of_month = datetime.combine(end_of_month_date, datetime.max.time())
+        
+        # Make timezone aware
+        start_of_month = timezone.make_aware(start_of_month) if timezone.is_naive(start_of_month) else start_of_month
+        end_of_month = timezone.make_aware(end_of_month) if timezone.is_naive(end_of_month) else end_of_month
+        
         interruptions = FeederInterruption.objects.filter(
             feeder__in=self.feeders,
-            occurred_at__date__range=(self.start_date, self.end_date)
+            occurred_at__gte=start_of_month,
+            occurred_at__lte=end_of_month
         )
         
         total_interruptions = interruptions.count()
-        
-        if total_interruptions == 0:
-            return {
-                'total_interruptions': 0,
-                'avg_daily_interruptions': Decimal('0'),
-                'avg_interruption_duration': Decimal('0'),
-                'total_interruption_hours': Decimal('0'),
-                'avg_turnaround_time': Decimal('0'),
-                'interruption_breakdown': {}
-            }
-        
-        # Calculate durations for restored interruptions
-        restored_interruptions = interruptions.filter(restored_at__isnull=False)
-        
-        total_duration_hours = Decimal('0')
-        for interruption in restored_interruptions:
-            duration = (interruption.restored_at - interruption.occurred_at).total_seconds() / 3600
-            total_duration_hours += Decimal(str(duration))
-        
-        # Average metrics
         days_in_month = (self.end_date - self.start_date).days + 1
-        avg_daily_interruptions = Decimal(total_interruptions) / Decimal(days_in_month)
-        
-        restored_count = restored_interruptions.count()
-        avg_duration = total_duration_hours / restored_count if restored_count > 0 else Decimal('0')
-        avg_turnaround = avg_duration  # Same as duration for power restoration
-        
-        # Interruption breakdown by type
-        breakdown = self._calculate_interruption_breakdown(interruptions)
-        
-        return {
-            'total_interruptions': total_interruptions,
-            'avg_daily_interruptions': avg_daily_interruptions,
-            'avg_interruption_duration': avg_duration,
-            'total_interruption_hours': total_duration_hours,
-            'avg_turnaround_time': avg_turnaround,
-            'interruption_breakdown': breakdown
-        }
-    
-    def calculate_interruption_metrics(self):
-        """Calculate interruption-related metrics with proper fault categorization"""
-        interruptions = FeederInterruption.objects.filter(
-            feeder__in=self.feeders,
-            occurred_at__date__range=(self.start_date, self.end_date)
-        )
-        
-        total_interruptions = interruptions.count()
         
         if total_interruptions == 0:
             return {
@@ -213,134 +190,146 @@ class TechnicalCalculator:
                 'avg_turnaround_time': Decimal('0'),
                 'avg_fault_turnaround_time': Decimal('0'),
                 'interruption_breakdown': {},
-                'summary_breakdown': {}
+                'summary_breakdown': {
+                    'load_shedding_hours': Decimal('0'),
+                    'equipment_fault_hours': Decimal('0'),
+                    'line_fault_hours': Decimal('0'),
+                    'maintenance_hours': Decimal('0'),
+                    'other_fault_hours': Decimal('0'),
+                }
             }
         
-        # Calculate durations for restored interruptions
-        restored_interruptions = interruptions.filter(restored_at__isnull=False)
+        # ========================================================================
+        # STEP 1: Calculate DAILY metrics and collect them
+        # This is CRITICAL to avoid > 24 hour averages
+        # ========================================================================
         
-        # Total duration including all interruptions
-        total_duration_hours = Decimal('0')
-        for interruption in restored_interruptions:
-            duration = (interruption.restored_at - interruption.occurred_at).total_seconds() / 3600
-            total_duration_hours += Decimal(str(duration))
+        daily_durations = []
+        daily_turnaround_times = []
+        days_with_data = 0
         
-        # Fault-only duration (excluding load shedding)
-        fault_interruptions = restored_interruptions.exclude(
-            interruption_type__in=['L/S', 'L/S GS', '330KV L/S', 'T/LS']
+        current_date = self.start_date
+        while current_date <= self.end_date:
+            # Get interruptions that occurred on this specific day
+            # Use date range to handle timezone properly
+            start_of_day = datetime.combine(current_date, datetime.min.time())
+            end_of_day = datetime.combine(current_date, datetime.max.time())
+            
+            # Make timezone aware
+            start_of_day = timezone.make_aware(start_of_day) if timezone.is_naive(start_of_day) else start_of_day
+            end_of_day = timezone.make_aware(end_of_day) if timezone.is_naive(end_of_day) else end_of_day
+            
+            daily_interruptions = interruptions.filter(
+                occurred_at__gte=start_of_day,
+                occurred_at__lte=end_of_day
+            )
+            
+            if daily_interruptions.exists():
+                # Calculate metrics for this day
+                daily_metrics = calc_metrics(daily_interruptions, reference_time=end_of_day)
+                
+                # Collect daily averages
+                daily_durations.append(daily_metrics['avg_duration_hours'])
+                daily_turnaround_times.append(daily_metrics['avg_turnaround_time'])
+                days_with_data += 1
+            
+            current_date += timedelta(days=1)
+        
+        # ========================================================================
+        # STEP 2: Calculate monthly averages FROM daily averages
+        # ========================================================================
+        
+        # Average of daily averages (this keeps values realistic)
+        avg_interruption_duration = (
+            Decimal(str(sum(daily_durations) / len(daily_durations)))
+            if daily_durations else Decimal('0')
         )
         
-        fault_duration_hours = Decimal('0')
-        for interruption in fault_interruptions:
-            duration = (interruption.restored_at - interruption.occurred_at).total_seconds() / 3600
-            fault_duration_hours += Decimal(str(duration))
+        avg_turnaround_time = (
+            Decimal(str(sum(daily_turnaround_times) / len(daily_turnaround_times)))
+            if daily_turnaround_times else Decimal('0')
+        )
         
-        # Average metrics
-        days_in_month = (self.end_date - self.start_date).days + 1
-        avg_daily_interruptions = Decimal(total_interruptions) / Decimal(days_in_month)
+        # ========================================================================
+        # STEP 3: Calculate monthly TOTALS using end-of-month reference
+        # ========================================================================
         
-        restored_count = restored_interruptions.count()
-        avg_duration = total_duration_hours / restored_count if restored_count > 0 else Decimal('0')
+        days_in_month_actual = calendar.monthrange(self.month_date.year, self.month_date.month)[1]
+        end_of_month_final = datetime(
+            self.month_date.year, 
+            self.month_date.month, 
+            days_in_month_actual, 
+            23, 59, 59
+        )
+        end_of_month_final = timezone.make_aware(end_of_month_final) if timezone.is_naive(end_of_month_final) else end_of_month_final
         
-        fault_count = fault_interruptions.count()
-        avg_fault_turnaround = fault_duration_hours / fault_count if fault_count > 0 else Decimal('0')
+        # Get monthly totals
+        monthly_metrics = calc_metrics(interruptions, reference_time=end_of_month_final)
         
-        # Detailed and summary breakdowns
-        detailed_breakdown, summary_breakdown = self._calculate_interruption_breakdowns(restored_interruptions)
+        # ========================================================================
+        # STEP 4: Build detailed and summary breakdowns
+        # ========================================================================
         
-        return {
-            'total_interruptions': total_interruptions,
-            'avg_daily_interruptions': avg_daily_interruptions,
-            'avg_interruption_duration': avg_duration,
-            'total_interruption_hours': total_duration_hours,
-            'avg_turnaround_time': avg_duration,  # Keep for backward compatibility
-            'avg_fault_turnaround_time': avg_fault_turnaround,  # New separate metric
-            'interruption_breakdown': detailed_breakdown,
-            'summary_breakdown': summary_breakdown
+        # Detailed breakdown from monthly metrics
+        interruption_breakdown = {
+            k: v['duration'] 
+            for k, v in monthly_metrics['breakdown_by_type'].items()
         }
-    
-    def _calculate_interruption_breakdowns(self, interruptions):
-        """Calculate both detailed and summary interruption breakdowns"""
-        
-        # Detailed breakdown - store exact fault types
-        detailed_breakdown = {}
         
         # Summary breakdown - categorize into business groups
         summary_breakdown = {
-            'load_shedding_hours': Decimal('0'),
+            'load_shedding_hours': Decimal(str(monthly_metrics['load_shedding_hours'])),
             'equipment_fault_hours': Decimal('0'),
             'line_fault_hours': Decimal('0'),
             'maintenance_hours': Decimal('0'),
-            'other_fault_hours': Decimal('0'),
+            'other_fault_hours': Decimal(str(monthly_metrics['fault_hours'])),
         }
         
-        # Mapping from specific fault types to summary categories
-        summary_mapping = {
-            # Load Shedding types
-            'L/S': 'load_shedding_hours',
-            'L/S GS': 'load_shedding_hours',
-            '330KV L/S': 'load_shedding_hours',
-            'T/LS': 'load_shedding_hours',
+        # Enhanced categorization
+        for fault_type, data in monthly_metrics['breakdown_by_type'].items():
+            duration = Decimal(str(data['duration']))
             
-            # Equipment Fault types
-            'E/F': 'equipment_fault_hours',
-            'O/C': 'equipment_fault_hours',
-            'O/C & E/F': 'equipment_fault_hours',
-            'OC & E/F': 'equipment_fault_hours',
-            'O/S': 'equipment_fault_hours',
-            'T/F': 'equipment_fault_hours',
-            'B/F': 'equipment_fault_hours',
-            'O/N': 'equipment_fault_hours',
-            'O/E': 'equipment_fault_hours',
-            'P/O': 'equipment_fault_hours',
-            'O/F': 'equipment_fault_hours',
-            'P/M': 'equipment_fault_hours',
-            'T/S': 'equipment_fault_hours',
-            'EM/D': 'equipment_fault_hours',
-            'S/C': 'equipment_fault_hours',
-            'D/C': 'equipment_fault_hours',
-            'IN O/C': 'equipment_fault_hours',
-            'LIM': 'equipment_fault_hours',
-            '132KV E/F': 'equipment_fault_hours',
-            '132KV CB/F': 'equipment_fault_hours',
+            # Skip load shedding (already counted)
+            if fault_type in ['L/S', 'L/S GS', '330KV L/S', 'T/LS']:
+                continue
             
-            # Line Fault types
-            '330KV L/F': 'line_fault_hours',
-            '132KV L/F': 'line_fault_hours',
+            # Categorize maintenance
+            if any(term in fault_type for term in ['MTCE', 'MTNC', 'permit']):
+                summary_breakdown['maintenance_hours'] += duration
+                summary_breakdown['other_fault_hours'] -= duration
             
-            # Maintenance types
-            'MTNC': 'maintenance_hours',
-            'MTCE': 'maintenance_hours',
-            '132KV MTCE': 'maintenance_hours',
-            'permit': 'maintenance_hours',
+            # Categorize equipment faults
+            elif any(term in fault_type for term in ['T/F', 'CB/F', 'B/F', 'O/S', 'E/F', 'O/C', 'S/C', 'O/N', 'O/E', 'P/O', 'O/F', 'P/M', 'T/S', 'EM/D', 'D/C', 'IN O/C', 'LIM']):
+                summary_breakdown['equipment_fault_hours'] += duration
+                summary_breakdown['other_fault_hours'] -= duration
             
-            # Other/Unspecified
-            'NO RI': 'other_fault_hours',
-            'N/A': 'other_fault_hours',
-            'O': 'other_fault_hours',
-            'OFF': 'other_fault_hours',
-            'tcn': 'other_fault_hours',
-            'fault': 'other_fault_hours',
+            # Categorize line faults
+            elif any(term in fault_type for term in ['L/F', '330KV L/F', '132KV L/F']):
+                summary_breakdown['line_fault_hours'] += duration
+                summary_breakdown['other_fault_hours'] -= duration
+            
+            # TCN faults stay in "other"
+        
+        # Ensure no negative values
+        for key in summary_breakdown:
+            if summary_breakdown[key] < 0:
+                summary_breakdown[key] = Decimal('0')
+        
+        # ========================================================================
+        # STEP 5: Return all metrics
+        # ========================================================================
+        
+        return {
+            'total_interruptions': total_interruptions,
+            'avg_daily_interruptions': Decimal(total_interruptions) / Decimal(days_in_month),
+            'avg_interruption_duration': avg_interruption_duration,  # DAILY average (< 24)
+            'total_interruption_hours': Decimal(str(monthly_metrics['total_duration_hours'])),  # Monthly total
+            'avg_turnaround_time': avg_turnaround_time,  # DAILY average for local faults
+            'avg_fault_turnaround_time': avg_turnaround_time,  # Alias for compatibility
+            'turnaround_count': monthly_metrics['turnaround_count'],
+            'interruption_breakdown': interruption_breakdown,
+            'summary_breakdown': summary_breakdown
         }
-        
-        for interruption in interruptions:
-            duration_hours = Decimal(str(interruption.duration_hours))
-            fault_type = interruption.interruption_type
-            
-            # Store detailed breakdown
-            if fault_type in detailed_breakdown:
-                detailed_breakdown[fault_type] += duration_hours
-            else:
-                detailed_breakdown[fault_type] = duration_hours
-            
-            # Categorize into summary breakdown
-            summary_category = summary_mapping.get(fault_type, 'other_fault_hours')
-            summary_breakdown[summary_category] += duration_hours
-        
-        # Convert detailed breakdown to float for JSON storage
-        detailed_breakdown = {k: float(v) for k, v in detailed_breakdown.items()}
-        
-        return detailed_breakdown, summary_breakdown
     
     def calculate_infrastructure_metrics(self):
         """Calculate infrastructure-related metrics"""

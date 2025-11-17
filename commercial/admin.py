@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import (Customer, DailyEnergyDelivered,
+from .models import (Customer,
                      MonthlyEnergyBilled, MonthlyRevenueBilled, MonthlyCustomerStats,
                      SalesRepresentative, SalesRepPerformance, DailyCollection,
                      MonthlyCommercialSummary)
@@ -9,13 +9,6 @@ class CustomerAdmin(admin.ModelAdmin):
     list_display = ['name', 'category', 'metering_type', 'band', 'transformer']
     search_fields = ['name']
     list_filter = ['category', 'metering_type', 'band']
-
-
-@admin.register(DailyEnergyDelivered)
-class DailyEnergyDeliveredAdmin(admin.ModelAdmin):
-    list_display = ['feeder', 'date', 'energy_mwh']
-    list_filter = ['date',]
-
 
 
 @admin.register(MonthlyEnergyBilled)
