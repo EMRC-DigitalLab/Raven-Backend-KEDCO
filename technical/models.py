@@ -122,6 +122,11 @@ class EnergyDelivered(UUIDModel, models.Model):
 
     class Meta:
         unique_together = ('feeder', 'date')
+        ordering = ['date', 'feeder']
+        indexes = [
+            models.Index(fields=['date']),
+            models.Index(fields=['feeder', 'date']),
+        ]
 
 
 class HourlyLoad(UUIDModel, models.Model):
@@ -130,8 +135,26 @@ class HourlyLoad(UUIDModel, models.Model):
     hour = models.PositiveSmallIntegerField()  # 0 to 23
     load_mw = models.DecimalField(max_digits=10, decimal_places=2)
 
+    reading_time = models.TimeField(
+        null=True, 
+        blank=True,
+        help_text="Precise time of reading (HH:MM:SS) for sub-hour accuracy"
+    )
+
     class Meta:
         unique_together = ('feeder', 'date', 'hour')
+        ordering = ['date', 'hour']
+        indexes = [
+            models.Index(fields=['date', 'hour']),
+            models.Index(fields=['feeder', 'date']),
+            models.Index(fields=['date']),
+        ]
+
+    def save(self, *args, **kwargs):
+        # Auto-populate hour from reading_time if provided
+        if self.reading_time and not self.hour:
+            self.hour = self.reading_time.hour
+        super().save(*args, **kwargs)
 
 
 class FeederInterruption(UUIDModel, models.Model):
@@ -174,14 +197,20 @@ class FeederInterruption(UUIDModel, models.Model):
         ("permit", "Permit"),
     ]
 
-    feeder = models.ForeignKey(Feeder, on_delete=models.CASCADE)
-    interruption_type = models.CharField(max_length=100, choices=INTERRUPTION_TYPES)
+    feeder = models.ForeignKey(Feeder, on_delete=models.CASCADE, related_name='interruptions')
+    interruption_type = models.CharField(max_length=100, choices=INTERRUPTION_TYPES, db_index=True)
     description = models.TextField(blank=True, null=True)
-    occurred_at = models.DateTimeField()
+    occurred_at = models.DateTimeField(db_index=True)
     restored_at = models.DateTimeField(blank=True, null=True)
 
     class Meta:
         unique_together = ("feeder", "occurred_at", "interruption_type")
+        ordering = ['-occurred_at']
+        indexes = [
+            models.Index(fields=['occurred_at']),
+            models.Index(fields=['interruption_type', 'occurred_at']),
+            models.Index(fields=['feeder', 'occurred_at']),
+        ]
 
     @property
     def duration_hours(self):

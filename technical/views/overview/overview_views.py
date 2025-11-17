@@ -1,25 +1,29 @@
 # technical/views/overview/overview_views.py
 from technical.models import *
-from technical.serializers import *
 from rest_framework.response import Response
-from django.db.models import Avg, Sum, Count
+from django.db.models import Avg, Sum, Count, Q, F, FloatField, ExpressionWrapper, Case, When, DecimalField
+from django.db.models.functions import Coalesce
 from rest_framework.decorators import api_view
 from datetime import datetime, timedelta
 from dateutil.relativedelta import relativedelta
 from django.utils.dateparse import parse_datetime
-from technical.models import EnergyDelivered, HourlyLoad, FeederInterruption
+from django.utils import timezone
+from django.db import connection
 from common.models import Feeder
+from technical.constants import TURNAROUND_EXCLUSIONS
 
 
 def get_month_range(year, month):
+    """Get first and last day of a month"""
     start = datetime(year, month, 1)
     end = start + relativedelta(months=1) - timedelta(days=1)
     return start.date(), end.date()
 
 
 def delta(current, previous):
+    """Calculate percentage change"""
     if previous == 0:
-        return 0
+        return 0 if current == 0 else 100
     return round(((current - previous) / previous) * 100, 2)
 
 
@@ -119,29 +123,396 @@ def get_previous_periods(start_date, end_date, period_days, count=4):
     return periods
 
 
+def calculate_hours_of_supply_feeder(feeder_id, from_date, to_date):
+    """
+    Calculate average hours of supply per day for a single feeder using raw SQL.
+    """
+    query = """
+        SELECT 
+            AVG(daily_hours) as avg_hours
+        FROM (
+            SELECT 
+                date,
+                COUNT(DISTINCT hour) as daily_hours
+            FROM technical_hourlyload
+            WHERE feeder_id = %s
+                AND date BETWEEN %s AND %s
+                AND load_mw > 0
+            GROUP BY date
+        ) daily_supply
+    """
+    
+    with connection.cursor() as cursor:
+        cursor.execute(query, [feeder_id, from_date, to_date])
+        result = cursor.fetchone()
+        avg_hours = result[0] if result and result[0] else 0
+    
+    return round(min(float(avg_hours), 24.0), 2)
+
+
+def calculate_interruption_duration_feeder(feeder_id, from_date, to_date, exclude_types=None):
+    """
+    Calculate average interruption duration per day for a single feeder using raw SQL.
+    
+    Args:
+        feeder_id: ID of the feeder
+        from_date: Start date
+        to_date: End date
+        exclude_types: List of interruption types to exclude (for turnaround time)
+    
+    Returns:
+        Average hours of interruption per day
+    """
+    end_of_period = timezone.make_aware(
+        datetime.combine(to_date, datetime.max.time())
+    )
+    
+    # Build exclusion clause
+    exclusion_clause = ""
+    params = [end_of_period, end_of_period, feeder_id, from_date, to_date]
+    
+    if exclude_types:
+        placeholders = ','.join(['%s'] * len(exclude_types))
+        exclusion_clause = f"AND interruption_type NOT IN ({placeholders})"
+        params.extend(exclude_types)
+    
+    # Calculate total hours for this feeder
+    query = f"""
+        SELECT 
+            SUM(
+                CASE 
+                    WHEN restored_at IS NOT NULL AND restored_at <= %s THEN
+                        EXTRACT(EPOCH FROM (restored_at - occurred_at)) / 3600.0
+                    ELSE
+                        EXTRACT(EPOCH FROM (%s - occurred_at)) / 3600.0
+                END
+            ) as total_hours
+        FROM technical_feederinterruption
+        WHERE feeder_id = %s
+            AND DATE(occurred_at) BETWEEN %s AND %s
+            {exclusion_clause}
+    """
+    
+    with connection.cursor() as cursor:
+        cursor.execute(query, params)
+        result = cursor.fetchone()
+        total_hours = result[0] if result and result[0] else 0
+    
+    # Calculate average per day
+    period_days = (to_date - from_date).days + 1
+    avg_hours_per_day = total_hours / period_days if period_days > 0 else 0
+    
+    return round(avg_hours_per_day, 2)
+
+
+def get_interruption_breakdown_feeder(feeder_id, start_date, end_date, period_days, period_offset=0):
+    """
+    Get interruption breakdown for a single feeder using raw SQL.
+    Returns average hours per day for each interruption type.
+    """
+    # Calculate target period
+    if period_days == 1:
+        target_start = start_date - timedelta(days=period_offset)
+        target_end = target_start
+        label = target_start.strftime("%A") if period_offset == 0 else get_period_label(start_date, period_days, period_offset)
+    elif period_days == 7:
+        target_start = start_date - timedelta(weeks=period_offset)
+        target_end = target_start + timedelta(days=6)
+        label = f"Week {period_offset + 1}" if period_offset == 0 else f"Wk{period_offset + 1}"
+    elif 28 <= period_days <= 31:
+        temp_date = start_date - relativedelta(months=period_offset)
+        target_start, target_end = get_month_range(temp_date.year, temp_date.month)
+        label = target_start.strftime("%B")
+    else:
+        target_start = start_date - timedelta(days=period_days * period_offset)
+        target_end = target_start + timedelta(days=period_days - 1)
+        label = f"Cycle {period_offset + 1}"
+    
+    end_of_period = timezone.make_aware(
+        datetime.combine(target_end, datetime.max.time())
+    )
+    
+    # Calculate hours for each interruption type for this feeder
+    query = """
+        SELECT 
+            COALESCE(interruption_type, 'Unknown') as itype,
+            SUM(
+                CASE 
+                    WHEN restored_at IS NOT NULL AND restored_at <= %s THEN
+                        EXTRACT(EPOCH FROM (restored_at - occurred_at)) / 3600.0
+                    ELSE
+                        EXTRACT(EPOCH FROM (%s - occurred_at)) / 3600.0
+                END
+            ) as total_hours
+        FROM technical_feederinterruption
+        WHERE feeder_id = %s
+            AND DATE(occurred_at) BETWEEN %s AND %s
+        GROUP BY interruption_type
+    """
+    
+    with connection.cursor() as cursor:
+        cursor.execute(query, [end_of_period, end_of_period, feeder_id, target_start, target_end])
+        results = cursor.fetchall()
+    
+    # Process results
+    type_totals = {}
+    total_hours = 0
+    
+    for itype, hours in results:
+        type_totals[itype or 'Unknown'] = hours if hours else 0
+        total_hours += hours if hours else 0
+    
+    # Calculate averages per day
+    num_days = (target_end - target_start).days + 1
+    type_averages = {k: round(v / num_days, 2) for k, v in type_totals.items()}
+    avg_total_per_day = round(total_hours / num_days, 2) if num_days > 0 else 0
+    
+    return {
+        "month": label,
+        "total": avg_total_per_day,
+        "delta": 0,
+        "breakdown": type_averages
+    }
+
+
 def calculate_hours_of_supply(from_date, to_date):
-    """Calculate average hours of supply per day"""
-    hours = HourlyLoad.objects.filter(
+    """
+    Calculate average hours of supply per day using optimized query.
+    Returns the average number of hours per day where load was supplied.
+    """
+    # Count distinct hours per day where load > 0, then average across all days
+    result = HourlyLoad.objects.filter(
         date__range=(from_date, to_date),
         load_mw__gt=0
-    ).values('feeder', 'date').annotate(
-        count=Count('hour')
-    ).aggregate(avg=Avg('count'))['avg'] or 0
-    return round(hours, 2)
-
-
-def get_avg_interruption_duration(from_date, to_date):
-    """Calculate average interruption duration"""
-    qs = FeederInterruption.objects.filter(
-        occurred_at__date__range=(from_date, to_date),
-        restored_at__isnull=False
+    ).values('date').annotate(
+        hours_count=Count('hour', distinct=True)
+    ).aggregate(
+        avg_hours=Avg('hours_count')
     )
-    if not qs.exists():
-        return 0
     
-    total_hours = sum(i.duration_hours for i in qs)
-    count = qs.count()
-    return round(total_hours / count, 2) if count else 0
+    return round(result['avg_hours'] or 0, 2)
+
+
+def calculate_interruption_duration_per_feeder_raw_sql(from_date, to_date, exclude_types=None):
+    """
+    Calculate average interruption duration PER FEEDER per day using raw SQL.
+    This correctly averages across feeders to avoid inflated numbers.
+    
+    Logic:
+    1. Calculate total interruption hours for each feeder
+    2. Divide by number of days to get average hours/day per feeder
+    3. Average across all feeders
+    
+    Example: If 200 feeders each had 24 hours of interruption over 30 days:
+    - Each feeder: 24 hours / 30 days = 0.8 hours/day
+    - Average across feeders: 0.8 hours/day (NOT 4,800 hours)
+    """
+    end_of_period = timezone.make_aware(
+        datetime.combine(to_date, datetime.max.time())
+    )
+    
+    # Build exclusion clause
+    exclusion_clause = ""
+    params = [end_of_period, end_of_period, from_date, to_date]
+    
+    if exclude_types:
+        placeholders = ','.join(['%s'] * len(exclude_types))
+        exclusion_clause = f"AND interruption_type NOT IN ({placeholders})"
+        params.extend(exclude_types)
+    
+    # Calculate per-feeder average, then average across feeders
+    query = f"""
+        SELECT 
+            AVG(feeder_hours) as avg_hours_per_feeder
+        FROM (
+            SELECT 
+                feeder_id,
+                SUM(
+                    CASE 
+                        WHEN restored_at IS NOT NULL AND restored_at <= %s THEN
+                            EXTRACT(EPOCH FROM (restored_at - occurred_at)) / 3600.0
+                        ELSE
+                            EXTRACT(EPOCH FROM (%s - occurred_at)) / 3600.0
+                    END
+                ) as feeder_hours
+            FROM technical_feederinterruption
+            WHERE DATE(occurred_at) BETWEEN %s AND %s
+            {exclusion_clause}
+            GROUP BY feeder_id
+        ) feeder_totals
+    """
+    
+    with connection.cursor() as cursor:
+        cursor.execute(query, params)
+        result = cursor.fetchone()
+        total_hours_per_feeder = result[0] if result and result[0] else 0
+    
+    # Calculate average per day
+    period_days = (to_date - from_date).days + 1
+    avg_hours_per_day = total_hours_per_feeder / period_days if period_days > 0 else 0
+    
+    return round(avg_hours_per_day, 2)
+
+
+def get_interruption_breakdown_per_feeder_raw_sql(start_date, end_date, period_days, period_offset=0):
+    """
+    Get interruption breakdown PER FEEDER using raw SQL.
+    Returns average hours per day per feeder for each interruption type.
+    """
+    # Calculate target period
+    if period_days == 1:
+        target_start = start_date - timedelta(days=period_offset)
+        target_end = target_start
+        label = target_start.strftime("%A") if period_offset == 0 else get_period_label(start_date, period_days, period_offset)
+    elif period_days == 7:
+        target_start = start_date - timedelta(weeks=period_offset)
+        target_end = target_start + timedelta(days=6)
+        label = f"Week {period_offset + 1}" if period_offset == 0 else f"Wk{period_offset + 1}"
+    elif 28 <= period_days <= 31:
+        temp_date = start_date - relativedelta(months=period_offset)
+        target_start, target_end = get_month_range(temp_date.year, temp_date.month)
+        label = target_start.strftime("%B")
+    else:
+        target_start = start_date - timedelta(days=period_days * period_offset)
+        target_end = target_start + timedelta(days=period_days - 1)
+        label = f"Cycle {period_offset + 1}"
+    
+    end_of_period = timezone.make_aware(
+        datetime.combine(target_end, datetime.max.time())
+    )
+    
+    # Calculate average per feeder for each interruption type
+    query = """
+        SELECT 
+            interruption_type,
+            AVG(feeder_type_hours) as avg_hours
+        FROM (
+            SELECT 
+                feeder_id,
+                COALESCE(interruption_type, 'Unknown') as interruption_type,
+                SUM(
+                    CASE 
+                        WHEN restored_at IS NOT NULL AND restored_at <= %s THEN
+                            EXTRACT(EPOCH FROM (restored_at - occurred_at)) / 3600.0
+                        ELSE
+                            EXTRACT(EPOCH FROM (%s - occurred_at)) / 3600.0
+                    END
+                ) as feeder_type_hours
+            FROM technical_feederinterruption
+            WHERE DATE(occurred_at) BETWEEN %s AND %s
+            GROUP BY feeder_id, interruption_type
+        ) feeder_type_totals
+        GROUP BY interruption_type
+    """
+    
+    with connection.cursor() as cursor:
+        cursor.execute(query, [end_of_period, end_of_period, target_start, target_end])
+        results = cursor.fetchall()
+    
+    # Process results
+    type_totals = {}
+    total_hours = 0
+    
+    for itype, hours in results:
+        type_totals[itype or 'Unknown'] = hours if hours else 0
+        total_hours += hours if hours else 0
+    
+    # Calculate averages per day
+    num_days = (target_end - target_start).days + 1
+    type_averages = {k: round(v / num_days, 2) for k, v in type_totals.items()}
+    avg_total_per_day = round(total_hours / num_days, 2) if num_days > 0 else 0
+    
+    return {
+        "month": label,
+        "total": avg_total_per_day,
+        "delta": 0,
+        "breakdown": type_averages
+    }
+
+
+def get_load_trend_optimized(start_date, end_date, mode, feeder_id=None):
+    """
+    Get load trend data optimized for the selected mode.
+    For monthly mode: returns daily averages for each day of the month
+    For daily mode: returns hourly averages for that specific day
+    
+    Args:
+        start_date: Start date
+        end_date: End date
+        mode: Mode (monthly, daily, custom, etc.)
+        feeder_id: Optional feeder ID to filter by specific feeder
+    """
+    # Build base query with optional feeder filter
+    base_filter = {'date__range': (start_date, end_date)}
+    if feeder_id:
+        base_filter['feeder_id'] = feeder_id
+    
+    if mode == "monthly":
+        # Get average load for each day of the month
+        daily_loads = HourlyLoad.objects.filter(
+            **base_filter
+        ).values('date').annotate(
+            avg_load=Avg('load_mw')
+        ).order_by('date')
+        
+        series = [
+            {
+                "day": entry["date"].day,
+                "value": round(float(entry["avg_load"] or 0), 2)
+            }
+            for entry in daily_loads
+        ]
+        
+        return {
+            "unit": "MW",
+            "date": start_date.strftime("%Y-%m"),
+            "series": series
+        }
+    
+    elif mode == "daily":
+        # Get hourly loads for the specific day
+        base_filter['date'] = start_date
+        hourly_loads = HourlyLoad.objects.filter(
+            **base_filter
+        ).values('hour').annotate(
+            avg_load=Avg('load_mw')
+        ).order_by('hour')
+        
+        series = [
+            {
+                "hour": entry["hour"],
+                "value": round(float(entry["avg_load"] or 0), 2)
+            }
+            for entry in hourly_loads
+        ]
+        
+        return {
+            "unit": "MW",
+            "date": start_date.isoformat(),
+            "series": series
+        }
+    
+    else:  # custom range
+        # For custom ranges, show daily averages
+        daily_loads = HourlyLoad.objects.filter(
+            **base_filter
+        ).values('date').annotate(
+            avg_load=Avg('load_mw')
+        ).order_by('date')
+        
+        series = [
+            {
+                "date": entry["date"].isoformat(),
+                "value": round(float(entry["avg_load"] or 0), 2)
+            }
+            for entry in daily_loads
+        ]
+        
+        return {
+            "unit": "MW",
+            "date": f"{start_date.isoformat()} to {end_date.isoformat()}",
+            "series": series
+        }
 
 
 def get_metric_with_history(calc_fn, start_date, end_date, period_days):
@@ -153,11 +524,11 @@ def get_metric_with_history(calc_fn, start_date, end_date, period_days):
     for period in previous_periods:
         value = calc_fn(period["start"], period["end"])
         history.append({
-            "month": period["label"],  # Keep as 'month' for frontend compatibility
+            "month": period["label"],
             "value": round(value, 2)
         })
     
-    # Calculate current and previous values
+    # Calculate current value
     current = calc_fn(start_date, end_date)
     
     # Get immediate previous period for delta calculation
@@ -183,68 +554,6 @@ def get_metric_with_history(calc_fn, start_date, end_date, period_days):
     }
 
 
-def get_sum_metric(model, field, from_date, to_date):
-    """Get sum metric for a date range"""
-    return model.objects.filter(
-        date__range=(from_date, to_date)
-    ).aggregate(total=Sum(field))["total"] or 0
-
-
-def get_avg_metric(model, field, from_date, to_date):
-    """Get average metric for a date range"""
-    return model.objects.filter(
-        date__range=(from_date, to_date)
-    ).aggregate(avg=Avg(field))["avg"] or 0
-
-
-def get_count_metric(model, date_field, from_date, to_date):
-    """Get count metric for a date range"""
-    filter_kwargs = {f"{date_field}__date__range": (from_date, to_date)}
-    return model.objects.filter(**filter_kwargs).count()
-
-
-def get_interruption_breakdown(start_date, end_date, period_days, period_offset=0):
-    """Get interruption breakdown for a specific period"""
-    if period_days == 1:  # Daily
-        target_start = start_date - timedelta(days=period_offset)
-        target_end = target_start
-        label = target_start.strftime("%A") if period_offset == 0 else get_period_label(start_date, period_days, period_offset)
-    elif period_days == 7:  # Weekly
-        target_start = start_date - timedelta(weeks=period_offset)
-        target_end = target_start + timedelta(days=6)
-        label = f"Week {period_offset + 1}" if period_offset == 0 else f"Wk{period_offset + 1}"
-    elif 28 <= period_days <= 31:  # Monthly
-        temp_date = start_date - relativedelta(months=period_offset)
-        target_start, target_end = get_month_range(temp_date.year, temp_date.month)
-        label = target_start.strftime("%B")
-    else:  # Custom cycles
-        target_start = start_date - timedelta(days=period_days * period_offset)
-        target_end = target_start + timedelta(days=period_days - 1)
-        label = f"Cycle {period_offset + 1}"
-    
-    interruptions = FeederInterruption.objects.filter(
-        occurred_at__date__range=(target_start, target_end)
-    )
-    
-    type_totals = {}
-    for itype, _ in FeederInterruption.INTERRUPTION_TYPES:
-        hours = sum(
-            i.duration_hours
-            for i in interruptions.filter(interruption_type=itype)
-            if i.restored_at
-        )
-        type_totals[itype] = round(hours, 2)
-    
-    total_hours = sum(type_totals.values())
-    
-    return {
-        "month": label,
-        "total": round(total_hours, 2),
-        "delta": 2.5 + period_offset,  # You may want to calculate actual delta
-        "breakdown": type_totals
-    }
-
-
 @api_view(["GET"])
 def technical_overview_view(request):
     # Parse date parameters
@@ -253,6 +562,23 @@ def technical_overview_view(request):
     end_date = date_info["end_date"]
     period_days = date_info["period_days"]
     mode = date_info["mode"]
+    
+    # Parse feeder filter (optional)
+    feeder_slug = request.GET.get("feeder")
+    feeder_filter = {}
+    feeder_name = None
+    
+    if feeder_slug:
+        try:
+            feeder = Feeder.objects.get(slug=feeder_slug)
+            feeder_filter = {'feeder': feeder}
+            feeder_name = feeder.name
+            print(f"DEBUG: Filtering by feeder: {feeder_name} ({feeder_slug})")
+        except Feeder.DoesNotExist:
+            return Response(
+                {"error": f"Feeder with slug '{feeder_slug}' not found"},
+                status=400
+            )
     
     # Get previous period for delta calculations
     if period_days == 1:  # Daily
@@ -268,63 +594,146 @@ def technical_overview_view(request):
         prev_start = start_date - timedelta(days=period_days)
         prev_end = prev_start + timedelta(days=period_days - 1)
     
-    # Calculate highlight metrics
-    energy_now = get_sum_metric(EnergyDelivered, "energy_mwh", start_date, end_date)
-    energy_prev = get_sum_metric(EnergyDelivered, "energy_mwh", prev_start, prev_end)
+    # Calculate highlight metrics - OPTIMIZED with feeder filter
+    energy_result = EnergyDelivered.objects.filter(
+        date__range=(start_date, end_date),
+        **feeder_filter
+    ).aggregate(total=Sum('energy_mwh'))
+    energy_now = float(energy_result['total'] or 0)
     
-    load_now = get_avg_metric(HourlyLoad, "load_mw", start_date, end_date)
-    load_prev = get_avg_metric(HourlyLoad, "load_mw", prev_start, prev_end)
+    energy_prev_result = EnergyDelivered.objects.filter(
+        date__range=(prev_start, prev_end),
+        **feeder_filter
+    ).aggregate(total=Sum('energy_mwh'))
+    energy_prev = float(energy_prev_result['total'] or 0)
     
-    interruptions_now = get_count_metric(FeederInterruption, "occurred_at", start_date, end_date)
-    interruptions_prev = get_count_metric(FeederInterruption, "occurred_at", prev_start, prev_end)
+    # Average load - daily average for the period with feeder filter
+    load_result = HourlyLoad.objects.filter(
+        date__range=(start_date, end_date),
+        **feeder_filter
+    ).aggregate(avg_load=Avg('load_mw'))
+    load_now = float(load_result['avg_load'] or 0)
     
-    # Calculate supply and quality metrics with history
-    supply_hours = get_metric_with_history(calculate_hours_of_supply, start_date, end_date, period_days)
-    interruption_duration = get_metric_with_history(get_avg_interruption_duration, start_date, end_date, period_days)
-    turnaround_time = interruption_duration  # Same as interruption duration as requested
+    load_prev_result = HourlyLoad.objects.filter(
+        date__range=(prev_start, prev_end),
+        **feeder_filter
+    ).aggregate(avg_load=Avg('load_mw'))
+    load_prev = float(load_prev_result['avg_load'] or 0)
+    
+    # Interruption count with feeder filter
+    interruptions_now = FeederInterruption.objects.filter(
+        occurred_at__date__range=(start_date, end_date),
+        **feeder_filter
+    ).count()
+    
+    interruptions_prev = FeederInterruption.objects.filter(
+        occurred_at__date__range=(prev_start, prev_end),
+        **feeder_filter
+    ).count()
+    
+    # Calculate supply and quality metrics with history and feeder filter
+    if feeder_slug:
+        # For single feeder, use feeder-specific calculation
+        supply_hours = get_metric_with_history(
+            lambda s, e: calculate_hours_of_supply_feeder(feeder.id, s, e),
+            start_date, 
+            end_date, 
+            period_days
+        )
+        
+        # Interruption duration (includes all types) - FOR SINGLE FEEDER
+        interruption_duration = get_metric_with_history(
+            lambda s, e: calculate_interruption_duration_feeder(feeder.id, s, e),
+            start_date,
+            end_date,
+            period_days
+        )
+        
+        # Turnaround time (excludes L/S and TCN types) - FOR SINGLE FEEDER
+        turnaround_time = get_metric_with_history(
+            lambda s, e: calculate_interruption_duration_feeder(feeder.id, s, e, exclude_types=TURNAROUND_EXCLUSIONS),
+            start_date,
+            end_date,
+            period_days
+        )
+    else:
+        # For all feeders, use per-feeder averaging
+        supply_hours = get_metric_with_history(
+            calculate_hours_of_supply, 
+            start_date, 
+            end_date, 
+            period_days
+        )
+        
+        # Interruption duration (includes all types) - PER FEEDER AVERAGE
+        interruption_duration = get_metric_with_history(
+            lambda s, e: calculate_interruption_duration_per_feeder_raw_sql(s, e),
+            start_date,
+            end_date,
+            period_days
+        )
+        
+        # Turnaround time (excludes L/S and TCN types) - PER FEEDER AVERAGE
+        turnaround_time = get_metric_with_history(
+            lambda s, e: calculate_interruption_duration_per_feeder_raw_sql(s, e, exclude_types=TURNAROUND_EXCLUSIONS),
+            start_date,
+            end_date,
+            period_days
+        )
     
     # Technical breakdown
-    feeders_now = Feeder.objects.count()
-    feeders_prev = 180  # mock - you may want to make this dynamic
-    customer_count = 5_000_000  # mock - you may want to make this dynamic
+    if feeder_slug:
+        # For single feeder
+        feeders_now = 1
+        feeders_prev = 1
+        # customer_count = Customer.objects.filter(
+        #     transformer__feeder=feeder
+        # ).count()
+        customer_count = 0
+    else:
+        # For all feeders
+        feeders_now = Feeder.objects.count()
+        feeders_prev = feeders_now  # You may want to track this historically
+        customer_count = 5_000_000  # Replace with actual query if available
     
     breakdown = {
-        "feeder_count": {"value": feeders_now, "delta": delta(feeders_now, feeders_prev)},
-        "avg_daily_interruptions": {"value": interruptions_now, "delta": delta(interruptions_now, interruptions_prev)},
-        "avg_turnaround": {"value": turnaround_time["current"], "delta": turnaround_time["delta"]},
-        "customer_count": {"value": customer_count, "delta": -5}
+        "feeder_count": {
+            "value": feeders_now,
+            "delta": delta(feeders_now, feeders_prev)
+        },
+        "avg_daily_interruptions": {
+            "value": round(interruptions_now / period_days, 2),
+            "delta": delta(
+                interruptions_now / period_days,
+                interruptions_prev / ((prev_end - prev_start).days + 1)
+            )
+        },
+        "avg_turnaround": {
+            "value": turnaround_time["current"],
+            "delta": turnaround_time["delta"]
+        },
+        "customer_count": {
+            "value": customer_count,
+            "delta": 0  # Replace with actual calculation
+        }
     }
     
-    # Interruption sources for 4 periods
-    interruptions_data = [
-        get_interruption_breakdown(start_date, end_date, period_days, i) 
-        for i in range(4)
-    ]
-    
-    # Load trend (only for daily mode or when specific date is requested)
-    trend_series = []
-    trend_date = None
-    
-    if "date" in request.GET:
-        trend_date = request.GET.get("date", start_date.isoformat())
-        if isinstance(trend_date, str):
-            try:
-                trend_date = datetime.fromisoformat(trend_date.replace('Z', '+00:00')).date()
-            except:
-                trend_date = start_date
-        
-        trend_qs = HourlyLoad.objects.filter(
-            date=trend_date
-        ).values('hour').annotate(
-            avg_load=Avg('load_mw')
-        ).order_by('hour')
-        
-        trend_series = [
-            {"hour": entry["hour"], "value": round(entry["avg_load"], 2)} 
-            for entry in trend_qs
+    # Interruption sources for 4 periods - OPTIMIZED WITH RAW SQL and feeder filter
+    if feeder_slug:
+        interruptions_data = [
+            get_interruption_breakdown_feeder(feeder.id, start_date, end_date, period_days, i) 
+            for i in range(4)
+        ]
+    else:
+        interruptions_data = [
+            get_interruption_breakdown_per_feeder_raw_sql(start_date, end_date, period_days, i) 
+            for i in range(4)
         ]
     
-    return Response({
+    # Load trend - OPTIMIZED with feeder filter
+    load_trend = get_load_trend_optimized(start_date, end_date, mode, feeder_id=feeder.id if feeder_slug else None)
+    
+    response_data = {
         "mode": mode,
         "period": {
             "start_date": start_date.isoformat(),
@@ -332,9 +741,18 @@ def technical_overview_view(request):
             "days": period_days
         },
         "highlight_metrics": {
-            "energy_delivered": {"value": float(energy_now), "delta": delta(energy_now, energy_prev)},
-            "average_load": {"value": float(load_now), "delta": delta(load_now, load_prev)},
-            "interruptions": {"value": interruptions_now, "delta": delta(interruptions_now, interruptions_prev)},
+            "energy_delivered": {
+                "value": round(energy_now, 2),
+                "delta": delta(energy_now, energy_prev)
+            },
+            "average_load": {
+                "value": round(load_now, 2),
+                "delta": delta(load_now, load_prev)
+            },
+            "interruptions": {
+                "value": interruptions_now,
+                "delta": delta(interruptions_now, interruptions_prev)
+            },
         },
         "supply_and_quality": {
             "supply_hours": supply_hours,
@@ -343,9 +761,15 @@ def technical_overview_view(request):
         },
         "technical_breakdown": breakdown,
         "interruption_sources": interruptions_data,
-        "load_trend": {
-            "unit": "MW",
-            "date": trend_date.isoformat() if trend_date else None,
-            "series": trend_series
+        "load_trend": load_trend
+    }
+    
+    # Add feeder info to response if filtered
+    if feeder_slug:
+        response_data["feeder"] = {
+            "name": feeder_name,
+            "slug": feeder_slug,
+            "voltage_level": feeder.voltage_level
         }
-    })
+    
+    return Response(response_data)
