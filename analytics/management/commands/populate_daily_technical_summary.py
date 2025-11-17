@@ -412,33 +412,33 @@ class Command(BaseCommand):
         created_count = 0
         updated_count = 0
         
-        with transaction.atomic():
-            # Bulk create
-            if to_create:
-                DailyTechnicalSummary.objects.bulk_create(
-                    to_create,
-                    batch_size=options['batch_size']
-                )
-                created_count = len(to_create)
-                if self.verbosity >= 1:
-                    self.stdout.write(f'✅ Bulk created {created_count} summaries')
+        # with transaction.atomic():
+        # Bulk create
+        if to_create:
+            DailyTechnicalSummary.objects.bulk_create(
+                to_create,
+                batch_size=options['batch_size']
+            )
+            created_count = len(to_create)
+            if self.verbosity >= 1:
+                self.stdout.write(f'✅ Bulk created {created_count} summaries')
             
-            # Bulk update
-            if to_update:
-                # Get all field names except primary key and timestamp fields
-                update_fields = [
-                    f.name for f in DailyTechnicalSummary._meta.fields
-                    if f.name not in ['id', 'created_at', 'date', 'state', 'business_district', 'feeder']
-                ]
+        # Bulk update
+        if to_update:
+            # Get all field names except primary key and timestamp fields
+            update_fields = [
+                f.name for f in DailyTechnicalSummary._meta.fields
+                if f.name not in ['id', 'created_at', 'date', 'state', 'business_district', 'feeder']
+            ]
                 
-                DailyTechnicalSummary.objects.bulk_update(
-                    to_update,
-                    update_fields,
-                    batch_size=options['batch_size']
-                )
-                updated_count = len(to_update)
-                if self.verbosity >= 1:
-                    self.stdout.write(f'✅ Bulk updated {updated_count} summaries')
+            DailyTechnicalSummary.objects.bulk_update(
+                to_update,
+                update_fields,
+                batch_size=options['batch_size']
+            )
+            updated_count = len(to_update)
+            if self.verbosity >= 1:
+                self.stdout.write(f'✅ Bulk updated {updated_count} summaries')
         
         db_time = time.time() - db_start
         total_time = time.time() - start_time
@@ -571,33 +571,33 @@ class Command(BaseCommand):
             self.stdout.write(f'    Processing {date_obj}...', ending='')
         
         try:
-            with transaction.atomic():
-                calculator = DailyTechnicalCalculator(
-                    target_date=date_obj,
-                    state=filter_config['state'],
-                    business_district=filter_config['business_district'],
-                    feeder=filter_config['feeder']
-                )
+            # with transaction.atomic():
+            calculator = DailyTechnicalCalculator(
+                target_date=date_obj,
+                state=filter_config['state'],
+                business_district=filter_config['business_district'],
+                feeder=filter_config['feeder']
+            )
                 
-                # Calculate daily metrics
-                metrics = calculator.calculate_all_metrics()
+            # Calculate daily metrics
+            metrics = calculator.calculate_all_metrics()
                 
-                # Create or update summary
-                summary, created = DailyTechnicalSummary.objects.update_or_create(
-                    date=date_obj,
-                    state=filter_config['state'],
-                    business_district=filter_config['business_district'],
-                    feeder=filter_config['feeder'],
-                    defaults=metrics
-                )
+            # Create or update summary
+            summary, created = DailyTechnicalSummary.objects.update_or_create(
+                date=date_obj,
+                state=filter_config['state'],
+                business_district=filter_config['business_district'],
+                feeder=filter_config['feeder'],
+                defaults=metrics
+            )
                 
-                action = "Created" if created else "Updated"
-                duration_ms = int((time.time() - start_time) * 1000)
+            action = "Created" if created else "Updated"
+            duration_ms = int((time.time() - start_time) * 1000)
                 
-                if self.verbosity >= 2:
-                    self.stdout.write(f' ✅ {action} ({duration_ms}ms)')
+            if self.verbosity >= 2:
+                self.stdout.write(f' ✅ {action} ({duration_ms}ms)')
                 
-                return True
+            return True
         
         except Exception as e:
             if self.verbosity >= 2:

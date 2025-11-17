@@ -416,33 +416,33 @@ class Command(BaseCommand):
         created_count = 0
         updated_count = 0
         
-        with transaction.atomic():
-            # Bulk create
-            if to_create:
-                MonthlyTechnicalSummary.objects.bulk_create(
-                    to_create,
-                    batch_size=self.batch_size
-                )
-                created_count = len(to_create)
-                if self.verbosity >= 1:
-                    self.stdout.write(f'✅ Bulk created {created_count} summaries')
+        # with transaction.atomic():
+        # Bulk create
+        if to_create:
+            MonthlyTechnicalSummary.objects.bulk_create(
+                to_create,
+                batch_size=self.batch_size
+            )
+            created_count = len(to_create)
+            if self.verbosity >= 1:
+                self.stdout.write(f'✅ Bulk created {created_count} summaries')
             
-            # Bulk update
-            if to_update:
-                # Get all field names from the model
-                update_fields = [
-                    f.name for f in MonthlyTechnicalSummary._meta.fields
-                    if f.name not in ['id', 'created_at', 'month', 'state', 'business_district', 'feeder']
-                ]
+        # Bulk update
+        if to_update:
+            # Get all field names from the model
+            update_fields = [
+                f.name for f in MonthlyTechnicalSummary._meta.fields
+                if f.name not in ['id', 'created_at', 'month', 'state', 'business_district', 'feeder']
+            ]
                 
-                MonthlyTechnicalSummary.objects.bulk_update(
-                    to_update,
-                    update_fields,
-                    batch_size=self.batch_size
-                )
-                updated_count = len(to_update)
-                if self.verbosity >= 1:
-                    self.stdout.write(f'✅ Bulk updated {updated_count} summaries')
+            MonthlyTechnicalSummary.objects.bulk_update(
+                to_update,
+                update_fields,
+                batch_size=self.batch_size
+            )
+            updated_count = len(to_update)
+            if self.verbosity >= 1:
+                self.stdout.write(f'✅ Bulk updated {updated_count} summaries')
         
         db_time = time.time() - db_start
         total_time = time.time() - start_time
