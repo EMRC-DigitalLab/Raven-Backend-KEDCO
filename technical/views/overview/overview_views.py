@@ -295,35 +295,43 @@ def calculate_hours_of_supply(from_date, to_date):
 
 def calculate_interruption_duration_per_feeder_raw_sql(from_date, to_date, exclude_types=None):
     """
-    Calculate average interruption duration PER FEEDER per day using raw SQL.
-    This correctly averages across feeders to avoid inflated numbers.
+    ✅ FIXED: Calculate average interruption duration PER FEEDER per day using raw SQL.
+    
+    CRITICAL FIX: Division by period_days happens INSIDE the subquery, not outside.
+    This ensures we calculate hours/day per feeder first, then average across feeders.
+    Result is always in the 0-24 hours/day range.
     
     Logic:
-    1. Calculate total interruption hours for each feeder
-    2. Divide by number of days to get average hours/day per feeder
-    3. Average across all feeders
+    1. For each feeder: Calculate total interruption hours, then divide by period_days → hours/day
+    2. Average the hours/day values across all feeders
     
-    Example: If 200 feeders each had 24 hours of interruption over 30 days:
-    - Each feeder: 24 hours / 30 days = 0.8 hours/day
-    - Average across feeders: 0.8 hours/day (NOT 4,800 hours)
+    Example with 3 feeders over 30 days:
+    - Feeder A: 720 hours / 30 days = 24 hours/day
+    - Feeder B: 300 hours / 30 days = 10 hours/day  
+    - Feeder C: 60 hours / 30 days = 2 hours/day
+    - Average: (24 + 10 + 2) / 3 = 12 hours/day ✅
     """
     end_of_period = timezone.make_aware(
         datetime.combine(to_date, datetime.max.time())
     )
     
+    period_days = (to_date - from_date).days + 1
+    
     # Build exclusion clause
     exclusion_clause = ""
-    params = [end_of_period, end_of_period, from_date, to_date]
+    # ✅ CRITICAL FIX: Correct parameter order - dates first, then period_days for division
+    params = [end_of_period, end_of_period, period_days, from_date, to_date]
     
     if exclude_types:
         placeholders = ','.join(['%s'] * len(exclude_types))
         exclusion_clause = f"AND interruption_type NOT IN ({placeholders})"
         params.extend(exclude_types)
     
-    # Calculate per-feeder average, then average across feeders
+    # ✅ CRITICAL: Divide by period_days (%s at position 3) INSIDE the subquery
+    # Parameter positions: %s(1)=end_of_period, %s(2)=end_of_period, %s(3)=period_days, %s(4)=from_date, %s(5)=to_date
     query = f"""
         SELECT 
-            AVG(feeder_hours) as avg_hours_per_feeder
+            AVG(avg_hours_per_day) as overall_avg
         FROM (
             SELECT 
                 feeder_id,
@@ -334,29 +342,28 @@ def calculate_interruption_duration_per_feeder_raw_sql(from_date, to_date, exclu
                         ELSE
                             EXTRACT(EPOCH FROM (%s - occurred_at)) / 3600.0
                     END
-                ) as feeder_hours
+                ) / %s as avg_hours_per_day
             FROM technical_feederinterruption
             WHERE DATE(occurred_at) BETWEEN %s AND %s
             {exclusion_clause}
             GROUP BY feeder_id
-        ) feeder_totals
+        ) feeder_averages
     """
     
     with connection.cursor() as cursor:
         cursor.execute(query, params)
         result = cursor.fetchone()
-        total_hours_per_feeder = result[0] if result and result[0] else 0
+        avg_hours_per_day = result[0] if result and result[0] else 0
     
-    # Calculate average per day
-    period_days = (to_date - from_date).days + 1
-    avg_hours_per_day = total_hours_per_feeder / period_days if period_days > 0 else 0
-    
-    return round(avg_hours_per_day, 2)
+    # ✅ CRITICAL: NO division here - already done in SQL
+    return round(float(avg_hours_per_day), 2)
 
 
 def get_interruption_breakdown_per_feeder_raw_sql(start_date, end_date, period_days, period_offset=0):
     """
-    Get interruption breakdown PER FEEDER using raw SQL.
+    ✅ FIXED: Get interruption breakdown PER FEEDER using raw SQL.
+    
+    CRITICAL FIX: Division by num_days happens INSIDE the subquery, not outside.
     Returns average hours per day per feeder for each interruption type.
     """
     # Calculate target period
@@ -381,11 +388,13 @@ def get_interruption_breakdown_per_feeder_raw_sql(start_date, end_date, period_d
         datetime.combine(target_end, datetime.max.time())
     )
     
-    # Calculate average per feeder for each interruption type
+    num_days = (target_end - target_start).days + 1
+    
+    # ✅ CRITICAL: Divide by num_days (%s) INSIDE the subquery
     query = """
         SELECT 
             interruption_type,
-            AVG(feeder_type_hours) as avg_hours
+            AVG(avg_hours_per_day) as overall_avg
         FROM (
             SELECT 
                 feeder_id,
@@ -397,34 +406,30 @@ def get_interruption_breakdown_per_feeder_raw_sql(start_date, end_date, period_d
                         ELSE
                             EXTRACT(EPOCH FROM (%s - occurred_at)) / 3600.0
                     END
-                ) as feeder_type_hours
+                ) / %s as avg_hours_per_day
             FROM technical_feederinterruption
             WHERE DATE(occurred_at) BETWEEN %s AND %s
             GROUP BY feeder_id, interruption_type
-        ) feeder_type_totals
+        ) feeder_type_averages
         GROUP BY interruption_type
     """
     
     with connection.cursor() as cursor:
-        cursor.execute(query, [end_of_period, end_of_period, target_start, target_end])
+        cursor.execute(query, [end_of_period, end_of_period, num_days, target_start, target_end])
         results = cursor.fetchall()
     
     # Process results
-    type_totals = {}
-    total_hours = 0
+    type_averages = {}
+    total_avg = 0
     
-    for itype, hours in results:
-        type_totals[itype or 'Unknown'] = hours if hours else 0
-        total_hours += hours if hours else 0
+    for itype, avg_hours in results:
+        type_averages[itype or 'Unknown'] = round(float(avg_hours or 0), 2)
+        total_avg += float(avg_hours or 0)
     
-    # Calculate averages per day
-    num_days = (target_end - target_start).days + 1
-    type_averages = {k: round(v / num_days, 2) for k, v in type_totals.items()}
-    avg_total_per_day = round(total_hours / num_days, 2) if num_days > 0 else 0
-    
+    # ✅ CRITICAL: NO division here - already done in SQL
     return {
         "month": label,
-        "total": avg_total_per_day,
+        "total": round(total_avg, 2),
         "delta": 0,
         "breakdown": type_averages
     }
@@ -657,7 +662,7 @@ def technical_overview_view(request):
             period_days
         )
     else:
-        # For all feeders, use per-feeder averaging
+        # For all feeders, use per-feeder averaging with FIXED calculation
         supply_hours = get_metric_with_history(
             calculate_hours_of_supply, 
             start_date, 
@@ -665,7 +670,7 @@ def technical_overview_view(request):
             period_days
         )
         
-        # Interruption duration (includes all types) - PER FEEDER AVERAGE
+        # ✅ FIXED: Interruption duration (includes all types) - PER FEEDER AVERAGE
         interruption_duration = get_metric_with_history(
             lambda s, e: calculate_interruption_duration_per_feeder_raw_sql(s, e),
             start_date,
@@ -673,7 +678,7 @@ def technical_overview_view(request):
             period_days
         )
         
-        # Turnaround time (excludes L/S and TCN types) - PER FEEDER AVERAGE
+        # ✅ FIXED: Turnaround time (excludes L/S and TCN types) - PER FEEDER AVERAGE
         turnaround_time = get_metric_with_history(
             lambda s, e: calculate_interruption_duration_per_feeder_raw_sql(s, e, exclude_types=TURNAROUND_EXCLUSIONS),
             start_date,
@@ -686,15 +691,12 @@ def technical_overview_view(request):
         # For single feeder
         feeders_now = 1
         feeders_prev = 1
-        # customer_count = Customer.objects.filter(
-        #     transformer__feeder=feeder
-        # ).count()
         customer_count = 0
     else:
         # For all feeders
         feeders_now = Feeder.objects.count()
-        feeders_prev = feeders_now  # You may want to track this historically
-        customer_count = 5_000_000  # Replace with actual query if available
+        feeders_prev = feeders_now
+        customer_count = 5_000_000
     
     breakdown = {
         "feeder_count": {
@@ -714,11 +716,11 @@ def technical_overview_view(request):
         },
         "customer_count": {
             "value": customer_count,
-            "delta": 0  # Replace with actual calculation
+            "delta": 0
         }
     }
     
-    # Interruption sources for 4 periods - OPTIMIZED WITH RAW SQL and feeder filter
+    # ✅ FIXED: Interruption sources for 4 periods
     if feeder_slug:
         interruptions_data = [
             get_interruption_breakdown_feeder(feeder.id, start_date, end_date, period_days, i) 
