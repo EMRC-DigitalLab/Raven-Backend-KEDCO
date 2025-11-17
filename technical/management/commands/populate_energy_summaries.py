@@ -55,7 +55,7 @@ class Command(BaseCommand):
             )
             self.stdout.write(f"Created/updated {len(daily_objs)} daily rows")
 
-        # 2. Monthly roll-up
+        # 2. Monthly roll-up - FIXED to deduplicate
         monthly_data = qs.annotate(
             month_start=models.ExpressionWrapper(
                 models.functions.TruncMonth('date'),
@@ -65,13 +65,23 @@ class Command(BaseCommand):
             energy=Sum('energy_mwh')
         )
 
+        # Deduplicate by (feeder_id, period) - keep last occurrence
+        monthly_dict = {}
+        for row in monthly_data:
+            key = (row['feeder_id'], row['month_start'])
+            if key in monthly_dict:
+                # Sum if duplicate (shouldn't happen with proper aggregation, but safety check)
+                monthly_dict[key] += row['energy']
+            else:
+                monthly_dict[key] = row['energy']
+        
         monthly_objs = [
             FeederEnergyMonthly(
-                feeder_id=row['feeder_id'],
-                period=row['month_start'],
-                energy_mwh=row['energy']
+                feeder_id=feeder_id,
+                period=period,
+                energy_mwh=energy
             )
-            for row in monthly_data
+            for (feeder_id, period), energy in monthly_dict.items()
         ]
 
         if options['dry_run']:
