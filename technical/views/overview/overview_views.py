@@ -125,34 +125,76 @@ def get_previous_periods(start_date, end_date, period_days, count=4):
 
 def calculate_hours_of_supply_feeder(feeder_id, from_date, to_date):
     """
-    Calculate average hours of supply per day for a single feeder using raw SQL.
+    Calculate average hours of supply per day for a single feeder.
+    
+    Logic:
+    - Sum all distinct hours where load > 0 across all days
+    - Divide by number of days in period
+    - This gives average hours per day for THIS feeder
     """
     query = """
         SELECT 
-            AVG(daily_hours) as avg_hours
-        FROM (
-            SELECT 
-                date,
-                COUNT(DISTINCT hour) as daily_hours
-            FROM technical_hourlyload
-            WHERE feeder_id = %s
-                AND date BETWEEN %s AND %s
-                AND load_mw > 0
-            GROUP BY date
-        ) daily_supply
+            COUNT(DISTINCT CONCAT(date, '-', hour)) as total_hours
+        FROM technical_hourlyload
+        WHERE feeder_id = %s
+            AND date BETWEEN %s AND %s
+            AND load_mw > 0
     """
     
     with connection.cursor() as cursor:
         cursor.execute(query, [feeder_id, from_date, to_date])
         result = cursor.fetchone()
-        avg_hours = result[0] if result and result[0] else 0
+        total_hours = result[0] if result and result[0] else 0
     
-    return round(min(float(avg_hours), 24.0), 2)
+    # Calculate average per day
+    period_days = (to_date - from_date).days + 1
+    avg_hours_per_day = total_hours / period_days if period_days > 0 else 0
+    
+    return round(min(avg_hours_per_day, 24.0), 2)
+
+
+def calculate_hours_of_supply_network(from_date, to_date):
+    """
+    Calculate average hours of supply per day across ALL feeders in database.
+    
+    CORRECTED Logic:
+    - Numerator: Sum of all hours supplied across all feeders with data
+    - Denominator: Total feeders in DB × Days in period
+    - This properly accounts for feeders with no data (they contribute 0)
+    
+    Example: 200 feeders, 30 days, 150 feeders have data totaling 72,000 hours
+    - Old (wrong): 72,000 / (150 feeders × 30 days) = 16 hours/day
+    - New (correct): 72,000 / (200 feeders × 30 days) = 12 hours/day
+    """
+    period_days = (to_date - from_date).days + 1
+    total_feeders = Feeder.objects.count()
+    
+    if total_feeders == 0:
+        return 0.0
+    
+    # Get total hours supplied across ALL feeders
+    query = """
+        SELECT 
+            COUNT(DISTINCT CONCAT(feeder_id, '-', date, '-', hour)) as total_hours
+        FROM technical_hourlyload
+        WHERE date BETWEEN %s AND %s
+            AND load_mw > 0
+    """
+    
+    with connection.cursor() as cursor:
+        cursor.execute(query, [from_date, to_date])
+        result = cursor.fetchone()
+        total_hours_all_feeders = result[0] if result and result[0] else 0
+    
+    # Average = Total hours / (Total feeders × Days)
+    avg_hours_per_day = total_hours_all_feeders / (total_feeders * period_days)
+    
+    return round(min(avg_hours_per_day, 24.0), 2)
 
 
 def calculate_interruption_duration_feeder(feeder_id, from_date, to_date, exclude_types=None):
     """
-    Calculate average interruption duration per day for a single feeder using raw SQL.
+    Calculate average interruption duration per day for a single feeder.
     
     Args:
         feeder_id: ID of the feeder
@@ -161,7 +203,7 @@ def calculate_interruption_duration_feeder(feeder_id, from_date, to_date, exclud
         exclude_types: List of interruption types to exclude (for turnaround time)
     
     Returns:
-        Average hours of interruption per day
+        Average hours of interruption per day for this feeder
     """
     end_of_period = timezone.make_aware(
         datetime.combine(to_date, datetime.max.time())
@@ -179,14 +221,14 @@ def calculate_interruption_duration_feeder(feeder_id, from_date, to_date, exclud
     # Calculate total hours for this feeder
     query = f"""
         SELECT 
-            SUM(
+            COALESCE(SUM(
                 CASE 
                     WHEN restored_at IS NOT NULL AND restored_at <= %s THEN
                         EXTRACT(EPOCH FROM (restored_at - occurred_at)) / 3600.0
                     ELSE
                         EXTRACT(EPOCH FROM (%s - occurred_at)) / 3600.0
                 END
-            ) as total_hours
+            ), 0) as total_hours
         FROM technical_feederinterruption
         WHERE feeder_id = %s
             AND DATE(occurred_at) BETWEEN %s AND %s
@@ -205,10 +247,69 @@ def calculate_interruption_duration_feeder(feeder_id, from_date, to_date, exclud
     return round(avg_hours_per_day, 2)
 
 
+def calculate_interruption_duration_network(from_date, to_date, exclude_types=None):
+    """
+    Calculate average interruption duration per day across ALL feeders in database.
+    
+    CORRECTED Logic:
+    - Numerator: Sum of all interruption hours across all feeders with interruptions
+    - Denominator: Total feeders in DB × Days in period
+    - This properly accounts for feeders with no interruptions (they contribute 0)
+    
+    Example: 200 feeders, 30 days, 50 feeders had interruptions totaling 1,200 hours
+    - Old (wrong): 1,200 / (50 feeders × 30 days) = 0.8 hours/day
+    - New (correct): 1,200 / (200 feeders × 30 days) = 0.2 hours/day
+    """
+    period_days = (to_date - from_date).days + 1
+    total_feeders = Feeder.objects.count()
+    
+    if total_feeders == 0:
+        return 0.0
+    
+    end_of_period = timezone.make_aware(
+        datetime.combine(to_date, datetime.max.time())
+    )
+    
+    # Build exclusion clause
+    exclusion_clause = ""
+    params = [end_of_period, end_of_period, from_date, to_date]
+    
+    if exclude_types:
+        placeholders = ','.join(['%s'] * len(exclude_types))
+        exclusion_clause = f"AND interruption_type NOT IN ({placeholders})"
+        params.extend(exclude_types)
+    
+    # Calculate total hours across ALL feeders
+    query = f"""
+        SELECT 
+            COALESCE(SUM(
+                CASE 
+                    WHEN restored_at IS NOT NULL AND restored_at <= %s THEN
+                        EXTRACT(EPOCH FROM (restored_at - occurred_at)) / 3600.0
+                    ELSE
+                        EXTRACT(EPOCH FROM (%s - occurred_at)) / 3600.0
+                END
+            ), 0) as total_hours
+        FROM technical_feederinterruption
+        WHERE DATE(occurred_at) BETWEEN %s AND %s
+            {exclusion_clause}
+    """
+    
+    with connection.cursor() as cursor:
+        cursor.execute(query, params)
+        result = cursor.fetchone()
+        total_hours_all_feeders = result[0] if result and result[0] else 0
+    
+    # Average = Total hours / (Total feeders × Days)
+    avg_hours_per_day = total_hours_all_feeders / (total_feeders * period_days)
+    
+    return round(avg_hours_per_day, 2)
+
+
 def get_interruption_breakdown_feeder(feeder_id, start_date, end_date, period_days, period_offset=0):
     """
-    Get interruption breakdown for a single feeder using raw SQL.
-    Returns average hours per day for each interruption type.
+    Get interruption breakdown for a single feeder.
+    Returns average hours per day for each interruption type for THIS feeder.
     """
     # Calculate target period
     if period_days == 1:
@@ -236,14 +337,14 @@ def get_interruption_breakdown_feeder(feeder_id, start_date, end_date, period_da
     query = """
         SELECT 
             COALESCE(interruption_type, 'Unknown') as itype,
-            SUM(
+            COALESCE(SUM(
                 CASE 
                     WHEN restored_at IS NOT NULL AND restored_at <= %s THEN
                         EXTRACT(EPOCH FROM (restored_at - occurred_at)) / 3600.0
                     ELSE
                         EXTRACT(EPOCH FROM (%s - occurred_at)) / 3600.0
                 END
-            ) as total_hours
+            ), 0) as total_hours
         FROM technical_feederinterruption
         WHERE feeder_id = %s
             AND DATE(occurred_at) BETWEEN %s AND %s
@@ -275,89 +376,13 @@ def get_interruption_breakdown_feeder(feeder_id, start_date, end_date, period_da
     }
 
 
-def calculate_hours_of_supply(from_date, to_date):
+def get_interruption_breakdown_network(start_date, end_date, period_days, period_offset=0):
     """
-    Calculate average hours of supply per day using optimized query.
-    Returns the average number of hours per day where load was supplied.
-    """
-    # Count distinct hours per day where load > 0, then average across all days
-    result = HourlyLoad.objects.filter(
-        date__range=(from_date, to_date),
-        load_mw__gt=0
-    ).values('date').annotate(
-        hours_count=Count('hour', distinct=True)
-    ).aggregate(
-        avg_hours=Avg('hours_count')
-    )
+    Get interruption breakdown across ALL feeders in database.
     
-    return round(result['avg_hours'] or 0, 2)
-
-
-def calculate_interruption_duration_per_feeder_raw_sql(from_date, to_date, exclude_types=None):
-    """
-    Calculate average interruption duration PER FEEDER per day using raw SQL.
-    This correctly averages across feeders to avoid inflated numbers.
-    
-    Logic:
-    1. Calculate total interruption hours for each feeder
-    2. Divide by number of days to get average hours/day per feeder
-    3. Average across all feeders
-    
-    Example: If 200 feeders each had 24 hours of interruption over 30 days:
-    - Each feeder: 24 hours / 30 days = 0.8 hours/day
-    - Average across feeders: 0.8 hours/day (NOT 4,800 hours)
-    """
-    end_of_period = timezone.make_aware(
-        datetime.combine(to_date, datetime.max.time())
-    )
-    
-    # Build exclusion clause
-    exclusion_clause = ""
-    params = [end_of_period, end_of_period, from_date, to_date]
-    
-    if exclude_types:
-        placeholders = ','.join(['%s'] * len(exclude_types))
-        exclusion_clause = f"AND interruption_type NOT IN ({placeholders})"
-        params.extend(exclude_types)
-    
-    # Calculate per-feeder average, then average across feeders
-    query = f"""
-        SELECT 
-            AVG(feeder_hours) as avg_hours_per_feeder
-        FROM (
-            SELECT 
-                feeder_id,
-                SUM(
-                    CASE 
-                        WHEN restored_at IS NOT NULL AND restored_at <= %s THEN
-                            EXTRACT(EPOCH FROM (restored_at - occurred_at)) / 3600.0
-                        ELSE
-                            EXTRACT(EPOCH FROM (%s - occurred_at)) / 3600.0
-                    END
-                ) as feeder_hours
-            FROM technical_feederinterruption
-            WHERE DATE(occurred_at) BETWEEN %s AND %s
-            {exclusion_clause}
-            GROUP BY feeder_id
-        ) feeder_totals
-    """
-    
-    with connection.cursor() as cursor:
-        cursor.execute(query, params)
-        result = cursor.fetchone()
-        total_hours_per_feeder = result[0] if result and result[0] else 0
-    
-    # Calculate average per day
-    period_days = (to_date - from_date).days + 1
-    avg_hours_per_day = total_hours_per_feeder / period_days if period_days > 0 else 0
-    
-    return round(avg_hours_per_day, 2)
-
-
-def get_interruption_breakdown_per_feeder_raw_sql(start_date, end_date, period_days, period_offset=0):
-    """
-    Get interruption breakdown PER FEEDER using raw SQL.
-    Returns average hours per day per feeder for each interruption type.
+    CORRECTED Logic:
+    - Returns average hours per day per feeder for each interruption type
+    - Denominator includes ALL feeders in database, not just those with interruptions
     """
     # Calculate target period
     if period_days == 1:
@@ -377,31 +402,35 @@ def get_interruption_breakdown_per_feeder_raw_sql(start_date, end_date, period_d
         target_end = target_start + timedelta(days=period_days - 1)
         label = f"Cycle {period_offset + 1}"
     
+    num_days = (target_end - target_start).days + 1
+    total_feeders = Feeder.objects.count()
+    
+    if total_feeders == 0:
+        return {
+            "month": label,
+            "total": 0,
+            "delta": 0,
+            "breakdown": {}
+        }
+    
     end_of_period = timezone.make_aware(
         datetime.combine(target_end, datetime.max.time())
     )
     
-    # Calculate average per feeder for each interruption type
+    # Calculate total hours for each interruption type across ALL feeders
     query = """
         SELECT 
-            interruption_type,
-            AVG(feeder_type_hours) as avg_hours
-        FROM (
-            SELECT 
-                feeder_id,
-                COALESCE(interruption_type, 'Unknown') as interruption_type,
-                SUM(
-                    CASE 
-                        WHEN restored_at IS NOT NULL AND restored_at <= %s THEN
-                            EXTRACT(EPOCH FROM (restored_at - occurred_at)) / 3600.0
-                        ELSE
-                            EXTRACT(EPOCH FROM (%s - occurred_at)) / 3600.0
-                    END
-                ) as feeder_type_hours
-            FROM technical_feederinterruption
-            WHERE DATE(occurred_at) BETWEEN %s AND %s
-            GROUP BY feeder_id, interruption_type
-        ) feeder_type_totals
+            COALESCE(interruption_type, 'Unknown') as itype,
+            COALESCE(SUM(
+                CASE 
+                    WHEN restored_at IS NOT NULL AND restored_at <= %s THEN
+                        EXTRACT(EPOCH FROM (restored_at - occurred_at)) / 3600.0
+                    ELSE
+                        EXTRACT(EPOCH FROM (%s - occurred_at)) / 3600.0
+                END
+            ), 0) as total_hours
+        FROM technical_feederinterruption
+        WHERE DATE(occurred_at) BETWEEN %s AND %s
         GROUP BY interruption_type
     """
     
@@ -417,10 +446,9 @@ def get_interruption_breakdown_per_feeder_raw_sql(start_date, end_date, period_d
         type_totals[itype or 'Unknown'] = hours if hours else 0
         total_hours += hours if hours else 0
     
-    # Calculate averages per day
-    num_days = (target_end - target_start).days + 1
-    type_averages = {k: round(v / num_days, 2) for k, v in type_totals.items()}
-    avg_total_per_day = round(total_hours / num_days, 2) if num_days > 0 else 0
+    # Calculate averages: Total hours / (Total feeders × Days)
+    type_averages = {k: round(v / (total_feeders * num_days), 2) for k, v in type_totals.items()}
+    avg_total_per_day = round(total_hours / (total_feeders * num_days), 2)
     
     return {
         "month": label,
@@ -567,6 +595,7 @@ def technical_overview_view(request):
     feeder_slug = request.GET.get("feeder")
     feeder_filter = {}
     feeder_name = None
+    feeder = None
     
     if feeder_slug:
         try:
@@ -659,25 +688,25 @@ def technical_overview_view(request):
             period_days
         )
     else:
-        # For all feeders, use per-feeder averaging
+        # For all feeders, use network-wide calculation (CORRECTED)
         supply_hours = get_metric_with_history(
-            calculate_hours_of_supply, 
+            calculate_hours_of_supply_network, 
             start_date, 
             end_date, 
             period_days
         )
         
-        # Interruption duration (includes all types) - PER FEEDER AVERAGE
+        # Interruption duration (includes all types) - NETWORK-WIDE (CORRECTED)
         interruption_duration = get_metric_with_history(
-            lambda s, e: calculate_interruption_duration_per_feeder_raw_sql(s, e),
+            lambda s, e: calculate_interruption_duration_network(s, e),
             start_date,
             end_date,
             period_days
         )
         
-        # Turnaround time (excludes L/S and TCN types) - PER FEEDER AVERAGE
+        # Turnaround time (excludes L/S and TCN types) - NETWORK-WIDE (CORRECTED)
         turnaround_time = get_metric_with_history(
-            lambda s, e: calculate_interruption_duration_per_feeder_raw_sql(s, e, exclude_types=TURNAROUND_EXCLUSIONS),
+            lambda s, e: calculate_interruption_duration_network(s, e, exclude_types=TURNAROUND_EXCLUSIONS),
             start_date,
             end_date,
             period_days
@@ -717,7 +746,7 @@ def technical_overview_view(request):
         }
     }
     
-    # Interruption sources for 4 periods - OPTIMIZED WITH RAW SQL and feeder filter
+    # Interruption sources for 4 periods - CORRECTED
     if feeder_slug:
         interruptions_data = [
             get_interruption_breakdown_feeder(feeder.id, start_date, end_date, period_days, i) 
@@ -725,7 +754,7 @@ def technical_overview_view(request):
         ]
     else:
         interruptions_data = [
-            get_interruption_breakdown_per_feeder_raw_sql(start_date, end_date, period_days, i) 
+            get_interruption_breakdown_network(start_date, end_date, period_days, i) 
             for i in range(4)
         ]
     
