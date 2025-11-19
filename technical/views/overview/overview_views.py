@@ -192,6 +192,52 @@ def calculate_hours_of_supply_network(from_date, to_date):
     return round(min(avg_hours_per_day, 24.0), 2)
 
 
+def calculate_average_load_network(from_date, to_date):
+    """
+    Calculate average load per feeder per hour across entire network.
+    
+    Formula: Total Load / (Total Feeders × Total Hours in Period)
+    """
+    period_days = (to_date - from_date).days + 1
+    period_hours = period_days * 24
+    total_feeders = Feeder.objects.count()
+    
+    if total_feeders == 0:
+        return 0.0
+    
+    # Sum all load_mw values
+    result = HourlyLoad.objects.filter(
+        date__range=(from_date, to_date)
+    ).aggregate(total_load=Sum('load_mw'))
+    
+    total_load = float(result['total_load'] or 0)
+    
+    # Average = Total Load / (Total Feeders × Total Hours)
+    avg_load = total_load / (total_feeders * period_hours)
+    
+    return round(avg_load, 2)
+
+
+def calculate_average_load_feeder(feeder_id, from_date, to_date):
+    """
+    Calculate average load for a single feeder.
+    
+    Formula: Total Load / Total Hours in Period
+    """
+    period_days = (to_date - from_date).days + 1
+    period_hours = period_days * 24
+    
+    result = HourlyLoad.objects.filter(
+        feeder_id=feeder_id,
+        date__range=(from_date, to_date)
+    ).aggregate(total_load=Sum('load_mw'))
+    
+    total_load = float(result['total_load'] or 0)
+    avg_load = total_load / period_hours
+    
+    return round(avg_load, 2)
+
+
 def calculate_interruption_duration_feeder(feeder_id, from_date, to_date, exclude_types=None):
     """
     Calculate average interruption duration per day for a single feeder.
@@ -638,20 +684,15 @@ def technical_overview_view(request):
     ).aggregate(total=Sum('load_mw'))
     energy_prev = float(energy_prev_result['total'] or 0)
     
-    # Average load - daily average for the period with feeder filter
-    load_result = HourlyLoad.objects.filter(
-        date__range=(start_date, end_date),
-        **feeder_filter
-    ).aggregate(avg_load=Avg('load_mw'))
-    load_now = float(load_result['avg_load'] or 0)
+    # Average load - network-wide or single feeder
+    if feeder_slug:
+        load_now = calculate_average_load_feeder(feeder.id, start_date, end_date)
+        load_prev = calculate_average_load_feeder(feeder.id, prev_start, prev_end)
+    else:
+        load_now = calculate_average_load_network(start_date, end_date)
+        load_prev = calculate_average_load_network(prev_start, prev_end)
     
-    load_prev_result = HourlyLoad.objects.filter(
-        date__range=(prev_start, prev_end),
-        **feeder_filter
-    ).aggregate(avg_load=Avg('load_mw'))
-    load_prev = float(load_prev_result['avg_load'] or 0)
-    
-    # Interruption count with feeder filter
+    # Interruption count - total count for highlight metrics
     interruptions_now = FeederInterruption.objects.filter(
         occurred_at__date__range=(start_date, end_date),
         **feeder_filter
@@ -661,6 +702,23 @@ def technical_overview_view(request):
         occurred_at__date__range=(prev_start, prev_end),
         **feeder_filter
     ).count()
+    
+    # Calculate daily averages for technical breakdown
+    prev_period_days = (prev_end - prev_start).days + 1
+    
+    if feeder_slug:
+        # Single feeder: divide by days only
+        avg_daily_interruptions_now = interruptions_now / period_days if period_days > 0 else 0
+        avg_daily_interruptions_prev = interruptions_prev / prev_period_days if prev_period_days > 0 else 0
+    else:
+        # Network-wide: divide by (total feeders × days)
+        total_feeders = Feeder.objects.count()
+        if total_feeders > 0:
+            avg_daily_interruptions_now = interruptions_now / (total_feeders * period_days) if period_days > 0 else 0
+            avg_daily_interruptions_prev = interruptions_prev / (total_feeders * prev_period_days) if prev_period_days > 0 else 0
+        else:
+            avg_daily_interruptions_now = 0
+            avg_daily_interruptions_prev = 0
     
     # Calculate supply and quality metrics with history and feeder filter
     if feeder_slug:
@@ -730,11 +788,8 @@ def technical_overview_view(request):
             "delta": delta(feeders_now, feeders_prev)
         },
         "avg_daily_interruptions": {
-            "value": round(interruptions_now / period_days, 2),
-            "delta": delta(
-                interruptions_now / period_days,
-                interruptions_prev / ((prev_end - prev_start).days + 1)
-            )
+            "value": round(avg_daily_interruptions_now, 2),
+            "delta": delta(avg_daily_interruptions_now, avg_daily_interruptions_prev)
         },
         "avg_turnaround": {
             "value": turnaround_time["current"],
