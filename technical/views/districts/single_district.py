@@ -250,10 +250,10 @@ def calculate_district_metrics_for_period(district_id, from_date, to_date):
     
     return {
         "avg_supply": avg_supply,
-        "avg_duration": avg_duration,
+        "duration": avg_duration,  # Frontend expects 'duration' not 'avg_duration'
         "turnaround_time": turnaround_time,
-        "interruptions": total_interruptions,
-        "daily_interruptions": round(daily_interruptions, 2),
+        "interruptions": round(daily_interruptions, 2),  # Frontend expects daily avg as 'interruptions'
+        "faults": total_interruptions,  # Frontend expects total count as 'faults'
         "energy_delivered": total_energy,
         "feeder_count": feeder_count
     }
