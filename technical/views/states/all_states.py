@@ -155,7 +155,8 @@ def calculate_state_interruption_metrics_sql(state_id, from_date, to_date, exclu
     
     # Build exclusion clause for turnaround time
     exclusion_clause = ""
-    params = [state_id, end_of_period, end_of_period, from_date, to_date]
+    # FIXED: Correct parameter order - end_of_period twice, state_id, dates
+    params = [end_of_period, end_of_period, state_id, from_date, to_date]
     
     if exclude_types:
         placeholders = ','.join(['%s'] * len(exclude_types))
