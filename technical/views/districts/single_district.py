@@ -296,27 +296,29 @@ def calculate_district_metrics_for_period(district_id, from_date, to_date):
     period_days = (to_date - from_date).days + 1
     
     # 1. Supply hours (includes ALL feeders)
-    avg_supply = calculate_district_hours_of_supply_sql(district_id, from_date, to_date)
+    avg_supply = float(calculate_district_hours_of_supply_sql(district_id, from_date, to_date))
     
     # 2. Interruption duration (all types, includes ALL feeders)
     avg_duration, total_interruptions = calculate_district_interruption_metrics_sql(
         district_id, from_date, to_date
     )
+    avg_duration = float(avg_duration)
     
     # 3. Turnaround time (exclude L/S and TCN, includes ALL feeders)
     turnaround, _ = calculate_district_interruption_metrics_sql(
         district_id, from_date, to_date, exclude_types=TURNAROUND_EXCLUSIONS
     )
+    turnaround = float(turnaround)
     
     # 4. Energy delivered
-    total_energy = calculate_district_energy_sql(district_id, from_date, to_date)
+    total_energy = float(calculate_district_energy_sql(district_id, from_date, to_date))
     
     # 5. Feeder count
     feeder_count = Feeder.objects.filter(business_district_id=district_id).count()
     
     # 6. Daily interruptions (average per feeder per day)
     if feeder_count > 0 and period_days > 0:
-        avg_daily_interruptions = total_interruptions / (feeder_count * period_days)
+        avg_daily_interruptions = float(total_interruptions) / (feeder_count * period_days)
     else:
         avg_daily_interruptions = 0.0
     
@@ -330,9 +332,9 @@ def calculate_district_metrics_for_period(district_id, from_date, to_date):
         "avg_duration": round(avg_duration, 2),
         "turnaround": round(turnaround, 2),
         "avg_daily_interruptions": round(avg_daily_interruptions, 2),
-        "ftc": total_interruptions,  # Total count (Feeder Tripping Count)
-        "energy_delivered": total_energy,
-        "feeder_count": feeder_count
+        "ftc": int(total_interruptions),  # Total count (Feeder Tripping Count)
+        "energy_delivered": round(total_energy, 2),
+        "feeder_count": int(feeder_count)
     }
 
 
@@ -372,6 +374,10 @@ def build_metrics_with_history(district, start_date, end_date, period_days):
     
     def calc_delta(current_val, prev_val):
         """Calculate percentage change"""
+        # Ensure both values are floats
+        current_val = float(current_val) if current_val is not None else 0.0
+        prev_val = float(prev_val) if prev_val is not None else 0.0
+        
         if prev_val and prev_val != 0:
             return round(((current_val - prev_val) / prev_val) * 100, 2)
         elif current_val == 0 and prev_val == 0:
