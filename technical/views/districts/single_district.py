@@ -72,7 +72,17 @@ def get_month_range(year, month):
 
 
 def calculate_district_hours_of_supply_sql(district_id, from_date, to_date):
-    """Calculate average hours of supply per day for a district"""
+    """
+    Calculate average hours of supply per day for a district.
+    
+    CORRECTED Logic:
+    - Numerator: Sum of all hours supplied across all feeders with data in the district
+    - Denominator: Total feeders in district × Days in period
+    - This properly accounts for feeders with no data (they contribute 0)
+    
+    Returns:
+        float: Average hours per day (capped at 24.0)
+    """
     period_days = (to_date - from_date).days + 1
     
     feeder_count_query = """
@@ -102,16 +112,34 @@ def calculate_district_hours_of_supply_sql(district_id, from_date, to_date):
         cursor.execute(hours_query, [district_id, from_date, to_date])
         result = cursor.fetchone()
         total_hours = result[0] if result and result[0] else 0
-        
-        if total_hours == 0:
-            return 0.0
     
+    # Average = Total hours / (Total feeders × Days)
     avg_hours_per_day = total_hours / (total_feeders * period_days)
+    
+    # Cap at 24 hours maximum
     return round(min(avg_hours_per_day, 24.0), 2)
 
 
 def calculate_district_interruption_metrics_sql(district_id, from_date, to_date, exclude_types=None):
-    """Calculate average interruption duration per day for a district"""
+    """
+    Calculate average interruption duration per day for a district.
+    
+    CORRECTED Logic:
+    - Numerator: Sum of all interruption hours across all feeders with interruptions
+    - Denominator: Total feeders in district × Days in period
+    - This properly accounts for feeders with no interruptions (they contribute 0)
+    
+    Args:
+        district_id: ID of the business district
+        from_date: Start date
+        to_date: End date
+        exclude_types: List of interruption types to exclude (for turnaround time)
+    
+    Returns:
+        tuple: (avg_hours_per_day, total_interruption_count)
+            - avg_hours_per_day: Average interruption hours per day (capped at 24.0)
+            - total_interruption_count: Total number of interruptions in period
+    """
     period_days = (to_date - from_date).days + 1
     
     end_of_period = timezone.make_aware(
@@ -164,13 +192,28 @@ def calculate_district_interruption_metrics_sql(district_id, from_date, to_date,
         total_hours = result[0] if result and result[0] else 0
         total_interruptions = result[1] if result and result[1] else 0
     
+    # Average = Total hours / (Total feeders × Days)
     avg_hours_per_day = total_hours / (total_feeders * period_days)
+    
+    # Cap at 24 hours maximum
+    avg_hours_per_day = min(avg_hours_per_day, 24.0)
     
     return round(avg_hours_per_day, 2), int(total_interruptions)
 
 
 def calculate_district_energy_sql(district_id, from_date, to_date):
-    """Calculate total energy delivered for a district from HourlyLoad"""
+    """
+    Calculate total energy delivered for a district from HourlyLoad.
+    Sum of all load_mw values (MW × 1 hour = MWh)
+    
+    Args:
+        district_id: ID of the business district
+        from_date: Start date
+        to_date: End date
+    
+    Returns:
+        float: Total energy in MWh
+    """
     query = """
         SELECT 
             COALESCE(SUM(hl.load_mw), 0) as total_energy
@@ -189,7 +232,17 @@ def calculate_district_energy_sql(district_id, from_date, to_date):
 
 
 def get_previous_periods(start_date, period_days, count=4):
-    """Get previous periods for historical comparison"""
+    """
+    Get previous periods for historical comparison.
+    
+    Args:
+        start_date: Current period start date
+        period_days: Number of days in the period
+        count: Number of historical periods to return
+    
+    Returns:
+        list: List of dictionaries with start, end, and label for each period
+    """
     periods = []
     
     for i in range(count, 0, -1):
@@ -220,19 +273,38 @@ def get_previous_periods(start_date, period_days, count=4):
 
 
 def calculate_district_metrics_for_period(district_id, from_date, to_date):
-    """Calculate all metrics for a single period"""
+    """
+    Calculate all metrics for a single period with proper validation.
+    
+    CORRECTED: All metrics follow network-wide daily averaging pattern.
+    - avg_supply: Average hours per day across ALL feeders in district
+    - avg_duration: Average interruption hours per day across ALL feeders
+    - turnaround: Average local fault hours per day across ALL feeders
+    - avg_daily_interruptions: Average interruptions per feeder per day
+    - ftc: Total interruption count (Feeder Tripping Count)
+    - energy_delivered: Total energy in MWh
+    - feeder_count: Number of feeders in district
+    
+    Args:
+        district_id: ID of the business district
+        from_date: Start date
+        to_date: End date
+    
+    Returns:
+        dict: Dictionary of calculated metrics
+    """
     period_days = (to_date - from_date).days + 1
     
-    # 1. Supply hours
+    # 1. Supply hours (includes ALL feeders)
     avg_supply = calculate_district_hours_of_supply_sql(district_id, from_date, to_date)
     
-    # 2. Interruption duration (all types)
+    # 2. Interruption duration (all types, includes ALL feeders)
     avg_duration, total_interruptions = calculate_district_interruption_metrics_sql(
         district_id, from_date, to_date
     )
     
-    # 3. Turnaround time (exclude L/S and TCN)
-    turnaround_time, _ = calculate_district_interruption_metrics_sql(
+    # 3. Turnaround time (exclude L/S and TCN, includes ALL feeders)
+    turnaround, _ = calculate_district_interruption_metrics_sql(
         district_id, from_date, to_date, exclude_types=TURNAROUND_EXCLUSIONS
     )
     
@@ -242,25 +314,41 @@ def calculate_district_metrics_for_period(district_id, from_date, to_date):
     # 5. Feeder count
     feeder_count = Feeder.objects.filter(business_district_id=district_id).count()
     
-    # 6. Daily interruptions
+    # 6. Daily interruptions (average per feeder per day)
     if feeder_count > 0 and period_days > 0:
-        daily_interruptions = total_interruptions / (feeder_count * period_days)
+        avg_daily_interruptions = total_interruptions / (feeder_count * period_days)
     else:
-        daily_interruptions = 0.0
+        avg_daily_interruptions = 0.0
+    
+    # Validate all time-based metrics are capped at 24 hours
+    avg_supply = min(avg_supply, 24.0)
+    avg_duration = min(avg_duration, 24.0)
+    turnaround = min(turnaround, 24.0)
     
     return {
-        "avg_supply": avg_supply,
-        "duration": avg_duration,  # Frontend expects 'duration' not 'avg_duration'
-        "turnaround_time": turnaround_time,
-        "interruptions": round(daily_interruptions, 2),  # Frontend expects daily avg as 'interruptions'
-        "faults": total_interruptions,  # Frontend expects total count as 'faults'
+        "avg_supply": round(avg_supply, 2),
+        "avg_duration": round(avg_duration, 2),
+        "turnaround": round(turnaround, 2),
+        "avg_daily_interruptions": round(avg_daily_interruptions, 2),
+        "ftc": total_interruptions,  # Total count (Feeder Tripping Count)
         "energy_delivered": total_energy,
         "feeder_count": feeder_count
     }
 
 
 def build_metrics_with_history(district, start_date, end_date, period_days):
-    """Build metrics response with historical data"""
+    """
+    Build metrics response with historical data for comparison.
+    
+    Args:
+        district: BusinessDistrict object
+        start_date: Current period start date
+        end_date: Current period end date
+        period_days: Number of days in the period
+    
+    Returns:
+        dict: Dictionary with current values, deltas, and historical data
+    """
     # Get current period metrics
     current = calculate_district_metrics_for_period(district.id, start_date, end_date)
     
@@ -283,11 +371,16 @@ def build_metrics_with_history(district, start_date, end_date, period_days):
     previous = history_data[-1] if history_data else {}
     
     def calc_delta(current_val, prev_val):
+        """Calculate percentage change"""
         if prev_val and prev_val != 0:
             return round(((current_val - prev_val) / prev_val) * 100, 2)
+        elif current_val == 0 and prev_val == 0:
+            return 0.0
+        elif prev_val == 0 and current_val != 0:
+            return 100.0  # Infinite increase represented as 100%
         return None
     
-    # Build response
+    # Build response with current, delta, and history for each metric
     metrics = {}
     for key, current_val in current.items():
         prev_val = previous.get(key, 0)
@@ -301,7 +394,18 @@ def build_metrics_with_history(district, start_date, end_date, period_days):
 
 
 def get_top_bottom_feeders_sql(district_id, from_date, to_date):
-    """Get top 5 and bottom 5 feeders by peak load"""
+    """
+    Get top 5 and bottom 5 feeders by peak load.
+    
+    Args:
+        district_id: ID of the business district
+        from_date: Start date
+        to_date: End date
+    
+    Returns:
+        tuple: (top_5_feeders, bottom_5_feeders)
+            Each is a list of dictionaries with feeder details and peak load
+    """
     query = """
         SELECT 
             f.name as feeder_name,
@@ -334,7 +438,7 @@ def get_top_bottom_feeders_sql(district_id, from_date, to_date):
     ]
     
     top_5 = formatted[:5]
-    bottom_5 = formatted[-5:] if len(formatted) >= 5 else []
+    bottom_5 = list(reversed(formatted[-5:])) if len(formatted) >= 5 else []
     
     return top_5, bottom_5
 
@@ -346,18 +450,39 @@ def business_district_technical_summary(request):
     
     Query Parameters:
     - district: Business district name (required)
-    - mode: monthly, yearly, daily, weekly, custom, range
+    - mode: monthly, yearly, daily, weekly, custom, range (default: monthly)
     - For monthly: year, month
     - For yearly: year
-    - For others: from_date, to_date (ISO format)
+    - For others: from_date, to_date (ISO format: YYYY-MM-DDTHH:MM:SS.sssZ)
     
-    Key Metrics (CORRECTED):
-    - avg_supply: Average hours per day across all feeders in district (0-24)
-    - avg_duration: Average interruption hours per day across all feeders (0-24)
-    - turnaround_time: Average local fault hours per day across all feeders (0-24)
-    - daily_interruptions: Average interruptions per feeder per day
-    - interruptions: Total interruption count
+    Examples:
+    - ?district=Abuja&mode=monthly&year=2024&month=8
+    - ?district=Abuja&mode=yearly&year=2024
+    - ?district=Abuja&mode=daily&from_date=2024-08-02T23:00:00.000Z&to_date=2024-08-02T23:00:00.000Z
+    - ?district=Abuja&mode=custom&from_date=2024-08-01T00:00:00.000Z&to_date=2024-08-15T23:59:59.999Z
+    
+    Key Metrics (CORRECTED - Network-wide daily averaging):
+    - avg_supply: Average hours per day across ALL feeders in district (0-24)
+    - avg_duration: Average interruption hours per day across ALL feeders (0-24)
+    - turnaround: Average local fault hours per day across ALL feeders (0-24)
+    - avg_daily_interruptions: Average interruptions per feeder per day
+    - ftc: Feeder Tripping Count - total number of interruptions in period
     - energy_delivered: Total energy in MWh
+    - feeder_count: Number of feeders in district
+    
+    Response Structure:
+    {
+        "metrics": {
+            "avg_supply": {
+                "current": 12.5,
+                "delta": 5.2,
+                "history": [...]
+            },
+            ...
+        },
+        "top_feeders": [...],
+        "bottom_feeders": [...]
+    }
     """
     district_name = request.GET.get("district")
     if not district_name:
@@ -387,7 +512,15 @@ def business_district_technical_summary(request):
     response_data = {
         "metrics": metrics,
         "top_feeders": top_feeders,
-        "bottom_feeders": bottom_feeders
+        "bottom_feeders": bottom_feeders,
+        "_metadata": {
+            "district": district.name,
+            "state": district.state.name if district.state else None,
+            "mode": mode,
+            "from_date": from_date.isoformat(),
+            "to_date": to_date.isoformat(),
+            "period_days": period_days
+        }
     }
     
     return Response(response_data)
