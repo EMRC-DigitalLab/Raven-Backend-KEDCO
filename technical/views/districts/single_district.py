@@ -125,6 +125,8 @@ def calculate_district_interruption_metrics_sql(district_id, from_date, to_date,
     Calculate average interruption duration per day for a district.
     
     CORRECTED Logic:
+    - Includes ALL interruptions active during the period (not just those that started in the period)
+    - Calculates only the hours that fall within the filtered period boundaries
     - Numerator: Sum of all interruption hours across all feeders with interruptions
     - Denominator: Total feeders in district × Days in period
     - This properly accounts for feeders with no interruptions (they contribute 0)
@@ -138,10 +140,13 @@ def calculate_district_interruption_metrics_sql(district_id, from_date, to_date,
     Returns:
         tuple: (avg_hours_per_day, total_interruption_count)
             - avg_hours_per_day: Average interruption hours per day (capped at 24.0)
-            - total_interruption_count: Total number of interruptions in period
+            - total_interruption_count: COUNT of interruptions that occurred in period (for FTC)
     """
     period_days = (to_date - from_date).days + 1
     
+    start_of_period = timezone.make_aware(
+        datetime.combine(from_date, datetime.min.time())
+    )
     end_of_period = timezone.make_aware(
         datetime.combine(to_date, datetime.max.time())
     )
@@ -153,24 +158,53 @@ def calculate_district_interruption_metrics_sql(district_id, from_date, to_date,
     """
     
     exclusion_clause = ""
-    params = [end_of_period, end_of_period, district_id, from_date, to_date]
+    # Parameters for duration calculation (includes all active interruptions)
+    max_hours = period_days * 24.0
+    duration_params = [end_of_period, end_of_period, start_of_period, max_hours, district_id, from_date, end_of_period, start_of_period, start_of_period]
+    
+    # Parameters for count calculation (only interruptions that occurred in period)
+    count_params = [district_id, from_date, to_date]
     
     if exclude_types:
         placeholders = ','.join(['%s'] * len(exclude_types))
         exclusion_clause = f"AND fi.interruption_type NOT IN ({placeholders})"
-        params.extend(exclude_types)
+        duration_params.extend(exclude_types)
+        count_params.extend(exclude_types)
     
-    interruption_query = f"""
+    # CORRECTED: Calculate per-feeder totals first, then cap each at (24 * period_days)
+    # This prevents multiple overlapping interruptions from inflating the average
+    interruption_duration_query = f"""
         SELECT 
-            COALESCE(SUM(
-                CASE 
-                    WHEN restored_at IS NOT NULL AND restored_at <= %s THEN
-                        EXTRACT(EPOCH FROM (restored_at - occurred_at)) / 3600.0
-                    ELSE
-                        EXTRACT(EPOCH FROM (%s - occurred_at)) / 3600.0
-                END
-            ), 0) as total_hours,
-            COUNT(*) as total_interruptions
+            COALESCE(SUM(capped_hours), 0) as total_hours
+        FROM (
+            SELECT 
+                fi.feeder_id,
+                LEAST(
+                    SUM(
+                        GREATEST(
+                            EXTRACT(EPOCH FROM (
+                                LEAST(COALESCE(restored_at, %s), %s) - GREATEST(occurred_at, %s)
+                            )) / 3600.0,
+                            0
+                        )
+                    ),
+                    %s
+                ) as capped_hours
+            FROM technical_feederinterruption fi
+            INNER JOIN common_feeder f ON fi.feeder_id = f.id
+            WHERE f.business_district_id = %s
+                AND (
+                    DATE(fi.occurred_at) BETWEEN %s AND DATE(%s)
+                    OR (fi.occurred_at < %s AND (fi.restored_at IS NULL OR fi.restored_at >= %s))
+                )
+                {exclusion_clause}
+            GROUP BY fi.feeder_id
+        ) per_feeder_totals
+    """
+    
+    # Separate query for count (only interruptions that occurred in period)
+    interruption_count_query = f"""
+        SELECT COUNT(*) as total_interruptions
         FROM technical_feederinterruption fi
         INNER JOIN common_feeder f ON fi.feeder_id = f.id
         WHERE f.business_district_id = %s
@@ -186,17 +220,21 @@ def calculate_district_interruption_metrics_sql(district_id, from_date, to_date,
         if total_feeders == 0:
             return 0.0, 0
         
-        cursor.execute(interruption_query, params)
+        # Get interruption duration (all active during period)
+        cursor.execute(interruption_duration_query, duration_params)
         result = cursor.fetchone()
+        total_hours = float(result[0]) if result and result[0] else 0
         
-        total_hours = result[0] if result and result[0] else 0
-        total_interruptions = result[1] if result and result[1] else 0
+        # Get interruption count (only those that occurred in period)
+        cursor.execute(interruption_count_query, count_params)
+        result = cursor.fetchone()
+        total_interruptions = result[0] if result and result[0] else 0
     
     # Average = Total hours / (Total feeders × Days)
     avg_hours_per_day = total_hours / (total_feeders * period_days)
     
-    # Cap at 24 hours maximum
-    avg_hours_per_day = min(avg_hours_per_day, 24.0)
+    # Ensure non-negative and cap at 24
+    avg_hours_per_day = max(0, min(avg_hours_per_day, 24.0))
     
     return round(avg_hours_per_day, 2), int(total_interruptions)
 

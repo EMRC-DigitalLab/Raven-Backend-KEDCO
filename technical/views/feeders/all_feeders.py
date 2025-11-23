@@ -105,38 +105,65 @@ def calculate_feeder_interruption_metrics_sql(feeder_id, from_date, to_date, exc
     """
     Calculate average interruption duration per day for a single feeder using raw SQL.
     
-    For a single feeder:
-    - Sum all interruption hours in the period
-    - Divide by number of days to get average hours per day
+    CORRECTED Logic:
+    - Includes ALL interruptions active during the period (not just those that started in the period)
+    - Calculates only the hours that fall within the filtered period boundaries
+    - For a single feeder: Sum all interruption hours / number of days
+    - Caps total at (24 * period_days) to handle overlapping interruptions
     
     Returns:
         tuple: (avg_duration_per_day, total_interruption_count)
+            - avg_duration_per_day: Average interruption hours per day
+            - total_interruption_count: COUNT of interruptions that occurred in period (for FTC)
     """
+    period_days = (to_date - from_date).days + 1
+    max_possible_hours = period_days * 24.0
+    
+    start_of_period = timezone.make_aware(
+        datetime.combine(from_date, datetime.min.time())
+    )
     end_of_period = timezone.make_aware(
         datetime.combine(to_date, datetime.max.time())
     )
     
     # Build exclusion clause
     exclusion_clause = ""
-    params = [end_of_period, end_of_period, feeder_id, from_date, to_date]
+    # FIXED: Correct parameter order for duration calculation
+    duration_params = [end_of_period, end_of_period, start_of_period, feeder_id, from_date, end_of_period, start_of_period, start_of_period]
+    
+    # Parameters for count calculation (only interruptions that occurred in period)
+    count_params = [feeder_id, from_date, to_date]
     
     if exclude_types:
         placeholders = ','.join(['%s'] * len(exclude_types))
         exclusion_clause = f"AND interruption_type NOT IN ({placeholders})"
-        params.extend(exclude_types)
+        duration_params.extend(exclude_types)
+        count_params.extend(exclude_types)
     
-    # Calculate total hours and count for this feeder
-    query = f"""
+    # CORRECTED: Calculate total hours for interruptions active during period
+    # Added GREATEST(..., 0) to ensure non-negative values
+    duration_query = f"""
         SELECT 
-            SUM(
-                CASE 
-                    WHEN restored_at IS NOT NULL AND restored_at <= %s THEN
-                        EXTRACT(EPOCH FROM (restored_at - occurred_at)) / 3600.0
-                    ELSE
-                        EXTRACT(EPOCH FROM (%s - occurred_at)) / 3600.0
-                END
-            ) as total_hours,
-            COUNT(*) as interruption_count
+            COALESCE(SUM(
+                GREATEST(
+                    EXTRACT(EPOCH FROM (
+                        LEAST(COALESCE(restored_at, %s), %s) - GREATEST(occurred_at, %s)
+                    )) / 3600.0,
+                    0
+                )
+            ), 0) as total_hours
+        FROM technical_feederinterruption
+        WHERE feeder_id = %s
+            AND (
+                DATE(occurred_at) BETWEEN %s AND DATE(%s)
+                OR (occurred_at < %s AND (restored_at IS NULL OR restored_at >= %s))
+            )
+            {exclusion_clause}
+    """
+    
+    # Separate query for count (only interruptions that occurred in period)
+    count_query = f"""
+        SELECT COUNT(*) as interruption_count
         FROM technical_feederinterruption
         WHERE feeder_id = %s
             AND DATE(occurred_at) BETWEEN %s AND %s
@@ -144,15 +171,24 @@ def calculate_feeder_interruption_metrics_sql(feeder_id, from_date, to_date, exc
     """
     
     with connection.cursor() as cursor:
-        cursor.execute(query, params)
+        # Get duration
+        cursor.execute(duration_query, duration_params)
         result = cursor.fetchone()
+        total_hours = float(result[0]) if result and result[0] else 0
         
-        total_hours = result[0] if result and result[0] else 0
-        total_interruptions = result[1] if result and result[1] else 0
+        # Get count
+        cursor.execute(count_query, count_params)
+        result = cursor.fetchone()
+        total_interruptions = result[0] if result and result[0] else 0
+    
+    # Cap total hours at maximum possible (handles overlapping interruptions)
+    total_hours = min(total_hours, max_possible_hours)
     
     # Calculate average per day
-    period_days = (to_date - from_date).days + 1
-    avg_hours_per_day = total_hours / period_days if period_days > 0 and total_hours else 0
+    avg_hours_per_day = total_hours / period_days if period_days > 0 else 0
+    
+    # Ensure non-negative and cap at 24
+    avg_hours_per_day = max(0, min(avg_hours_per_day, 24.0))
     
     return round(avg_hours_per_day, 2), int(total_interruptions)
 
@@ -161,18 +197,22 @@ def calculate_feeder_metrics_optimized(feeder, from_date, to_date, mode):
     """
     Calculate feeder metrics using optimized SQL queries.
     
+    CORRECTED: Interruption duration includes all active interruptions,
+    but count only includes interruptions that occurred in period.
+    
     For individual feeders, we calculate:
     - Average hours per day of supply
-    - Average hours per day of interruptions
-    - Average hours per day of local faults (turnaround)
+    - Average hours per day of interruptions (all active during period)
+    - Average hours per day of local faults (all active during period, excludes L/S and TCN)
+    - Total interruption count (only occurred during period)
     """
     try:
         # 1. Average Supply Hours (per day)
-        avg_supply = calculate_feeder_hours_of_supply_sql(
+        avg_supply = float(calculate_feeder_hours_of_supply_sql(
             feeder.id, 
             from_date, 
             to_date
-        )
+        ))
     except Exception as e:
         print(f"DEBUG: SQL failed for supply hours on feeder {feeder.name}, using ORM: {str(e)}")
         # Fallback to ORM
@@ -191,88 +231,119 @@ def calculate_feeder_metrics_optimized(feeder, from_date, to_date, mode):
             avg_supply = 0.0
     
     try:
-        # 2. Interruption Duration (ALL interruptions, per day)
+        # 2. Interruption Duration (ALL interruptions active during period, per day) - CORRECTED
         avg_duration, ftc_all = calculate_feeder_interruption_metrics_sql(
             feeder.id,
             from_date,
             to_date
         )
+        avg_duration = float(avg_duration)
     except Exception as e:
         print(f"DEBUG: SQL failed for interruption metrics on feeder {feeder.name}, using ORM: {str(e)}")
         # Fallback to ORM
+        start_of_period = timezone.make_aware(
+            datetime.combine(from_date, datetime.min.time())
+        )
         end_of_period = timezone.make_aware(
             datetime.combine(to_date, datetime.max.time())
         )
         
+        # Get all interruptions active during period
         interruptions = FeederInterruption.objects.filter(
-            feeder_id=feeder.id,
-            occurred_at__date__range=(from_date, to_date)
+            feeder_id=feeder.id
+        ).filter(
+            Q(occurred_at__date__range=(from_date, to_date)) |
+            Q(occurred_at__lt=start_of_period, restored_at__gte=start_of_period) |
+            Q(occurred_at__lt=start_of_period, restored_at__isnull=True)
         )
         
-        total_hours = 0
-        ftc_all = interruptions.count()
+        # Count only those that occurred in period
+        ftc_all = FeederInterruption.objects.filter(
+            feeder_id=feeder.id,
+            occurred_at__date__range=(from_date, to_date)
+        ).count()
         
+        total_hours = 0
         for interruption in interruptions:
-            if interruption.restored_at and interruption.restored_at <= end_of_period:
-                duration = (interruption.restored_at - interruption.occurred_at).total_seconds() / 3600
-            else:
-                duration = (end_of_period - interruption.occurred_at).total_seconds() / 3600
-            total_hours += duration
+            # Calculate only hours within period
+            start_time = max(interruption.occurred_at, start_of_period)
+            end_time = min(
+                interruption.restored_at if interruption.restored_at else end_of_period,
+                end_of_period
+            )
+            
+            if end_time > start_time:
+                duration = (end_time - start_time).total_seconds() / 3600
+                total_hours += duration
         
         period_days = (to_date - from_date).days + 1
         avg_duration = round(total_hours / period_days, 2) if period_days > 0 else 0
     
     try:
-        # 3. Turnaround Time (LOCAL faults only, per day)
+        # 3. Turnaround Time (LOCAL faults only active during period, per day) - CORRECTED
         turnaround, ftc_local = calculate_feeder_interruption_metrics_sql(
             feeder.id,
             from_date,
             to_date,
             exclude_types=TURNAROUND_EXCLUSIONS
         )
+        turnaround = float(turnaround)
     except Exception as e:
         print(f"DEBUG: SQL failed for turnaround time on feeder {feeder.name}, using ORM: {str(e)}")
         # Fallback to ORM
+        start_of_period = timezone.make_aware(
+            datetime.combine(from_date, datetime.min.time())
+        )
         end_of_period = timezone.make_aware(
             datetime.combine(to_date, datetime.max.time())
         )
         
+        # Get all local fault interruptions active during period
         interruptions = FeederInterruption.objects.filter(
+            feeder_id=feeder.id
+        ).exclude(
+            interruption_type__in=TURNAROUND_EXCLUSIONS
+        ).filter(
+            Q(occurred_at__date__range=(from_date, to_date)) |
+            Q(occurred_at__lt=start_of_period, restored_at__gte=start_of_period) |
+            Q(occurred_at__lt=start_of_period, restored_at__isnull=True)
+        )
+        
+        # Count only those that occurred in period
+        ftc_local = FeederInterruption.objects.filter(
             feeder_id=feeder.id,
             occurred_at__date__range=(from_date, to_date)
-        ).exclude(interruption_type__in=TURNAROUND_EXCLUSIONS)
+        ).exclude(interruption_type__in=TURNAROUND_EXCLUSIONS).count()
         
         total_hours = 0
-        ftc_local = interruptions.count()
-        
         for interruption in interruptions:
-            if interruption.restored_at and interruption.restored_at <= end_of_period:
-                duration = (interruption.restored_at - interruption.occurred_at).total_seconds() / 3600
-            else:
-                duration = (end_of_period - interruption.occurred_at).total_seconds() / 3600
-            total_hours += duration
+            # Calculate only hours within period
+            start_time = max(interruption.occurred_at, start_of_period)
+            end_time = min(
+                interruption.restored_at if interruption.restored_at else end_of_period,
+                end_of_period
+            )
+            
+            if end_time > start_time:
+                duration = (end_time - start_time).total_seconds() / 3600
+                total_hours += duration
         
         period_days = (to_date - from_date).days + 1
         turnaround = round(total_hours / period_days, 2) if period_days > 0 else 0
     
-    # Validation
-    if avg_supply > 24:
-        avg_supply = 24.0
-    
-    if avg_duration > 24:
-        avg_duration = 24.0
-    
-    if turnaround > 24:
-        turnaround = 24.0
+    # Validation - cap at 24 hours
+    avg_supply = min(avg_supply, 24.0)
+    avg_duration = min(avg_duration, 24.0)
+    turnaround = min(turnaround, 24.0)
     
     return {
         "feeder_name": feeder.name,
         "feeder_slug": feeder.slug,
         "voltage_level": feeder.voltage_level,
-        "avg_hours_of_supply": avg_supply,
-        "duration_of_interruptions": avg_duration,
-        "turnaround_time": turnaround,
-        "ftc": ftc_all,  # Total interruption count
+        "avg_hours_of_supply": round(avg_supply, 2),
+        "duration_of_interruptions": round(avg_duration, 2),
+        "turnaround_time": round(turnaround, 2),
+        "ftc": ftc_all,  # Total interruption count (occurred in period)
         "_source": f"optimized_sql_{mode}"
     }
 
@@ -353,17 +424,17 @@ class FeederAvailabilityOverview(APIView):
             "feeder_slug": "feeder-name",
             "voltage_level": "11kv",
             "avg_hours_of_supply": 18.5,        // Hours/day (0-24)
-            "duration_of_interruptions": 3.2,   // Hours/day (0-24)
-            "turnaround_time": 1.5,             // Hours/day (0-24)
-            "ftc": 12                           // Total interruption count
+            "duration_of_interruptions": 3.2,   // Hours/day (0-24) - All active interruptions
+            "turnaround_time": 1.5,             // Hours/day (0-24) - Local faults only
+            "ftc": 12                           // Count of interruptions that occurred in period
         }
     ]
     
-    Key Metrics:
+    Key Metrics (CORRECTED):
     - avg_hours_of_supply: Average hours per day of electricity supply (0-24)
-    - duration_of_interruptions: Average hours per day of ALL interruptions (0-24)
-    - turnaround_time: Average hours per day of LOCAL faults only (0-24)
-    - ftc: Feeder Tripping Count - total number of interruptions in period
+    - duration_of_interruptions: Average hours per day of ALL interruptions active during period (0-24)
+    - turnaround_time: Average hours per day of LOCAL faults active during period (0-24)
+    - ftc: Feeder Tripping Count - total number of interruptions that OCCURRED in period
     """
 
     def get(self, request):
