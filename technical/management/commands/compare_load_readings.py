@@ -15,16 +15,29 @@ class Command(BaseCommand):
         parser.add_argument('--feeders', type=str, help='Comma-separated feeder slugs')
         parser.add_argument('--output', type=str, help='Output CSV file')
         parser.add_argument('--batch-size', type=int, default=50, help='Number of feeders to process per batch')
+        parser.add_argument('--db-alias', type=str, default='external', help='Database alias for external DB (default: external)')
 
     def handle(self, *args, **options):
         from_date = datetime.strptime(options['from_date'], '%Y-%m-%d').date()
         to_date = datetime.strptime(options['to_date'], '%Y-%m-%d').date()
         batch_size = options['batch_size']
+        db_alias = options['db_alias']
+        
+        # Verify database connection exists
+        if db_alias not in connections:
+            self.stdout.write(self.style.ERROR(f'\nDatabase connection "{db_alias}" does not exist!'))
+            self.stdout.write('\nAvailable connections:')
+            for alias in connections:
+                self.stdout.write(f'  - {alias}')
+            self.stdout.write(f'\nPlease add the external database to your settings.py DATABASES configuration.')
+            self.stdout.write(f'Or use --db-alias to specify an existing connection.\n')
+            return
         
         self.stdout.write(self.style.SUCCESS(f'\n{"="*70}'))
         self.stdout.write(self.style.SUCCESS(f'OPTIMIZED LOAD READING COMPARISON'))
         self.stdout.write(self.style.SUCCESS(f'{"="*70}'))
         self.stdout.write(f'Period: {from_date} to {to_date}')
+        self.stdout.write(f'External DB: {db_alias}')
         
         # Get feeders
         feeders = Feeder.objects.all()
@@ -58,7 +71,7 @@ class Command(BaseCommand):
             
             # BULK QUERY 1: Get all external readings for this batch at once
             external_readings = defaultdict(dict)
-            with connections['external'].cursor() as cursor:
+            with connections[db_alias].cursor() as cursor:
                 placeholders = ','.join(['%s'] * len(batch_slugs))
                 query = f"""
                     SELECT feeder_id, Date, Hour_d, LoadS

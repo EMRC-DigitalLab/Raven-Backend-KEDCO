@@ -135,6 +135,17 @@ DATABASES = {
         'PASSWORD': config('DB_PASSWORD'),
         'HOST': config('DB_HOST', default='localhost'),
         'PORT': config('DB_PORT', default='5432'),
+    },
+    'external': {
+        'ENGINE': 'django.db.backends.mysql',
+        'NAME': 'dataNestDB_KEDCO',
+        'USER': 'root',
+        'PASSWORD': config('DATANEST_DB_PASSWORD'),
+        'HOST': config('DATANEST_DB_HOST'),
+        'PORT': '3306',
+        'OPTIONS': {
+            'charset': 'utf8mb4',
+        },
     }
 }
 
