@@ -74,6 +74,7 @@ class Command(BaseCommand):
                 
                 # BULK QUERY 1: Get all external readings for this batch at once
                 external_readings = defaultdict(dict)
+                external_faults = defaultdict(dict)  # Track fault codes separately
                 placeholders = ','.join(['%s'] * len(batch_slugs))
                 query = f"""
                     SELECT feeder_id, Date, Hour_d, LoadS
@@ -97,6 +98,8 @@ class Command(BaseCommand):
                         load_mw = float(load_val)
                         external_readings[feeder_slug][(date_val, hour_val)] = load_mw
                     except (ValueError, TypeError):
+                        # This is a fault code, not a numeric value
+                        external_faults[feeder_slug][(date_val, hour_val)] = str(load_val)
                         continue
                 
                 # BULK QUERY 2: Get all Raven readings for this batch at once
@@ -118,9 +121,10 @@ class Command(BaseCommand):
                     feeder_name = feeder['name']
                     
                     ext_readings = external_readings.get(feeder_slug, {})
+                    ext_faults = external_faults.get(feeder_slug, {})
                     rav_readings = raven_readings.get(feeder_slug, {})
                     
-                    # Get all unique (date, hour) combinations
+                    # Get all unique (date, hour) combinations from numeric readings only
                     all_keys = set(ext_readings.keys()) | set(rav_readings.keys())
                     feeder_disc_count = 0
                     
@@ -129,19 +133,30 @@ class Command(BaseCommand):
                         ext_val = ext_readings.get((date, hour))
                         rav_val = rav_readings.get((date, hour))
                         
+                        # Check if external has a fault code at this time
+                        ext_has_fault = (date, hour) in ext_faults
+                        
+                        # Skip if Raven is 0 and external has a fault code
+                        # This is expected behavior - when there's a fault, load should be 0
+                        if rav_val == 0 and ext_has_fault:
+                            continue
+                        
                         # Check for discrepancies
                         if ext_val is None and rav_val is not None:
-                            discrepancies.append({
-                                'type': 'missing_external',
-                                'feeder': feeder_name,
-                                'feeder_slug': feeder_slug,
-                                'date': date,
-                                'hour': hour,
-                                'external': None,
-                                'raven': float(rav_val),
-                                'difference': None,
-                            })
-                            feeder_disc_count += 1
+                            # External has no reading (or fault), but Raven has a value
+                            # Only count as discrepancy if Raven value is non-zero
+                            if rav_val > 0:
+                                discrepancies.append({
+                                    'type': 'missing_external',
+                                    'feeder': feeder_name,
+                                    'feeder_slug': feeder_slug,
+                                    'date': date,
+                                    'hour': hour,
+                                    'external': 'Fault' if ext_has_fault else None,
+                                    'raven': float(rav_val),
+                                    'difference': None,
+                                })
+                                feeder_disc_count += 1
                         elif rav_val is None and ext_val is not None:
                             discrepancies.append({
                                 'type': 'missing_raven',
