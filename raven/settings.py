@@ -51,7 +51,8 @@ INSTALLED_APPS = [
     'regulatory',
     'corsheaders',
     'analytics',
-    'users'
+    'users',
+    'reports',
 ]
 
 MIDDLEWARE = [
@@ -172,7 +173,10 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/5.1/howto/static-files/
 
 STATIC_URL = 'static/'
-STATIC_ROOT = '/home/staticfiles'
+# STATIC_ROOT = config('STATIC_ROOT')
+STATICFILES_DIRS = [
+    os.path.join(BASE_DIR, 'static'),
+]
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.1/ref/settings/#default-auto-field
@@ -248,3 +252,6 @@ SIMPLE_JWT = {
     'SLIDING_TOKEN_LIFETIME': timedelta(minutes=60),
     'SLIDING_TOKEN_REFRESH_LIFETIME': timedelta(days=7),
 }
+
+
+BASE_URL = config('BASE_URL')
