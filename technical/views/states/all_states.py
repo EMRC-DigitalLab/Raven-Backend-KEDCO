@@ -80,22 +80,24 @@ def calculate_state_hours_of_supply_sql(state_id, from_date, to_date):
     """
     Calculate average hours of supply per day for a state using raw SQL.
     
-    CORRECTED Logic:
-    - Numerator: Sum of all hours supplied across all feeders with data in the state
-    - Denominator: Total feeders in state × Days in period
-    - This properly accounts for feeders with no data (they contribute 0)
+    UPDATED Logic:
+    - Only considers ONBOARDED feeders
+    - Numerator: Sum of all hours supplied across all ONBOARDED feeders with data in the state
+    - Denominator: Total ONBOARDED feeders in state × Days in period
+    - This properly accounts for onboarded feeders with no data (they contribute 0)
     """
     period_days = (to_date - from_date).days + 1
     
-    # Get total feeders in state
+    # Get total ONBOARDED feeders in state
     feeder_count_query = """
         SELECT COUNT(DISTINCT f.id)
         FROM common_feeder f
         INNER JOIN common_businessdistrict bd ON f.business_district_id = bd.id
         WHERE bd.state_id = %s
+            AND f.is_onboarded = TRUE
     """
     
-    # Get total hours supplied across all feeders
+    # Get total hours supplied across ONBOARDED feeders only
     hours_query = """
         SELECT 
             COUNT(DISTINCT CONCAT(hl.feeder_id, '-', hl.date, '-', hl.hour)) as total_hours
@@ -103,12 +105,13 @@ def calculate_state_hours_of_supply_sql(state_id, from_date, to_date):
         INNER JOIN common_feeder f ON hl.feeder_id = f.id
         INNER JOIN common_businessdistrict bd ON f.business_district_id = bd.id
         WHERE bd.state_id = %s
+            AND f.is_onboarded = TRUE
             AND hl.date BETWEEN %s AND %s
             AND hl.load_mw > 0
     """
     
     with connection.cursor() as cursor:
-        # Get feeder count
+        # Get onboarded feeder count
         cursor.execute(feeder_count_query, [state_id])
         result = cursor.fetchone()
         total_feeders = result[0] if result and result[0] else 0
@@ -121,7 +124,7 @@ def calculate_state_hours_of_supply_sql(state_id, from_date, to_date):
         result = cursor.fetchone()
         total_hours = result[0] if result and result[0] else 0
     
-    # Average = Total hours / (Total feeders × Days)
+    # Average = Total hours / (Total onboarded feeders × Days)
     avg_hours_per_day = total_hours / (total_feeders * period_days)
     
     return round(min(avg_hours_per_day, 24.0), 2)
@@ -131,12 +134,13 @@ def calculate_state_interruption_metrics_sql(state_id, from_date, to_date, exclu
     """
     Calculate average interruption duration per day for a state using raw SQL.
     
-    CORRECTED Logic:
+    UPDATED Logic:
+    - Only considers ONBOARDED feeders
     - Includes ALL interruptions active during the period (not just those that started in the period)
     - Calculates only the hours that fall within the filtered period boundaries
-    - Numerator: Sum of all interruption hours across all feeders with interruptions
-    - Denominator: Total feeders in state × Days in period
-    - This properly accounts for feeders with no interruptions (they contribute 0)
+    - Numerator: Sum of all interruption hours across all ONBOARDED feeders with interruptions
+    - Denominator: Total ONBOARDED feeders in state × Days in period
+    - This properly accounts for onboarded feeders with no interruptions (they contribute 0)
     
     Returns:
         tuple: (avg_duration_per_day, total_interruption_count)
@@ -152,17 +156,18 @@ def calculate_state_interruption_metrics_sql(state_id, from_date, to_date, exclu
         datetime.combine(to_date, datetime.max.time())
     )
     
-    # Get total feeders in state
+    # Get total ONBOARDED feeders in state
     feeder_count_query = """
         SELECT COUNT(DISTINCT f.id)
         FROM common_feeder f
         INNER JOIN common_businessdistrict bd ON f.business_district_id = bd.id
         WHERE bd.state_id = %s
+            AND f.is_onboarded = TRUE
     """
     
     # Build exclusion clause for turnaround time
     exclusion_clause = ""
-    # CORRECTED: Parameters for duration calculation (includes all active interruptions)
+    # Parameters for duration calculation (includes all active interruptions)
     duration_params = [end_of_period, end_of_period, start_of_period, period_days * 24.0, state_id, from_date, end_of_period, start_of_period, start_of_period]
     
     # Parameters for count calculation (only interruptions that occurred in period)
@@ -174,8 +179,8 @@ def calculate_state_interruption_metrics_sql(state_id, from_date, to_date, exclu
         duration_params.extend(exclude_types)
         count_params.extend(exclude_types)
     
-    # CORRECTED: Calculate per-feeder totals first, then cap each at (24 * period_days)
-    # This prevents multiple overlapping interruptions from inflating the average
+    # Calculate per-feeder totals first, then cap each at (24 * period_days)
+    # Only considers ONBOARDED feeders
     interruption_duration_query = f"""
         SELECT 
             COALESCE(SUM(capped_hours), 0) as total_hours
@@ -197,6 +202,7 @@ def calculate_state_interruption_metrics_sql(state_id, from_date, to_date, exclu
             INNER JOIN common_feeder f ON fi.feeder_id = f.id
             INNER JOIN common_businessdistrict bd ON f.business_district_id = bd.id
             WHERE bd.state_id = %s
+                AND f.is_onboarded = TRUE
                 AND (
                     DATE(fi.occurred_at) BETWEEN %s AND DATE(%s)
                     OR (fi.occurred_at < %s AND (fi.restored_at IS NULL OR fi.restored_at >= %s))
@@ -206,19 +212,20 @@ def calculate_state_interruption_metrics_sql(state_id, from_date, to_date, exclu
         ) per_feeder_totals
     """
     
-    # Separate query for count (only interruptions that occurred in period)
+    # Separate query for count (only interruptions that occurred in period, ONBOARDED feeders only)
     interruption_count_query = f"""
         SELECT COUNT(*) as total_interruptions
         FROM technical_feederinterruption fi
         INNER JOIN common_feeder f ON fi.feeder_id = f.id
         INNER JOIN common_businessdistrict bd ON f.business_district_id = bd.id
         WHERE bd.state_id = %s
+            AND f.is_onboarded = TRUE
             AND DATE(fi.occurred_at) BETWEEN %s AND %s
             {exclusion_clause}
     """
     
     with connection.cursor() as cursor:
-        # Get feeder count
+        # Get onboarded feeder count
         cursor.execute(feeder_count_query, [state_id])
         result = cursor.fetchone()
         total_feeders = result[0] if result and result[0] else 0
@@ -236,7 +243,7 @@ def calculate_state_interruption_metrics_sql(state_id, from_date, to_date, exclu
         result = cursor.fetchone()
         total_interruptions = result[0] if result and result[0] else 0
     
-    # Average = Total hours / (Total feeders × Days)
+    # Average = Total hours / (Total onboarded feeders × Days)
     avg_hours_per_day = total_hours / (total_feeders * period_days)
     
     # Ensure non-negative and cap at 24
@@ -248,6 +255,8 @@ def calculate_state_interruption_metrics_sql(state_id, from_date, to_date, exclu
 def calculate_state_peak_load_sql(state_id, from_date, to_date):
     """
     Get the peak load within the date range for a state using raw SQL.
+    
+    UPDATED: Only considers ONBOARDED feeders.
     """
     query = """
         SELECT 
@@ -256,6 +265,7 @@ def calculate_state_peak_load_sql(state_id, from_date, to_date):
         INNER JOIN common_feeder f ON hl.feeder_id = f.id
         INNER JOIN common_businessdistrict bd ON f.business_district_id = bd.id
         WHERE bd.state_id = %s
+            AND f.is_onboarded = TRUE
             AND hl.date BETWEEN %s AND %s
     """
     
@@ -269,7 +279,9 @@ def calculate_state_peak_load_sql(state_id, from_date, to_date):
 
 def get_state_infrastructure_counts_sql(state_id):
     """
-    Get feeder count and customer population for a state using raw SQL.
+    Get ONBOARDED feeder count and customer population for a state using raw SQL.
+    
+    UPDATED: Only counts onboarded feeders.
     """
     query = """
         SELECT 
@@ -280,6 +292,7 @@ def get_state_infrastructure_counts_sql(state_id):
         LEFT JOIN common_distributiontransformer dt ON dt.feeder_id = f.id
         LEFT JOIN commercial_customer c ON c.transformer_id = dt.id
         WHERE bd.state_id = %s
+            AND f.is_onboarded = TRUE
     """
     
     with connection.cursor() as cursor:
@@ -298,14 +311,16 @@ def get_state_infrastructure_counts_sql(state_id):
 def calculate_state_metrics_optimized(state, from_date, to_date, mode):
     """
     Calculate state metrics using optimized SQL queries.
-    All calculations use network-wide averaging (ALL feeders in state × Days).
+    All calculations use network-wide averaging (ALL ONBOARDED feeders in state × Days).
     Falls back to ORM if SQL queries fail.
+    
+    UPDATED: Only considers ONBOARDED feeders.
     
     CORRECTED: Interruption duration includes all active interruptions, 
     but FTC only counts interruptions that occurred within the period.
     """
     try:
-        # 1. Average Supply Hours (per day) - CORRECTED
+        # 1. Average Supply Hours (per day) - ONBOARDED feeders only
         avg_supply = calculate_state_hours_of_supply_sql(
             state.id, 
             from_date, 
@@ -315,12 +330,13 @@ def calculate_state_metrics_optimized(state, from_date, to_date, mode):
         print(f"DEBUG: SQL failed for supply hours, using ORM fallback: {str(e)}")
         # Fallback to ORM
         feeder_ids = list(Feeder.objects.filter(
-            business_district__state=state
+            business_district__state=state,
+            is_onboarded=True
         ).values_list('id', flat=True))
         avg_supply = calculate_avg_supply_orm(state.id, from_date, to_date, feeder_ids)
     
     try:
-        # 2. Interruption Duration (ALL interruptions active during period) - CORRECTED
+        # 2. Interruption Duration (ALL interruptions active during period) - ONBOARDED feeders only
         avg_duration, ftc_all = calculate_state_interruption_metrics_sql(
             state.id,
             from_date,
@@ -330,14 +346,15 @@ def calculate_state_metrics_optimized(state, from_date, to_date, mode):
         print(f"DEBUG: SQL failed for interruption metrics, using ORM fallback: {str(e)}")
         # Fallback to ORM
         feeder_ids = list(Feeder.objects.filter(
-            business_district__state=state
+            business_district__state=state,
+            is_onboarded=True
         ).values_list('id', flat=True))
         avg_duration, ftc_all = calculate_interruption_metrics_orm(
             state.id, from_date, to_date, feeder_ids
         )
     
     try:
-        # 3. Turnaround Time (LOCAL faults only, active during period) - CORRECTED
+        # 3. Turnaround Time (LOCAL faults only, active during period) - ONBOARDED feeders only
         turnaround, ftc_local = calculate_state_interruption_metrics_sql(
             state.id,
             from_date,
@@ -348,14 +365,15 @@ def calculate_state_metrics_optimized(state, from_date, to_date, mode):
         print(f"DEBUG: SQL failed for turnaround time, using ORM fallback: {str(e)}")
         # Fallback to ORM
         feeder_ids = list(Feeder.objects.filter(
-            business_district__state=state
+            business_district__state=state,
+            is_onboarded=True
         ).values_list('id', flat=True))
         turnaround, ftc_local = calculate_interruption_metrics_orm(
             state.id, from_date, to_date, feeder_ids, exclude_types=TURNAROUND_EXCLUSIONS
         )
     
     try:
-        # 4. Peak Load (maximum load in the period)
+        # 4. Peak Load (maximum load in the period) - ONBOARDED feeders only
         peak_load = calculate_state_peak_load_sql(
             state.id,
             from_date,
@@ -365,7 +383,8 @@ def calculate_state_metrics_optimized(state, from_date, to_date, mode):
         print(f"DEBUG: SQL failed for peak load, using ORM fallback: {str(e)}")
         # Fallback to ORM
         feeder_ids = list(Feeder.objects.filter(
-            business_district__state=state
+            business_district__state=state,
+            is_onboarded=True
         ).values_list('id', flat=True))
         peak_data = HourlyLoad.objects.filter(
             feeder_id__in=feeder_ids,
@@ -374,15 +393,19 @@ def calculate_state_metrics_optimized(state, from_date, to_date, mode):
         peak_load = round(float(peak_data["peak"] or 0), 2)
     
     try:
-        # 5. Infrastructure counts
+        # 5. Infrastructure counts - ONBOARDED feeders only
         infrastructure = get_state_infrastructure_counts_sql(state.id)
     except Exception as e:
         print(f"DEBUG: SQL failed for infrastructure counts, using ORM fallback: {str(e)}")
         # Fallback to ORM
-        feeders = Feeder.objects.filter(business_district__state=state)
+        feeders = Feeder.objects.filter(
+            business_district__state=state,
+            is_onboarded=True
+        )
         feeder_count = feeders.count()
         customer_count = Customer.objects.filter(
-            transformer__feeder__business_district__state=state
+            transformer__feeder__business_district__state=state,
+            transformer__feeder__is_onboarded=True
         ).count()
         infrastructure = {
             'feeder_count': feeder_count,
@@ -416,6 +439,8 @@ def all_states_technical_summary(request):
     """
     Optimized technical summary for all states supporting multiple modes.
     
+    UPDATED: Only considers ONBOARDED feeders for all calculations.
+    
     Modes:
     - monthly: Month-based filtering (year, month params)
     - yearly: Year-based filtering (year param)
@@ -437,34 +462,34 @@ def all_states_technical_summary(request):
     - ?mode=weekly&from_date=2024-08-05T00:00:00.000Z&to_date=2024-08-11T23:59:59.999Z
     - ?mode=custom&from_date=2024-08-01T00:00:00.000Z&to_date=2024-08-15T23:59:59.999Z
     
-    Key Metrics (CORRECTED):
-    - avg_supply: Average hours per day of electricity supply across ALL feeders (0-24)
-    - avg_duration: Average hours per day of interruptions across ALL feeders (0-24)
+    Key Metrics (CORRECTED - ONBOARDED FEEDERS ONLY):
+    - avg_supply: Average hours per day of electricity supply across ALL ONBOARDED feeders (0-24)
+    - avg_duration: Average hours per day of interruptions across ALL ONBOARDED feeders (0-24)
       * Includes ALL interruptions active during the period
       * Calculates only hours that fall within the period
-    - turnaround: Average hours per day of local faults across ALL feeders (0-24)
+    - turnaround: Average hours per day of local faults across ALL ONBOARDED feeders (0-24)
       * Includes ALL local faults active during the period
       * Calculates only hours that fall within the period
-    - ftc: Feeder Tripping Count - total number of interruptions that OCCURRED in period
-    - peak_load: Maximum load (MW) recorded in the period
-    - feeder_count: Number of active feeders in the state
-    - customer_population: Total number of customers in the state
+    - ftc: Feeder Tripping Count - total number of interruptions that OCCURRED in period (ONBOARDED feeders only)
+    - peak_load: Maximum load (MW) recorded in the period (ONBOARDED feeders only)
+    - feeder_count: Number of ONBOARDED feeders in the state
+    - customer_population: Total number of customers on ONBOARDED feeders in the state
     """
     try:
         from_date, to_date, mode = get_date_range_from_request(request)
     except ValueError as e:
         return Response({"error": str(e)}, status=400)
     
-    # Get all states with feeders using Django ORM (more reliable)
+    # Get all states with ONBOARDED feeders using Django ORM
     states_with_feeders = State.objects.filter(
-        districts__feeders__isnull=False
+        districts__feeders__is_onboarded=True
     ).distinct().order_by('name')
     
     overview = []
     
     for state in states_with_feeders:
         try:
-            # Calculate metrics using optimized SQL
+            # Calculate metrics using optimized SQL (ONBOARDED feeders only)
             state_metrics = calculate_state_metrics_optimized(
                 state, 
                 from_date, 
@@ -492,6 +517,7 @@ def all_states_technical_summary(request):
         "to_date": to_date.isoformat(),
         "period_days": (to_date - from_date).days + 1,
         "total_states": len(overview),
+        "onboarded_feeders_only": True  # Indicator that only onboarded feeders are counted
     }
     
     # Add mode-specific metadata
@@ -516,7 +542,7 @@ def calculate_avg_supply_orm(state_id, from_date, to_date, feeder_ids):
     Calculate average supply using Django ORM (slower but no raw SQL).
     Use this as fallback if raw SQL has issues.
     
-    CORRECTED: Uses network-wide averaging.
+    UPDATED: Uses network-wide averaging with ONBOARDED feeders only.
     """
     period_days = (to_date - from_date).days + 1
     total_feeders = len(feeder_ids)
@@ -524,14 +550,14 @@ def calculate_avg_supply_orm(state_id, from_date, to_date, feeder_ids):
     if total_feeders == 0:
         return 0.0
     
-    # Count total hours supplied
+    # Count total hours supplied (feeder_ids already filtered for onboarded)
     total_hours = HourlyLoad.objects.filter(
         date__range=(from_date, to_date), 
         load_mw__gt=0, 
         feeder_id__in=feeder_ids
     ).values('feeder_id', 'date', 'hour').distinct().count()
     
-    # Average = Total hours / (Total feeders × Days)
+    # Average = Total hours / (Total onboarded feeders × Days)
     avg_hours_per_day = total_hours / (total_feeders * period_days)
     
     return round(min(avg_hours_per_day, 24.0), 2)
@@ -542,9 +568,10 @@ def calculate_interruption_metrics_orm(state_id, from_date, to_date, feeder_ids,
     Calculate interruption metrics using Django ORM (slower but no raw SQL).
     Use this as fallback if raw SQL has issues.
     
-    CORRECTED: 
+    UPDATED:
     - Duration includes all active interruptions, calculates only hours within period
     - Count only includes interruptions that occurred within period
+    - feeder_ids already filtered for onboarded feeders
     """
     period_days = (to_date - from_date).days + 1
     total_feeders = len(feeder_ids)
@@ -559,7 +586,7 @@ def calculate_interruption_metrics_orm(state_id, from_date, to_date, feeder_ids,
         datetime.combine(to_date, datetime.max.time())
     )
     
-    # Build query for interruptions active during period
+    # Build query for interruptions active during period (feeder_ids already filtered for onboarded)
     duration_query = FeederInterruption.objects.filter(
         feeder_id__in=feeder_ids
     ).filter(
@@ -600,7 +627,7 @@ def calculate_interruption_metrics_orm(state_id, from_date, to_date, feeder_ids,
     # Get count
     total_count = count_query.count()
     
-    # Average = Total hours / (Total feeders × Days)
+    # Average = Total hours / (Total onboarded feeders × Days)
     avg_hours_per_day = total_hours / (total_feeders * period_days)
     
     return round(min(avg_hours_per_day, 24.0), 2), total_count

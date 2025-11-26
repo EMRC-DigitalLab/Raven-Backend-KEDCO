@@ -81,9 +81,11 @@ def calculate_band_hours_of_supply_sql(feeder_ids, from_date, to_date):
     """
     Calculate average hours of supply per day for feeders in a band.
     
+    UPDATED: Only considers ONBOARDED feeders (feeder_ids already filtered).
+    
     Logic:
-    - Numerator: Sum of all hours supplied across all feeders
-    - Denominator: Total feeders × Days in period
+    - Numerator: Sum of all hours supplied across all ONBOARDED feeders
+    - Denominator: Total ONBOARDED feeders × Days in period
     """
     if not feeder_ids:
         return 0.0
@@ -107,7 +109,7 @@ def calculate_band_hours_of_supply_sql(feeder_ids, from_date, to_date):
         result = cursor.fetchone()
         total_hours = result[0] if result and result[0] else 0
     
-    # Average = Total hours / (Total feeders × Days)
+    # Average = Total hours / (Total onboarded feeders × Days)
     avg_hours_per_day = total_hours / (total_feeders * period_days)
     
     return round(min(float(avg_hours_per_day), 24.0), 2)
@@ -117,12 +119,14 @@ def calculate_band_interruption_metrics_sql(feeder_ids, from_date, to_date, excl
     """
     Calculate average interruption duration per day for feeders in a band.
     
+    UPDATED: Only considers ONBOARDED feeders (feeder_ids already filtered).
+    
     CORRECTED Logic:
     - Includes ALL interruptions active during the period
     - Calculates only hours within the filtered period boundaries
     - Caps per-feeder totals at (24 × days) to handle overlapping interruptions
     - Numerator: Sum of capped per-feeder hours
-    - Denominator: Total feeders × Days in period
+    - Denominator: Total ONBOARDED feeders × Days in period
     
     Returns:
         tuple: (avg_duration_per_day, total_interruption_count)
@@ -203,7 +207,7 @@ def calculate_band_interruption_metrics_sql(feeder_ids, from_date, to_date, excl
         result = cursor.fetchone()
         total_interruptions = result[0] if result and result[0] else 0
     
-    # Average = Total hours / (Total feeders × Days)
+    # Average = Total hours / (Total onboarded feeders × Days)
     avg_hours_per_day = total_hours / (total_feeders * period_days)
     
     # Ensure non-negative and cap at 24
@@ -213,7 +217,11 @@ def calculate_band_interruption_metrics_sql(feeder_ids, from_date, to_date, excl
 
 
 def calculate_band_peak_load_sql(feeder_ids, from_date, to_date):
-    """Calculate average peak load for feeders in a band"""
+    """
+    Calculate average peak load for feeders in a band
+    
+    UPDATED: Only considers ONBOARDED feeders (feeder_ids already filtered).
+    """
     if not feeder_ids:
         return 0.0
     
@@ -250,9 +258,14 @@ def calculate_band_metrics(band, from_date, to_date, state_filter=None):
     """
     Calculate all metrics for a single band using direct SQL queries.
     No caching - always calculates fresh data.
+    
+    UPDATED: Only considers ONBOARDED feeders for all calculations.
     """
-    # Get feeders for this band with optional state filtering
-    feeders_query = Feeder.objects.filter(band=band)
+    # Get ONBOARDED feeders for this band with optional state filtering
+    feeders_query = Feeder.objects.filter(
+        band=band,
+        is_onboarded=True  # ← ADDED
+    )
     if state_filter:
         feeders_query = feeders_query.filter(business_district__state=state_filter)
     
@@ -271,20 +284,20 @@ def calculate_band_metrics(band, from_date, to_date, state_filter=None):
             "average_peak_load": 0.0
         }
     
-    # 1. Average hours of supply
+    # 1. Average hours of supply (ONBOARDED feeders only)
     avg_supply = calculate_band_hours_of_supply_sql(feeder_ids, from_date, to_date)
     
-    # 2. Interruption duration (ALL types)
+    # 2. Interruption duration (ALL types, ONBOARDED feeders only)
     avg_duration, total_interruptions = calculate_band_interruption_metrics_sql(
         feeder_ids, from_date, to_date
     )
     
-    # 3. Turnaround time (LOCAL faults only - exclude L/S, TCN, etc.)
+    # 3. Turnaround time (LOCAL faults only - exclude L/S, TCN, etc., ONBOARDED feeders only)
     turnaround_time, local_fault_count = calculate_band_interruption_metrics_sql(
         feeder_ids, from_date, to_date, exclude_types=TURNAROUND_EXCLUSIONS
     )
     
-    # 4. Peak load
+    # 4. Peak load (ONBOARDED feeders only)
     avg_peak_load = calculate_band_peak_load_sql(feeder_ids, from_date, to_date)
     
     # 5. Customer count
@@ -318,12 +331,14 @@ def technical_service_band_summary(request):
     """
     Technical summary for all service bands with optional state filtering.
     
+    UPDATED: Only considers ONBOARDED feeders for all calculations.
+    
     Returns metrics for each service band including:
     - Average duration of supply (daily average hours of electricity supply)
     - Duration of interruption (average hours including all active interruptions)
     - Turnaround time (average hours for local faults only)
     - Feeder tripping count (local fault interruptions that occurred in period)
-    - Number of feeders in the band
+    - Number of feeders in the band (ONBOARDED feeders only)
     - Customer count (from billing data)
     - Average peak load
     
@@ -352,6 +367,17 @@ def technical_service_band_summary(request):
     Legacy format still supported:
     - ?year=2024&month=8&state=Lagos (equivalent to monthly mode)
     - ?from=2024-08-01&to=2024-08-15&state=Lagos (equivalent to custom mode)
+    
+    Key Metrics (CORRECTED - ONBOARDED FEEDERS ONLY):
+    - average_duration_of_supply: Average hours per day across ONBOARDED feeders (0-24)
+    - duration_of_interruption: Average interruption hours per day across ONBOARDED feeders (0-24)
+    - turnaround_time: Average local fault hours per day across ONBOARDED feeders (0-24)
+    - feeder_tripping_count: Count of local fault interruptions that occurred in period (ONBOARDED feeders only)
+    - number_of_feeders: Number of ONBOARDED feeders in the band
+    - customer_count: Total customers on ONBOARDED feeders (currently 0)
+    - average_peak_load: Average peak load across ONBOARDED feeders
+    
+    NOTE: Only ONBOARDED feeders are included in all calculations.
     """
     
     # Parse state filter
@@ -399,7 +425,7 @@ def technical_service_band_summary(request):
     
     for band in bands:
         try:
-            # Calculate metrics directly (no caching)
+            # Calculate metrics directly (no caching) - ONBOARDED feeders only
             band_metrics = calculate_band_metrics(band, from_date, to_date, state_filter)
             
             band_data.append({
@@ -433,7 +459,8 @@ def technical_service_band_summary(request):
         "metadata": {
             "total_bands": len(band_data),
             "bands_with_data": len([b for b in band_data if any(v > 0 for v in b["metrics"].values() if isinstance(v, (int, float)))]),
-            "bands_without_data": len([b for b in band_data if all(v == 0 for v in b["metrics"].values() if isinstance(v, (int, float)))])
+            "bands_without_data": len([b for b in band_data if all(v == 0 for v in b["metrics"].values() if isinstance(v, (int, float)))]),
+            "onboarded_feeders_only": True  # ← ADDED - Indicator that only onboarded feeders are counted
         }
     }
     

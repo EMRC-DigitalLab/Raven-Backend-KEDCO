@@ -128,7 +128,6 @@ def calculate_feeder_interruption_metrics_sql(feeder_id, from_date, to_date, exc
     
     # Build exclusion clause
     exclusion_clause = ""
-    # FIXED: Correct parameter order for duration calculation
     duration_params = [end_of_period, end_of_period, start_of_period, feeder_id, from_date, end_of_period, start_of_period, start_of_period]
     
     # Parameters for count calculation (only interruptions that occurred in period)
@@ -140,8 +139,7 @@ def calculate_feeder_interruption_metrics_sql(feeder_id, from_date, to_date, exc
         duration_params.extend(exclude_types)
         count_params.extend(exclude_types)
     
-    # CORRECTED: Calculate total hours for interruptions active during period
-    # Added GREATEST(..., 0) to ensure non-negative values
+    # Calculate total hours for interruptions active during period
     duration_query = f"""
         SELECT 
             COALESCE(SUM(
@@ -352,9 +350,11 @@ def get_feeder_availability_summary_optimized(from_date, to_date, mode, state=No
     """
     Optimized feeder availability summary using SQL queries.
     No caching, always calculates fresh data.
+    
+    UPDATED: Only considers ONBOARDED feeders.
     """
-    # Filter feeders based on location parameters
-    feeders_query = Feeder.objects.select_related('business_district__state')
+    # Filter feeders based on location parameters - ONLY ONBOARDED
+    feeders_query = Feeder.objects.filter(is_onboarded=True).select_related('business_district__state')
     
     if business_district:
         feeders_query = feeders_query.filter(business_district__name=business_district)
@@ -363,7 +363,7 @@ def get_feeder_availability_summary_optimized(from_date, to_date, mode, state=No
     
     feeders = list(feeders_query)
     
-    print(f"DEBUG: Processing {len(feeders)} feeders for mode: {mode}, dates: {from_date} to {to_date}")
+    print(f"DEBUG: Processing {len(feeders)} onboarded feeders for mode: {mode}, dates: {from_date} to {to_date}")
     
     result = []
     
@@ -382,13 +382,15 @@ def get_feeder_availability_summary_optimized(from_date, to_date, mode, state=No
             traceback.print_exc()
             continue
     
-    print(f"DEBUG: Successfully calculated metrics for {len(result)} feeders")
+    print(f"DEBUG: Successfully calculated metrics for {len(result)} onboarded feeders")
     return result
 
 
 class FeederAvailabilityOverview(APIView):
     """
     Optimized feeder availability overview API supporting multiple modes.
+    
+    UPDATED: Only considers ONBOARDED feeders for all calculations.
     
     Modes:
     - monthly: Month-based filtering (year, month params)
@@ -430,11 +432,13 @@ class FeederAvailabilityOverview(APIView):
         }
     ]
     
-    Key Metrics (CORRECTED):
+    Key Metrics (CORRECTED - ONBOARDED FEEDERS ONLY):
     - avg_hours_of_supply: Average hours per day of electricity supply (0-24)
     - duration_of_interruptions: Average hours per day of ALL interruptions active during period (0-24)
     - turnaround_time: Average hours per day of LOCAL faults active during period (0-24)
     - ftc: Feeder Tripping Count - total number of interruptions that OCCURRED in period
+    
+    NOTE: Only ONBOARDED feeders are included in the results.
     """
 
     def get(self, request):
@@ -477,7 +481,7 @@ class FeederAvailabilityOverview(APIView):
             except ValueError as e:
                 return Response({"error": str(e)}, status=400)
         
-        # Get feeder availability data using optimized method
+        # Get feeder availability data using optimized method (ONBOARDED feeders only)
         data = get_feeder_availability_summary_optimized(
             from_date=from_date,
             to_date=to_date,
@@ -504,6 +508,8 @@ def get_feeder_availability_summary(month=None, year=None, from_date=None, to_da
     """
     Legacy function maintained for backward compatibility.
     Now uses the optimized calculation method.
+    
+    UPDATED: Only returns ONBOARDED feeders.
     """
     # Determine date range
     if month and year:

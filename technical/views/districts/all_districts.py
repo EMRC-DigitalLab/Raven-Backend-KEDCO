@@ -68,26 +68,29 @@ def calculate_district_hours_of_supply_sql(district_id, from_date, to_date):
     """
     Calculate average hours of supply per day for a district using raw SQL.
     
-    CORRECTED Logic:
-    - Numerator: Total hours supplied across all feeders in district
-    - Denominator: Total feeders in district × Days
+    UPDATED Logic:
+    - Only considers ONBOARDED feeders
+    - Numerator: Total hours supplied across all ONBOARDED feeders in district
+    - Denominator: Total ONBOARDED feeders in district × Days
     """
     period_days = (to_date - from_date).days + 1
     
-    # Get total feeders in district
+    # Get total ONBOARDED feeders in district
     feeder_count_query = """
         SELECT COUNT(DISTINCT f.id)
         FROM common_feeder f
         WHERE f.business_district_id = %s
+            AND f.is_onboarded = TRUE
     """
     
-    # Get total hours supplied
+    # Get total hours supplied (ONBOARDED feeders only)
     hours_query = """
         SELECT 
             COUNT(DISTINCT CONCAT(hl.feeder_id, '-', hl.date, '-', hl.hour)) as total_hours
         FROM technical_hourlyload hl
         INNER JOIN common_feeder f ON hl.feeder_id = f.id
         WHERE f.business_district_id = %s
+            AND f.is_onboarded = TRUE
             AND hl.date BETWEEN %s AND %s
             AND hl.load_mw > 0
     """
@@ -104,7 +107,7 @@ def calculate_district_hours_of_supply_sql(district_id, from_date, to_date):
         result = cursor.fetchone()
         total_hours = result[0] if result and result[0] else 0
     
-    # Average = Total hours / (Total feeders × Days)
+    # Average = Total hours / (Total onboarded feeders × Days)
     avg_hours_per_day = total_hours / (total_feeders * period_days)
     
     return round(min(avg_hours_per_day, 24.0), 2)
@@ -114,11 +117,12 @@ def calculate_district_interruption_metrics_sql(district_id, from_date, to_date,
     """
     Calculate average interruption duration per day for a district using raw SQL.
     
-    CORRECTED Logic:
+    UPDATED Logic:
+    - Only considers ONBOARDED feeders
     - Includes ALL interruptions active during the period (not just those that started in the period)
     - Calculates only the hours that fall within the filtered period boundaries
-    - Numerator: Total interruption hours across all feeders in district
-    - Denominator: Total feeders in district × Days
+    - Numerator: Total interruption hours across all ONBOARDED feeders in district
+    - Denominator: Total ONBOARDED feeders in district × Days
     
     Returns:
         tuple: (avg_duration_per_day, total_interruption_count)
@@ -134,11 +138,12 @@ def calculate_district_interruption_metrics_sql(district_id, from_date, to_date,
         datetime.combine(to_date, datetime.max.time())
     )
     
-    # Get total feeders in district
+    # Get total ONBOARDED feeders in district
     feeder_count_query = """
         SELECT COUNT(DISTINCT f.id)
         FROM common_feeder f
         WHERE f.business_district_id = %s
+            AND f.is_onboarded = TRUE
     """
     
     # Build exclusion clause
@@ -156,8 +161,8 @@ def calculate_district_interruption_metrics_sql(district_id, from_date, to_date,
         duration_params.extend(exclude_types)
         count_params.extend(exclude_types)
     
-    # CORRECTED: Calculate per-feeder totals first, then cap each at (24 * period_days)
-    # This prevents multiple overlapping interruptions from inflating the average
+    # Calculate per-feeder totals first, then cap each at (24 * period_days)
+    # Only considers ONBOARDED feeders
     interruption_duration_query = f"""
         SELECT 
             COALESCE(SUM(capped_hours), 0) as total_hours
@@ -178,6 +183,7 @@ def calculate_district_interruption_metrics_sql(district_id, from_date, to_date,
             FROM technical_feederinterruption fi
             INNER JOIN common_feeder f ON fi.feeder_id = f.id
             WHERE f.business_district_id = %s
+                AND f.is_onboarded = TRUE
                 AND (
                     DATE(fi.occurred_at) BETWEEN %s AND DATE(%s)
                     OR (fi.occurred_at < %s AND (fi.restored_at IS NULL OR fi.restored_at >= %s))
@@ -187,12 +193,13 @@ def calculate_district_interruption_metrics_sql(district_id, from_date, to_date,
         ) per_feeder_totals
     """
     
-    # Separate query for count (only interruptions that occurred in period)
+    # Separate query for count (only interruptions that occurred in period, ONBOARDED feeders only)
     interruption_count_query = f"""
         SELECT COUNT(*) as total_interruptions
         FROM technical_feederinterruption fi
         INNER JOIN common_feeder f ON fi.feeder_id = f.id
         WHERE f.business_district_id = %s
+            AND f.is_onboarded = TRUE
             AND DATE(fi.occurred_at) BETWEEN %s AND %s
             {exclusion_clause}
     """
@@ -215,7 +222,7 @@ def calculate_district_interruption_metrics_sql(district_id, from_date, to_date,
         result = cursor.fetchone()
         total_interruptions = result[0] if result and result[0] else 0
     
-    # Average = Total hours / (Total feeders × Days)
+    # Average = Total hours / (Total onboarded feeders × Days)
     avg_hours_per_day = total_hours / (total_feeders * period_days)
     
     # Ensure non-negative and cap at 24
@@ -225,13 +232,18 @@ def calculate_district_interruption_metrics_sql(district_id, from_date, to_date,
 
 
 def calculate_district_energy_sql(district_id, from_date, to_date):
-    """Calculate total energy delivered for a district from HourlyLoad"""
+    """
+    Calculate total energy delivered for a district from HourlyLoad
+    
+    UPDATED: Only considers ONBOARDED feeders.
+    """
     query = """
         SELECT 
             COALESCE(SUM(hl.load_mw), 0) as total_energy
         FROM technical_hourlyload hl
         INNER JOIN common_feeder f ON hl.feeder_id = f.id
         WHERE f.business_district_id = %s
+            AND f.is_onboarded = TRUE
             AND hl.date BETWEEN %s AND %s
     """
     
@@ -244,13 +256,18 @@ def calculate_district_energy_sql(district_id, from_date, to_date):
 
 
 def calculate_district_peak_load_sql(district_id, from_date, to_date):
-    """Get peak load for a district"""
+    """
+    Get peak load for a district
+    
+    UPDATED: Only considers ONBOARDED feeders.
+    """
     query = """
         SELECT 
             MAX(hl.load_mw) as peak_load
         FROM technical_hourlyload hl
         INNER JOIN common_feeder f ON hl.feeder_id = f.id
         WHERE f.business_district_id = %s
+            AND f.is_onboarded = TRUE
             AND hl.date BETWEEN %s AND %s
     """
     
@@ -263,7 +280,11 @@ def calculate_district_peak_load_sql(district_id, from_date, to_date):
 
 
 def get_district_infrastructure_counts_sql(district_id):
-    """Get feeder count and customer population for a district"""
+    """
+    Get ONBOARDED feeder count and customer population for a district
+    
+    UPDATED: Only counts onboarded feeders.
+    """
     query = """
         SELECT 
             COUNT(DISTINCT f.id) as feeder_count,
@@ -272,6 +293,7 @@ def get_district_infrastructure_counts_sql(district_id):
         LEFT JOIN common_distributiontransformer dt ON dt.feeder_id = f.id
         LEFT JOIN commercial_customer c ON c.transformer_id = dt.id
         WHERE f.business_district_id = %s
+            AND f.is_onboarded = TRUE
     """
     
     with connection.cursor() as cursor:
@@ -291,12 +313,14 @@ def calculate_district_metrics(district, from_date, to_date):
     """
     Calculate all metrics for a district using optimized SQL.
     
+    UPDATED: Only considers ONBOARDED feeders for all calculations.
+    
     CORRECTED: Uses standardized field names and proper interruption calculation.
     """
     period_days = (to_date - from_date).days + 1
     
     try:
-        # 1. Average Supply Hours
+        # 1. Average Supply Hours (ONBOARDED feeders only)
         avg_supply = float(calculate_district_hours_of_supply_sql(
             district.id, from_date, to_date
         ))
@@ -305,7 +329,7 @@ def calculate_district_metrics(district, from_date, to_date):
         avg_supply = 0.0
     
     try:
-        # 2. Interruption Duration (all types, includes ALL active interruptions)
+        # 2. Interruption Duration (all types, includes ALL active interruptions, ONBOARDED feeders only)
         avg_duration, ftc = calculate_district_interruption_metrics_sql(
             district.id, from_date, to_date
         )
@@ -315,7 +339,7 @@ def calculate_district_metrics(district, from_date, to_date):
         avg_duration, ftc = 0.0, 0
     
     try:
-        # 3. Turnaround Time (exclude L/S and TCN, includes ALL active local faults)
+        # 3. Turnaround Time (exclude L/S and TCN, includes ALL active local faults, ONBOARDED feeders only)
         turnaround, _ = calculate_district_interruption_metrics_sql(
             district.id, from_date, to_date, exclude_types=TURNAROUND_EXCLUSIONS
         )
@@ -325,7 +349,7 @@ def calculate_district_metrics(district, from_date, to_date):
         turnaround = 0.0
     
     try:
-        # 4. Peak Load
+        # 4. Peak Load (ONBOARDED feeders only)
         peak_load = float(calculate_district_peak_load_sql(
             district.id, from_date, to_date
         ))
@@ -334,14 +358,14 @@ def calculate_district_metrics(district, from_date, to_date):
         peak_load = 0.0
     
     try:
-        # 5. Infrastructure counts
+        # 5. Infrastructure counts (ONBOARDED feeders only)
         infrastructure = get_district_infrastructure_counts_sql(district.id)
     except Exception as e:
         print(f"Error getting infrastructure counts for {district.name}: {e}")
         infrastructure = {'feeder_count': 0, 'customer_population': 0}
     
     try:
-        # 6. Energy delivered
+        # 6. Energy delivered (ONBOARDED feeders only)
         energy_delivered = float(calculate_district_energy_sql(
             district.id, from_date, to_date
         ))
@@ -363,10 +387,10 @@ def calculate_district_metrics(district, from_date, to_date):
     
     return {
         "avg_supply": round(avg_supply, 2),
-        "avg_duration": round(avg_duration, 2),  # CORRECTED: Standardized field name
-        "turnaround": round(turnaround, 2),  # CORRECTED: Standardized field name
-        "ftc": int(ftc),  # CORRECTED: Standardized field name
-        "avg_daily_interruptions": round(avg_daily_interruptions, 2),  # CORRECTED: Standardized field name
+        "avg_duration": round(avg_duration, 2),
+        "turnaround": round(turnaround, 2),
+        "ftc": int(ftc),
+        "avg_daily_interruptions": round(avg_daily_interruptions, 2),
         "feeder_count": int(feeder_count),
         "peak_load": round(peak_load, 2),
         "customer_population": infrastructure['customer_population'],
@@ -380,6 +404,8 @@ def all_business_districts_technical_summary(request):
     """
     Technical summary for all business districts in a state.
     
+    UPDATED: Only considers ONBOARDED feeders for all calculations.
+    
     Query Parameters:
     - state: State name (required)
     - mode: monthly, yearly, daily, weekly, custom, range
@@ -387,17 +413,19 @@ def all_business_districts_technical_summary(request):
     - For yearly: year
     - For others: from_date, to_date (ISO format)
     
-    Key Metrics (CORRECTED):
-    - avg_supply: Average hours per day across all feeders in district (0-24)
-    - avg_duration: Average interruption hours per day across all feeders (0-24)
+    Key Metrics (CORRECTED - ONBOARDED FEEDERS ONLY):
+    - avg_supply: Average hours per day across all ONBOARDED feeders in district (0-24)
+    - avg_duration: Average interruption hours per day across all ONBOARDED feeders (0-24)
       * Includes ALL interruptions active during the period
       * Calculates only hours that fall within the period
-    - turnaround: Average local fault hours per day across all feeders (0-24)
+    - turnaround: Average local fault hours per day across all ONBOARDED feeders (0-24)
       * Includes ALL local faults active during the period
       * Calculates only hours that fall within the period
-    - avg_daily_interruptions: Average interruptions per feeder per day
-    - ftc: Feeder Tripping Count - total number of interruptions that OCCURRED in period
-    - energy_delivered: Total energy in MWh
+    - avg_daily_interruptions: Average interruptions per ONBOARDED feeder per day
+    - ftc: Feeder Tripping Count - total number of interruptions that OCCURRED in period (ONBOARDED feeders only)
+    - energy_delivered: Total energy in MWh (ONBOARDED feeders only)
+    - feeder_count: Number of ONBOARDED feeders
+    - customer_population: Customers on ONBOARDED feeders
     """
     state = request.GET.get("state")
     if not state:
@@ -411,20 +439,20 @@ def all_business_districts_technical_summary(request):
     print(f"DEBUG: Request params: {dict(request.GET)}")
     print(f"DEBUG: Date range: {from_date} to {to_date}, mode: {mode}")
     
-    # Get all business districts in the state that have feeders
+    # Get all business districts in the state that have ONBOARDED feeders
     districts = BusinessDistrict.objects.filter(
         state__name__iexact=state,
-        feeders__isnull=False
+        feeders__is_onboarded=True
     ).distinct().order_by('name')
     
-    print(f"DEBUG: Found {districts.count()} districts with feeders in {state}")
+    print(f"DEBUG: Found {districts.count()} districts with onboarded feeders in {state}")
     
     response_data = []
     
     for district in districts:
         print(f"DEBUG: Processing district: {district.name}")
         try:
-            # Calculate metrics using SQL
+            # Calculate metrics using SQL (ONBOARDED feeders only)
             district_metrics = calculate_district_metrics(district, from_date, to_date)
             
             if district_metrics and district_metrics['feeder_count'] > 0:
@@ -456,7 +484,8 @@ def all_business_districts_technical_summary(request):
             "from_date": from_date.isoformat(),
             "to_date": to_date.isoformat(),
             "period_days": (to_date - from_date).days + 1,
-            "total_districts": len(response_data)
+            "total_districts": len(response_data),
+            "onboarded_feeders_only": True  # Indicator that only onboarded feeders are counted
         }
     }
     

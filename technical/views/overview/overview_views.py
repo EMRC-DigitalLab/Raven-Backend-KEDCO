@@ -155,34 +155,44 @@ def calculate_hours_of_supply_feeder(feeder_id, from_date, to_date):
 
 def calculate_hours_of_supply_network(from_date, to_date):
     """
-    Calculate average hours of supply per day across ALL feeders in database.
+    Calculate average hours of supply per day across ALL ONBOARDED feeders.
     
-    CORRECTED Logic:
-    - Numerator: Sum of all hours supplied across all feeders with data
-    - Denominator: Total feeders in DB × Days in period
-    - This properly accounts for feeders with no data (they contribute 0)
+    UPDATED Logic:
+    - Numerator: Sum of all hours supplied across all onboarded feeders with data
+    - Denominator: Total ONBOARDED feeders × Days in period
+    - This properly accounts for onboarded feeders with no data (they contribute 0)
     """
     period_days = (to_date - from_date).days + 1
-    total_feeders = Feeder.objects.count()
+    total_feeders = Feeder.objects.filter(is_onboarded=True).count()
     
     if total_feeders == 0:
         return 0.0
     
-    # Get total hours supplied across ALL feeders
-    query = """
+    # Get IDs of onboarded feeders
+    onboarded_feeder_ids = list(Feeder.objects.filter(is_onboarded=True).values_list('id', flat=True))
+    
+    if not onboarded_feeder_ids:
+        return 0.0
+    
+    # Get total hours supplied across ONBOARDED feeders only
+    placeholders = ','.join(['%s'] * len(onboarded_feeder_ids))
+    query = f"""
         SELECT 
             COUNT(DISTINCT CONCAT(feeder_id, '-', date, '-', hour)) as total_hours
         FROM technical_hourlyload
         WHERE date BETWEEN %s AND %s
             AND load_mw > 0
+            AND feeder_id IN ({placeholders})
     """
     
+    params = [from_date, to_date] + onboarded_feeder_ids
+    
     with connection.cursor() as cursor:
-        cursor.execute(query, [from_date, to_date])
+        cursor.execute(query, params)
         result = cursor.fetchone()
         total_hours_all_feeders = result[0] if result and result[0] else 0
     
-    # Average = Total hours / (Total feeders × Days)
+    # Average = Total hours / (Total onboarded feeders × Days)
     avg_hours_per_day = total_hours_all_feeders / (total_feeders * period_days)
     
     return round(min(avg_hours_per_day, 24.0), 2)
@@ -190,25 +200,26 @@ def calculate_hours_of_supply_network(from_date, to_date):
 
 def calculate_average_load_network(from_date, to_date):
     """
-    Calculate average load per feeder per hour across entire network.
+    Calculate average load per feeder per hour across ONBOARDED feeders only.
     
-    Formula: Total Load / (Total Feeders × Total Hours in Period)
+    Formula: Total Load / (Total ONBOARDED Feeders × Total Hours in Period)
     """
     period_days = (to_date - from_date).days + 1
     period_hours = period_days * 24
-    total_feeders = Feeder.objects.count()
+    total_feeders = Feeder.objects.filter(is_onboarded=True).count()
     
     if total_feeders == 0:
         return 0.0
     
-    # Sum all load_mw values
+    # Sum all load_mw values for ONBOARDED feeders only
     result = HourlyLoad.objects.filter(
-        date__range=(from_date, to_date)
+        date__range=(from_date, to_date),
+        feeder__is_onboarded=True
     ).aggregate(total_load=Sum('load_mw'))
     
     total_load = float(result['total_load'] or 0)
     
-    # Average = Total Load / (Total Feeders × Total Hours)
+    # Average = Total Load / (Total Onboarded Feeders × Total Hours)
     avg_load = total_load / (total_feeders * period_hours)
     
     return round(avg_load, 2)
@@ -310,22 +321,28 @@ def calculate_interruption_duration_feeder(feeder_id, from_date, to_date, exclud
 
 def calculate_interruption_duration_network(from_date, to_date, exclude_types=None):
     """
-    Calculate average interruption duration per day across ALL feeders in database.
+    Calculate average interruption duration per day across ALL ONBOARDED feeders.
     
-    CORRECTED Logic:
+    UPDATED Logic:
     - Includes ALL interruptions active during the period (not just those that started in the period)
     - Calculates only the hours that fall within the filtered period boundaries
-    - Numerator: Sum of all interruption hours across all feeders with interruptions
-    - Denominator: Total feeders in DB × Days in period
-    - This properly accounts for feeders with no interruptions (they contribute 0)
+    - Numerator: Sum of all interruption hours across all ONBOARDED feeders with interruptions
+    - Denominator: Total ONBOARDED feeders × Days in period
+    - This properly accounts for onboarded feeders with no interruptions (they contribute 0)
     
     NOTE: For feeders with multiple overlapping interruptions, we cap each feeder's
     daily interruption at 24 hours to avoid double-counting.
     """
     period_days = (to_date - from_date).days + 1
-    total_feeders = Feeder.objects.count()
+    total_feeders = Feeder.objects.filter(is_onboarded=True).count()
     
     if total_feeders == 0:
+        return 0.0
+    
+    # Get IDs of onboarded feeders
+    onboarded_feeder_ids = list(Feeder.objects.filter(is_onboarded=True).values_list('id', flat=True))
+    
+    if not onboarded_feeder_ids:
         return 0.0
     
     start_of_period = timezone.make_aware(
@@ -335,9 +352,14 @@ def calculate_interruption_duration_network(from_date, to_date, exclude_types=No
         datetime.combine(to_date, datetime.max.time())
     )
     
+    # Build feeder filter
+    feeder_placeholders = ','.join(['%s'] * len(onboarded_feeder_ids))
+    feeder_filter = f"AND feeder_id IN ({feeder_placeholders})"
+    
     # Build exclusion clause
     exclusion_clause = ""
     base_params = [end_of_period, end_of_period, start_of_period, from_date, end_of_period, start_of_period, start_of_period]
+    base_params.extend(onboarded_feeder_ids)
     
     if exclude_types:
         placeholders = ','.join(['%s'] * len(exclude_types))
@@ -368,6 +390,7 @@ def calculate_interruption_duration_network(from_date, to_date, exclude_types=No
                 DATE(occurred_at) BETWEEN %s AND DATE(%s)
                 OR (occurred_at < %s AND (restored_at IS NULL OR restored_at >= %s))
             )
+            {feeder_filter}
             {exclusion_clause}
             GROUP BY feeder_id
         ) per_feeder_totals
@@ -378,7 +401,7 @@ def calculate_interruption_duration_network(from_date, to_date, exclude_types=No
         result = cursor.fetchone()
         total_hours_all_feeders = float(result[0]) if result and result[0] else 0
     
-    # Average = Total hours / (Total feeders × Days)
+    # Average = Total hours / (Total onboarded feeders × Days)
     avg_hours_per_day = total_hours_all_feeders / (total_feeders * period_days)
     
     # Ensure non-negative and cap at 24
@@ -389,13 +412,13 @@ def calculate_interruption_duration_network(from_date, to_date, exclude_types=No
 
 def get_interruption_breakdown_feeder(feeder_id, start_date, end_date, period_days, period_offset=0):
     """
-    Get interruption breakdown for a single feeder.
+    Get interruption COUNT breakdown for a single feeder.
     
-    CORRECTED Logic:
-    - Includes ALL interruptions active during the period
-    - Calculates only hours within the period boundaries
+    UPDATED Logic:
+    - Counts ONLY interruptions that occurred within the period
+    - Does NOT include interruptions that started before (even if still ongoing)
     
-    Returns average hours per day for each interruption type for THIS feeder.
+    Returns count of interruptions by type for THIS feeder in the period.
     """
     # Calculate target period
     if period_days == 1:
@@ -415,75 +438,48 @@ def get_interruption_breakdown_feeder(feeder_id, start_date, end_date, period_da
         target_end = target_start + timedelta(days=period_days - 1)
         label = f"Cycle {period_offset + 1}"
     
-    start_of_period = timezone.make_aware(
-        datetime.combine(target_start, datetime.min.time())
-    )
-    end_of_period = timezone.make_aware(
-        datetime.combine(target_end, datetime.max.time())
-    )
-    
-    # CORRECTED: Include interruptions active during the period, calculate only hours within period
-    # FIXED: Correct parameter order
+    # Count interruptions that OCCURRED within the period only
     query = """
         SELECT 
             COALESCE(interruption_type, 'Unknown') as itype,
-            COALESCE(SUM(
-                GREATEST(
-                    EXTRACT(EPOCH FROM (
-                        LEAST(COALESCE(restored_at, %s), %s) - GREATEST(occurred_at, %s)
-                    )) / 3600.0,
-                    0
-                )
-            ), 0) as total_hours
+            COUNT(*) as count
         FROM technical_feederinterruption
         WHERE feeder_id = %s
-            AND (
-                DATE(occurred_at) BETWEEN %s AND DATE(%s)
-                OR (occurred_at < %s AND (restored_at IS NULL OR restored_at >= %s))
-            )
+            AND DATE(occurred_at) BETWEEN %s AND %s
         GROUP BY interruption_type
     """
     
     with connection.cursor() as cursor:
-        cursor.execute(query, [
-            end_of_period, end_of_period, start_of_period,
-            feeder_id, 
-            target_start, end_of_period, start_of_period, start_of_period
-        ])
+        cursor.execute(query, [feeder_id, target_start, target_end])
         results = cursor.fetchall()
     
     # Process results
-    type_totals = {}
-    total_hours = 0
+    type_counts = {}
+    total_count = 0
     
-    for itype, hours in results:
-        hours_val = float(hours) if hours else 0
-        hours_val = max(0, hours_val)  # Ensure non-negative
-        type_totals[itype or 'Unknown'] = hours_val
-        total_hours += hours_val
-    
-    # Calculate averages per day
-    num_days = (target_end - target_start).days + 1
-    type_averages = {k: round(v / num_days, 2) for k, v in type_totals.items()}
-    avg_total_per_day = round(total_hours / num_days, 2) if num_days > 0 else 0
+    for itype, count in results:
+        count_val = int(count) if count else 0
+        type_counts[itype or 'Unknown'] = count_val
+        total_count += count_val
     
     return {
         "month": label,
-        "total": avg_total_per_day,
+        "total": total_count,
         "delta": 0,
-        "breakdown": type_averages
+        "breakdown": type_counts
     }
 
 
 def get_interruption_breakdown_network(start_date, end_date, period_days, period_offset=0):
     """
-    Get interruption breakdown across ALL feeders in database.
+    Get interruption COUNT breakdown across ALL ONBOARDED feeders.
     
-    CORRECTED Logic:
-    - Includes ALL interruptions active during the period
-    - Calculates only hours within the period boundaries
-    - Returns average hours per day per feeder for each interruption type
-    - Denominator includes ALL feeders in database, not just those with interruptions
+    UPDATED Logic:
+    - Counts ONLY interruptions that occurred within the period
+    - Does NOT include interruptions that started before (even if still ongoing)
+    - Only considers interruptions from ONBOARDED feeders
+    
+    Returns count of interruptions by type across all onboarded feeders in the period.
     """
     # Calculate target period
     if period_days == 1:
@@ -503,10 +499,10 @@ def get_interruption_breakdown_network(start_date, end_date, period_days, period
         target_end = target_start + timedelta(days=period_days - 1)
         label = f"Cycle {period_offset + 1}"
     
-    num_days = (target_end - target_start).days + 1
-    total_feeders = Feeder.objects.count()
+    # Get IDs of onboarded feeders
+    onboarded_feeder_ids = list(Feeder.objects.filter(is_onboarded=True).values_list('id', flat=True))
     
-    if total_feeders == 0:
+    if not onboarded_feeder_ids:
         return {
             "month": label,
             "total": 0,
@@ -514,60 +510,38 @@ def get_interruption_breakdown_network(start_date, end_date, period_days, period
             "breakdown": {}
         }
     
-    start_of_period = timezone.make_aware(
-        datetime.combine(target_start, datetime.min.time())
-    )
-    end_of_period = timezone.make_aware(
-        datetime.combine(target_end, datetime.max.time())
-    )
-    
-    # CORRECTED: Include interruptions active during the period, calculate only hours within period
-    # FIXED: Correct parameter order
-    query = """
+    # Count interruptions that OCCURRED within the period only, for ONBOARDED feeders
+    feeder_placeholders = ','.join(['%s'] * len(onboarded_feeder_ids))
+    query = f"""
         SELECT 
             COALESCE(interruption_type, 'Unknown') as itype,
-            COALESCE(SUM(
-                GREATEST(
-                    EXTRACT(EPOCH FROM (
-                        LEAST(COALESCE(restored_at, %s), %s) - GREATEST(occurred_at, %s)
-                    )) / 3600.0,
-                    0
-                )
-            ), 0) as total_hours
+            COUNT(*) as count
         FROM technical_feederinterruption
-        WHERE (
-            DATE(occurred_at) BETWEEN %s AND DATE(%s)
-            OR (occurred_at < %s AND (restored_at IS NULL OR restored_at >= %s))
-        )
+        WHERE DATE(occurred_at) BETWEEN %s AND %s
+            AND feeder_id IN ({feeder_placeholders})
         GROUP BY interruption_type
     """
     
+    params = [target_start, target_end] + onboarded_feeder_ids
+    
     with connection.cursor() as cursor:
-        cursor.execute(query, [
-            end_of_period, end_of_period, start_of_period,
-            target_start, end_of_period, start_of_period, start_of_period
-        ])
+        cursor.execute(query, params)
         results = cursor.fetchall()
     
     # Process results
-    type_totals = {}
-    total_hours = 0
+    type_counts = {}
+    total_count = 0
     
-    for itype, hours in results:
-        hours_val = float(hours) if hours else 0
-        hours_val = max(0, hours_val)  # Ensure non-negative
-        type_totals[itype or 'Unknown'] = hours_val
-        total_hours += hours_val
-    
-    # Calculate averages: Total hours / (Total feeders × Days)
-    type_averages = {k: round(v / (total_feeders * num_days), 2) for k, v in type_totals.items()}
-    avg_total_per_day = round(total_hours / (total_feeders * num_days), 2)
+    for itype, count in results:
+        count_val = int(count) if count else 0
+        type_counts[itype or 'Unknown'] = count_val
+        total_count += count_val
     
     return {
         "month": label,
-        "total": avg_total_per_day,
+        "total": total_count,
         "delta": 0,
-        "breakdown": type_averages
+        "breakdown": type_counts
     }
 
 
@@ -576,6 +550,8 @@ def get_load_trend_optimized(start_date, end_date, mode, feeder_id=None):
     Get load trend data optimized for the selected mode.
     For monthly mode: returns daily averages for each day of the month
     For daily mode: returns hourly averages for that specific day
+    
+    UPDATED: Only considers ONBOARDED feeders (when not filtering by specific feeder)
     
     Args:
         start_date: Start date
@@ -587,6 +563,9 @@ def get_load_trend_optimized(start_date, end_date, mode, feeder_id=None):
     base_filter = {'date__range': (start_date, end_date)}
     if feeder_id:
         base_filter['feeder_id'] = feeder_id
+    else:
+        # Only consider onboarded feeders
+        base_filter['feeder__is_onboarded'] = True
     
     if mode == "monthly":
         # Get average load for each day of the month
@@ -721,6 +700,9 @@ def technical_overview_view(request):
                 {"error": f"Feeder with slug '{feeder_slug}' not found"},
                 status=400
             )
+    else:
+        # When not filtering by specific feeder, only consider ONBOARDED feeders
+        feeder_filter = {'feeder__is_onboarded': True}
     
     # Get previous period for delta calculations
     if period_days == 1:  # Daily
@@ -759,33 +741,28 @@ def technical_overview_view(request):
         load_now = calculate_average_load_network(start_date, end_date)
         load_prev = calculate_average_load_network(prev_start, prev_end)
     
-    # CORRECTED: Interruption count - ONLY count those that occurred within period
-    interruptions_now = FeederInterruption.objects.filter(
-        occurred_at__date__range=(start_date, end_date),
-        **feeder_filter
-    ).count()
-    
-    interruptions_prev = FeederInterruption.objects.filter(
-        occurred_at__date__range=(prev_start, prev_end),
-        **feeder_filter
-    ).count()
-    
-    # Calculate daily averages for technical breakdown
-    prev_period_days = (prev_end - prev_start).days + 1
-    
+    # UPDATED: Interruption count - ONLY count those that OCCURRED within period
     if feeder_slug:
-        # Single feeder: divide by days only
-        avg_daily_interruptions_now = interruptions_now / period_days if period_days > 0 else 0
-        avg_daily_interruptions_prev = interruptions_prev / prev_period_days if prev_period_days > 0 else 0
+        interruptions_now = FeederInterruption.objects.filter(
+            occurred_at__date__range=(start_date, end_date),
+            feeder=feeder
+        ).count()
+        
+        interruptions_prev = FeederInterruption.objects.filter(
+            occurred_at__date__range=(prev_start, prev_end),
+            feeder=feeder
+        ).count()
     else:
-        # Network-wide: divide by (total feeders × days)
-        total_feeders = Feeder.objects.count()
-        if total_feeders > 0:
-            avg_daily_interruptions_now = interruptions_now / (total_feeders * period_days) if period_days > 0 else 0
-            avg_daily_interruptions_prev = interruptions_prev / (total_feeders * prev_period_days) if prev_period_days > 0 else 0
-        else:
-            avg_daily_interruptions_now = 0
-            avg_daily_interruptions_prev = 0
+        # Only count interruptions from ONBOARDED feeders
+        interruptions_now = FeederInterruption.objects.filter(
+            occurred_at__date__range=(start_date, end_date),
+            feeder__is_onboarded=True
+        ).count()
+        
+        interruptions_prev = FeederInterruption.objects.filter(
+            occurred_at__date__range=(prev_start, prev_end),
+            feeder__is_onboarded=True
+        ).count()
     
     # Calculate supply and quality metrics with history and feeder filter
     if feeder_slug:
@@ -813,7 +790,7 @@ def technical_overview_view(request):
             period_days
         )
     else:
-        # For all feeders, use network-wide calculation (CORRECTED)
+        # For all ONBOARDED feeders, use network-wide calculation
         supply_hours = get_metric_with_history(
             calculate_hours_of_supply_network, 
             start_date, 
@@ -821,7 +798,7 @@ def technical_overview_view(request):
             period_days
         )
         
-        # Interruption duration (includes all types) - NETWORK-WIDE (CORRECTED)
+        # Interruption duration (includes all types) - NETWORK-WIDE (ONBOARDED only)
         interruption_duration = get_metric_with_history(
             lambda s, e: calculate_interruption_duration_network(s, e),
             start_date,
@@ -829,7 +806,7 @@ def technical_overview_view(request):
             period_days
         )
         
-        # Turnaround time (excludes L/S and TCN types) - NETWORK-WIDE (CORRECTED)
+        # Turnaround time (excludes L/S and TCN types) - NETWORK-WIDE (ONBOARDED only)
         turnaround_time = get_metric_with_history(
             lambda s, e: calculate_interruption_duration_network(s, e, exclude_types=TURNAROUND_EXCLUSIONS),
             start_date,
@@ -842,33 +819,31 @@ def technical_overview_view(request):
         # For single feeder
         feeders_now = 1
         feeders_prev = 1
-        customer_count = 0
     else:
-        # For all feeders
-        feeders_now = Feeder.objects.count()
+        # For all ONBOARDED feeders
+        feeders_now = Feeder.objects.filter(is_onboarded=True).count()
         feeders_prev = feeders_now  # You may want to track this historically
-        customer_count = 5_000_000  # Replace with actual query if available
     
     breakdown = {
         "feeder_count": {
             "value": feeders_now,
             "delta": delta(feeders_now, feeders_prev)
         },
-        "avg_daily_interruptions": {
-            "value": round(avg_daily_interruptions_now, 2),
-            "delta": delta(avg_daily_interruptions_now, avg_daily_interruptions_prev)
+        "interruption_count": {  # CHANGED from avg_daily_interruptions
+            "value": interruptions_now,  # Total count, not average
+            "delta": delta(interruptions_now, interruptions_prev)
         },
         "avg_turnaround": {
             "value": turnaround_time["current"],
             "delta": turnaround_time["delta"]
         },
         "customer_count": {
-            "value": customer_count,
-            "delta": 0  # Replace with actual calculation
+            "value": 0,  # SET TO 0 as requested
+            "delta": 0
         }
     }
     
-    # Interruption sources for 4 periods - CORRECTED
+    # Interruption sources for 4 periods - UPDATED to show COUNTS not durations
     if feeder_slug:
         interruptions_data = [
             get_interruption_breakdown_feeder(feeder.id, start_date, end_date, period_days, i) 
@@ -880,7 +855,7 @@ def technical_overview_view(request):
             for i in range(4)
         ]
     
-    # Load trend - OPTIMIZED with feeder filter
+    # Load trend - OPTIMIZED with feeder filter (ONBOARDED only when network-wide)
     load_trend = get_load_trend_optimized(start_date, end_date, mode, feeder_id=feeder.id if feeder_slug else None)
     
     response_data = {
