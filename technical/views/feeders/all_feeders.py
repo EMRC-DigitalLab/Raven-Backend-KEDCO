@@ -142,6 +142,7 @@ def calculate_feeder_interruption_metrics_sql(feeder_id, from_date, to_date, exc
         count_params.extend(exclude_types)
     
     # FIXED: Convert timestamps to Lagos timezone before comparing dates
+    # Also ensure the date range check uses converted dates
     duration_query = f"""
         SELECT 
             COALESCE(SUM(
@@ -155,7 +156,7 @@ def calculate_feeder_interruption_metrics_sql(feeder_id, from_date, to_date, exc
         FROM technical_feederinterruption
         WHERE feeder_id = %s
             AND (
-                DATE(occurred_at AT TIME ZONE 'Africa/Lagos') BETWEEN %s AND %s
+                (occurred_at AT TIME ZONE 'Africa/Lagos')::date BETWEEN %s AND %s
                 OR (occurred_at < %s AND (restored_at IS NULL OR restored_at >= %s))
             )
             {exclusion_clause}
@@ -166,7 +167,7 @@ def calculate_feeder_interruption_metrics_sql(feeder_id, from_date, to_date, exc
         SELECT COUNT(*) as interruption_count
         FROM technical_feederinterruption
         WHERE feeder_id = %s
-            AND DATE(occurred_at AT TIME ZONE 'Africa/Lagos') BETWEEN %s AND %s
+            AND (occurred_at AT TIME ZONE 'Africa/Lagos')::date BETWEEN %s AND %s
             {exclusion_clause}
     """
     
