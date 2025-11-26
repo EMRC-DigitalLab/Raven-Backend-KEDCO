@@ -105,7 +105,9 @@ def calculate_feeder_interruption_metrics_sql(feeder_id, from_date, to_date, exc
     """
     Calculate average interruption duration per day for a single feeder using raw SQL.
     
-    CORRECTED Logic:
+    FIXED: Properly handles timezone conversion - converts UTC timestamps to Lagos time before date comparison.
+    
+    Logic:
     - Includes ALL interruptions active during the period (not just those that started in the period)
     - Calculates only the hours that fall within the filtered period boundaries
     - For a single feeder: Sum all interruption hours / number of days
@@ -128,7 +130,7 @@ def calculate_feeder_interruption_metrics_sql(feeder_id, from_date, to_date, exc
     
     # Build exclusion clause
     exclusion_clause = ""
-    duration_params = [end_of_period, end_of_period, start_of_period, feeder_id, from_date, end_of_period, start_of_period, start_of_period]
+    duration_params = [end_of_period, end_of_period, start_of_period, feeder_id, from_date, to_date, start_of_period, start_of_period]
     
     # Parameters for count calculation (only interruptions that occurred in period)
     count_params = [feeder_id, from_date, to_date]
@@ -139,7 +141,7 @@ def calculate_feeder_interruption_metrics_sql(feeder_id, from_date, to_date, exc
         duration_params.extend(exclude_types)
         count_params.extend(exclude_types)
     
-    # Calculate total hours for interruptions active during period
+    # FIXED: Convert timestamps to Lagos timezone before comparing dates
     duration_query = f"""
         SELECT 
             COALESCE(SUM(
@@ -153,18 +155,18 @@ def calculate_feeder_interruption_metrics_sql(feeder_id, from_date, to_date, exc
         FROM technical_feederinterruption
         WHERE feeder_id = %s
             AND (
-                DATE(occurred_at) BETWEEN %s AND DATE(%s)
+                DATE(occurred_at AT TIME ZONE 'Africa/Lagos') BETWEEN %s AND %s
                 OR (occurred_at < %s AND (restored_at IS NULL OR restored_at >= %s))
             )
             {exclusion_clause}
     """
     
-    # Separate query for count (only interruptions that occurred in period)
+    # FIXED: Convert timestamp to Lagos timezone before comparing dates
     count_query = f"""
         SELECT COUNT(*) as interruption_count
         FROM technical_feederinterruption
         WHERE feeder_id = %s
-            AND DATE(occurred_at) BETWEEN %s AND %s
+            AND DATE(occurred_at AT TIME ZONE 'Africa/Lagos') BETWEEN %s AND %s
             {exclusion_clause}
     """
     
