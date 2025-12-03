@@ -228,7 +228,9 @@ class CTOKPICalculator(KPICalculationService):
         """
         Calculate maximum grid offtake capacity
         KPI: Grid Offtake Capacity (MW)
-        Uses SQL query for MAX aggregation
+        
+        FIXED: Uses peak coincident demand - the maximum total load across all feeders
+        at the same hour (not individual feeder peaks at different times)
         """
         start_date, end_date = cls.get_period_range(period_date, period_type)
         
@@ -260,12 +262,16 @@ class CTOKPICalculator(KPICalculationService):
                 )
             """
         
-        # SQL query for maximum peak load
+        # SQL query for peak coincident demand (max total load at any single hour)
         query = f"""
-            SELECT COALESCE(MAX(load_mw), 0) as max_peak
-            FROM technical_hourlyload
-            WHERE date BETWEEN %s AND %s
-                {location_filter}
+            SELECT COALESCE(MAX(hourly_total), 0) as max_peak
+            FROM (
+                SELECT date, hour, SUM(load_mw) as hourly_total
+                FROM technical_hourlyload
+                WHERE date BETWEEN %s AND %s
+                    {location_filter}
+                GROUP BY date, hour
+            ) hourly_sums
         """
         
         with connection.cursor() as cursor:
@@ -276,7 +282,7 @@ class CTOKPICalculator(KPICalculationService):
         return {
             'value': float(cls.round_decimal(max_peak, 2)),
             'unit': 'MW',
-            'calculation_method': 'maximum_peak_load_from_hourlyload',
+            'calculation_method': 'peak_coincident_demand_max_total_at_single_hour',
             'source': 'HourlyLoad',
             'calculated_at': timezone.now().isoformat()
         }
