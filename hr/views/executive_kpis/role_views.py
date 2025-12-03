@@ -83,19 +83,19 @@ def calculate_kpi_with_status(kpi_key, period_date, target_value, is_reverse_pol
             
             # Check if within range
             if current >= target_min and current <= target_max:
-                status = 'on_track'
+                kpi_status = 'on_track'
                 progress = 100
             elif current < target_min:
                 gap_percentage = ((target_min - current) / target_min * 100) if target_min > 0 else 0
                 if gap_percentage > 30:
-                    status = 'critical'
+                    kpi_status = 'critical'
                 elif gap_percentage > 20:
-                    status = 'off_track'
+                    kpi_status = 'off_track'
                 else:
-                    status = 'at_risk'
+                    kpi_status = 'at_risk'
                 progress = (current / target_min * 100) if target_min > 0 else 0
             else:  # Above max
-                status = 'exceeding'
+                kpi_status = 'exceeding'
                 progress = 100
         else:
             # Single target
@@ -106,34 +106,34 @@ def calculate_kpi_with_status(kpi_key, period_date, target_value, is_reverse_pol
             if is_reverse_polarity:
                 # Lower is better (e.g., cost ratios, attrition)
                 if current <= target_value:
-                    status = 'on_track'
+                    kpi_status = 'on_track'
                     progress = 100
                 else:
                     excess_percentage = ((current - target_value) / target_value * 100) if target_value > 0 else 0
                     if excess_percentage > 30:
-                        status = 'critical'
+                        kpi_status = 'critical'
                     elif excess_percentage > 20:
-                        status = 'off_track'
+                        kpi_status = 'off_track'
                     else:
-                        status = 'at_risk'
+                        kpi_status = 'at_risk'
                     progress = max(0, 100 - excess_percentage)
             else:
                 # Higher is better (most KPIs)
                 if current >= target_value:
-                    status = 'on_track'
+                    kpi_status = 'on_track'
                     progress = 100
                 else:
                     progress = (current / target_value * 100) if target_value > 0 else 0
                     gap_percentage = 100 - progress
                     
                     if gap_percentage > 30:
-                        status = 'critical'
+                        kpi_status = 'critical'
                     elif gap_percentage > 20:
-                        status = 'off_track'
+                        kpi_status = 'off_track'
                     elif gap_percentage > 10:
-                        status = 'at_risk'
+                        kpi_status = 'at_risk'
                     else:
-                        status = 'on_track'
+                        kpi_status = 'on_track'
         
         return {
             'current': current,
@@ -141,7 +141,7 @@ def calculate_kpi_with_status(kpi_key, period_date, target_value, is_reverse_pol
             'target_min': target_min,
             'target_max': target_max,
             'is_range': is_range,
-            'status': status,
+            'status': kpi_status,
             'progress': min(progress, 100),
             'unit': unit,
             'is_auto_calculated': True,
@@ -349,21 +349,21 @@ def cto_kpis(request):
                 progress = (current_value / target_value * 100) if target_value > 0 else 0
                 
                 if progress >= 100:
-                    status = 'on_track'
+                    kpi_status = 'on_track'
                 elif progress >= 70:
-                    status = 'at_risk'
+                    kpi_status = 'at_risk'
                 else:
-                    status = 'off_track'
+                    kpi_status = 'off_track'
             else:
                 current_value = 0
                 target_value = 10.0
                 progress = 0
-                status = 'not_started'
+                kpi_status = 'not_started'
             
             kpi_data['feedersUpgrade'] = {
                 'current': current_value,
                 'target': target_value,
-                'status': status,
+                'status': kpi_status,
                 'progress': min(progress, 100),
                 'description': 'Number of feeders upgraded or rehabilitated',
                 'unit': 'feeders',
