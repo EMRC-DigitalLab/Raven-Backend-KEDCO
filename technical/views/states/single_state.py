@@ -257,6 +257,57 @@ def calculate_state_interruption_metrics_sql(state_id, from_date, to_date, exclu
     return round(avg_hours_per_day, 2), int(total_interruptions)
 
 
+def calculate_state_avg_interruption_duration_sql(state_id, from_date, to_date):
+    """
+    Calculate average duration per interruption event for a state using raw SQL.
+    
+    INCLUDES:
+    1. Interruptions that OCCURRED within the period (resolved or ongoing)
+    2. Interruptions that started BEFORE the period but are still ongoing (not resolved)
+    
+    Only considers ONBOARDED feeders.
+    
+    Formula: SUM(all interruption durations) / COUNT(interruptions)
+    Result: Average hours per interruption event (not per day)
+    
+    For ongoing interruptions, uses NOW as the end time.
+    """
+    now = timezone.now()
+    start_of_period = timezone.make_aware(
+        datetime.combine(from_date, datetime.min.time())
+    )
+    
+    query = """
+        SELECT 
+            COUNT(*) as interruption_count,
+            COALESCE(SUM(
+                EXTRACT(EPOCH FROM (
+                    COALESCE(fi.restored_at, %s) - fi.occurred_at
+                )) / 3600.0
+            ), 0) as total_hours
+        FROM technical_feederinterruption fi
+        INNER JOIN common_feeder f ON fi.feeder_id = f.id
+        INNER JOIN common_businessdistrict bd ON f.business_district_id = bd.id
+        WHERE bd.state_id = %s
+            AND f.is_onboarded = TRUE
+            AND (
+                (fi.occurred_at AT TIME ZONE 'Africa/Lagos')::date BETWEEN %s AND %s
+                OR (fi.occurred_at < %s AND fi.restored_at IS NULL)
+            )
+    """
+    
+    with connection.cursor() as cursor:
+        cursor.execute(query, [now, state_id, from_date, to_date, start_of_period])
+        result = cursor.fetchone()
+        interruption_count = result[0] if result else 0
+        total_hours = float(result[1]) if result else 0
+    
+    # Calculate average
+    avg_duration = total_hours / interruption_count if interruption_count > 0 else 0
+    
+    return round(avg_duration, 2)
+
+
 def calculate_state_energy_sql(state_id, from_date, to_date):
     """
     Calculate total energy delivered for a state using HourlyLoad.
@@ -338,10 +389,15 @@ def calculate_state_metrics_for_period(state_id, from_date, to_date):
     )
     turnaround_time = float(turnaround_time)
     
-    # 4. Energy delivered (from HourlyLoad, ONBOARDED feeders only)
+    # 4. Average interruption duration (hours per interruption event, ONBOARDED feeders only)
+    avg_int_duration = float(calculate_state_avg_interruption_duration_sql(
+        state_id, from_date, to_date
+    ))
+    
+    # 5. Energy delivered (from HourlyLoad, ONBOARDED feeders only)
     total_energy = float(calculate_state_energy_sql(state_id, from_date, to_date))
     
-    # 5. Feeder count (ONBOARDED feeders only)
+    # 6. Feeder count (ONBOARDED feeders only)
     feeder_count = Feeder.objects.filter(
         business_district__state_id=state_id,
         is_onboarded=True
@@ -356,6 +412,7 @@ def calculate_state_metrics_for_period(state_id, from_date, to_date):
         "avg_supply": round(avg_supply, 2),
         "avg_duration": round(avg_duration, 2),
         "turnaround_time": round(turnaround_time, 2),
+        "avg_interruption_duration": round(avg_int_duration, 2),
         "interruptions": int(total_interruptions),
         "energy_delivered": round(total_energy, 2),
         "feeder_count": int(feeder_count)
@@ -539,6 +596,9 @@ def state_technical_summary(request):
     - turnaround_time: Average local fault hours per day across all ONBOARDED feeders in state (0-24)
       * Includes ALL local faults active during the period
       * Calculates only hours that fall within the period
+    - avg_interruption_duration: Average hours per interruption event (not per day)
+      * Includes interruptions that occurred in period AND ongoing ones from before
+      * Formula: Total duration of all interruptions / Count of interruptions
     - interruptions: Total interruption count (occurred in period, ONBOARDED feeders only)
     - energy_delivered: Total energy in MWh (calculated from HourlyLoad, ONBOARDED feeders only)
     - feeder_count: Number of ONBOARDED feeders in state

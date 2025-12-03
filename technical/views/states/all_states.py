@@ -252,6 +252,57 @@ def calculate_state_interruption_metrics_sql(state_id, from_date, to_date, exclu
     return round(avg_hours_per_day, 2), int(total_interruptions)
 
 
+def calculate_state_avg_interruption_duration_sql(state_id, from_date, to_date):
+    """
+    Calculate average duration per interruption event for a state using raw SQL.
+    
+    INCLUDES:
+    1. Interruptions that OCCURRED within the period (resolved or ongoing)
+    2. Interruptions that started BEFORE the period but are still ongoing (not resolved)
+    
+    Only considers ONBOARDED feeders.
+    
+    Formula: SUM(all interruption durations) / COUNT(interruptions)
+    Result: Average hours per interruption event (not per day)
+    
+    For ongoing interruptions, uses NOW as the end time.
+    """
+    now = timezone.now()
+    start_of_period = timezone.make_aware(
+        datetime.combine(from_date, datetime.min.time())
+    )
+    
+    query = """
+        SELECT 
+            COUNT(*) as interruption_count,
+            COALESCE(SUM(
+                EXTRACT(EPOCH FROM (
+                    COALESCE(fi.restored_at, %s) - fi.occurred_at
+                )) / 3600.0
+            ), 0) as total_hours
+        FROM technical_feederinterruption fi
+        INNER JOIN common_feeder f ON fi.feeder_id = f.id
+        INNER JOIN common_businessdistrict bd ON f.business_district_id = bd.id
+        WHERE bd.state_id = %s
+            AND f.is_onboarded = TRUE
+            AND (
+                (fi.occurred_at AT TIME ZONE 'Africa/Lagos')::date BETWEEN %s AND %s
+                OR (fi.occurred_at < %s AND fi.restored_at IS NULL)
+            )
+    """
+    
+    with connection.cursor() as cursor:
+        cursor.execute(query, [now, state_id, from_date, to_date, start_of_period])
+        result = cursor.fetchone()
+        interruption_count = result[0] if result else 0
+        total_hours = float(result[1]) if result else 0
+    
+    # Calculate average
+    avg_duration = total_hours / interruption_count if interruption_count > 0 else 0
+    
+    return round(avg_duration, 2)
+
+
 def calculate_state_peak_load_sql(state_id, from_date, to_date):
     """
     Get the peak load within the date range for a state using raw SQL.
@@ -373,7 +424,25 @@ def calculate_state_metrics_optimized(state, from_date, to_date, mode):
         )
     
     try:
-        # 4. Peak Load (maximum load in the period) - ONBOARDED feeders only
+        # 4. Average Interruption Duration (hours per interruption event) - ONBOARDED feeders only
+        avg_int_duration = calculate_state_avg_interruption_duration_sql(
+            state.id,
+            from_date,
+            to_date
+        )
+    except Exception as e:
+        print(f"DEBUG: SQL failed for avg interruption duration, using ORM fallback: {str(e)}")
+        # Fallback to ORM
+        feeder_ids = list(Feeder.objects.filter(
+            business_district__state=state,
+            is_onboarded=True
+        ).values_list('id', flat=True))
+        avg_int_duration = calculate_avg_interruption_duration_orm(
+            state.id, from_date, to_date, feeder_ids
+        )
+    
+    try:
+        # 5. Peak Load (maximum load in the period) - ONBOARDED feeders only
         peak_load = calculate_state_peak_load_sql(
             state.id,
             from_date,
@@ -393,7 +462,7 @@ def calculate_state_metrics_optimized(state, from_date, to_date, mode):
         peak_load = round(float(peak_data["peak"] or 0), 2)
     
     try:
-        # 5. Infrastructure counts - ONBOARDED feeders only
+        # 6. Infrastructure counts - ONBOARDED feeders only
         infrastructure = get_state_infrastructure_counts_sql(state.id)
     except Exception as e:
         print(f"DEBUG: SQL failed for infrastructure counts, using ORM fallback: {str(e)}")
@@ -426,6 +495,7 @@ def calculate_state_metrics_optimized(state, from_date, to_date, mode):
         "avg_supply": avg_supply,
         "avg_duration": avg_duration,
         "turnaround": turnaround,
+        "avg_interruption_duration": avg_int_duration,
         "ftc": ftc_all,  # Total interruption count (occurred in period)
         "feeder_count": infrastructure['feeder_count'],
         "peak_load": peak_load,
@@ -440,6 +510,7 @@ def all_states_technical_summary(request):
     Optimized technical summary for all states supporting multiple modes.
     
     UPDATED: Only considers ONBOARDED feeders for all calculations.
+    UPDATED: Returns ALL states, even those with no onboarded feeders (metrics will be 0).
     
     Modes:
     - monthly: Month-based filtering (year, month params)
@@ -470,6 +541,9 @@ def all_states_technical_summary(request):
     - turnaround: Average hours per day of local faults across ALL ONBOARDED feeders (0-24)
       * Includes ALL local faults active during the period
       * Calculates only hours that fall within the period
+    - avg_interruption_duration: Average hours per interruption event (not per day)
+      * Includes interruptions that occurred in period AND ongoing ones from before
+      * Formula: Total duration of all interruptions / Count of interruptions
     - ftc: Feeder Tripping Count - total number of interruptions that OCCURRED in period (ONBOARDED feeders only)
     - peak_load: Maximum load (MW) recorded in the period (ONBOARDED feeders only)
     - feeder_count: Number of ONBOARDED feeders in the state
@@ -480,16 +554,15 @@ def all_states_technical_summary(request):
     except ValueError as e:
         return Response({"error": str(e)}, status=400)
     
-    # Get all states with ONBOARDED feeders using Django ORM
-    states_with_feeders = State.objects.filter(
-        districts__feeders__is_onboarded=True
-    ).distinct().order_by('name')
+    # Get ALL states (not just those with onboarded feeders)
+    all_states = State.objects.all().order_by('name')
     
     overview = []
     
-    for state in states_with_feeders:
+    for state in all_states:
         try:
             # Calculate metrics using optimized SQL (ONBOARDED feeders only)
+            # Will return zeros for states with no onboarded feeders
             state_metrics = calculate_state_metrics_optimized(
                 state, 
                 from_date, 
@@ -497,18 +570,33 @@ def all_states_technical_summary(request):
                 mode
             )
             
-            # Include state even if metrics are zero (for consistency with old behavior)
-            if state_metrics:
-                overview.append({
-                    "state": state.name,
-                    "metrics": state_metrics
-                })
+            # Include ALL states, even if metrics are zero
+            overview.append({
+                "state": state.name,
+                "metrics": state_metrics
+            })
                 
         except Exception as e:
             print(f"ERROR: Error calculating metrics for state {state.name}: {str(e)}")
             import traceback
             traceback.print_exc()
-            continue
+            
+            # Include state with zero metrics on error
+            overview.append({
+                "state": state.name,
+                "metrics": {
+                    "avg_supply": 0.0,
+                    "avg_duration": 0.0,
+                    "turnaround": 0.0,
+                    "avg_interruption_duration": 0.0,
+                    "ftc": 0,
+                    "feeder_count": 0,
+                    "peak_load": 0.0,
+                    "customer_population": 0,
+                    "_source": "error_fallback",
+                    "_error": str(e)
+                }
+            })
     
     # Create mode-specific metadata
     metadata = {
@@ -517,6 +605,7 @@ def all_states_technical_summary(request):
         "to_date": to_date.isoformat(),
         "period_days": (to_date - from_date).days + 1,
         "total_states": len(overview),
+        "states_with_onboarded_feeders": sum(1 for s in overview if s["metrics"]["feeder_count"] > 0),
         "onboarded_feeders_only": True  # Indicator that only onboarded feeders are counted
     }
     
@@ -561,6 +650,55 @@ def calculate_avg_supply_orm(state_id, from_date, to_date, feeder_ids):
     avg_hours_per_day = total_hours / (total_feeders * period_days)
     
     return round(min(avg_hours_per_day, 24.0), 2)
+
+
+def calculate_avg_interruption_duration_orm(state_id, from_date, to_date, feeder_ids):
+    """
+    Calculate average interruption duration using Django ORM (slower but no raw SQL).
+    Use this as fallback if raw SQL has issues.
+    
+    INCLUDES:
+    1. Interruptions that OCCURRED within the period (resolved or ongoing)
+    2. Interruptions that started BEFORE the period but are still ongoing (not resolved)
+    
+    feeder_ids already filtered for onboarded feeders.
+    
+    Formula: SUM(all interruption durations) / COUNT(interruptions)
+    Result: Average hours per interruption event (not per day)
+    """
+    if not feeder_ids:
+        return 0.0
+    
+    now = timezone.now()
+    start_of_period = timezone.make_aware(
+        datetime.combine(from_date, datetime.min.time())
+    )
+    
+    # Get interruptions (occurred in period OR ongoing from before)
+    interruptions = FeederInterruption.objects.filter(
+        feeder_id__in=feeder_ids
+    ).filter(
+        Q(occurred_at__date__range=(from_date, to_date)) |
+        Q(occurred_at__lt=start_of_period, restored_at__isnull=True)
+    )
+    
+    interruption_count = interruptions.count()
+    
+    if interruption_count == 0:
+        return 0.0
+    
+    # Calculate total duration
+    total_hours = 0
+    
+    for interruption in interruptions:
+        end_time = interruption.restored_at if interruption.restored_at else now
+        duration = (end_time - interruption.occurred_at).total_seconds() / 3600
+        total_hours += duration
+    
+    # Calculate average
+    avg_duration = total_hours / interruption_count
+    
+    return round(avg_duration, 2)
 
 
 def calculate_interruption_metrics_orm(state_id, from_date, to_date, feeder_ids, exclude_types=None):
