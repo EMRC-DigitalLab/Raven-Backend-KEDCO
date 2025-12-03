@@ -90,7 +90,6 @@ class ReportTemplateDetailView(RetrieveUpdateDestroyAPIView):
 # =============================================================================
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
 def available_sections(request):
     """
     Get list of available section types with their configurations.
@@ -108,7 +107,6 @@ def available_sections(request):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
 def add_section_to_template(request, template_id):
     """
     Add a new section to an existing template.
@@ -126,7 +124,6 @@ def add_section_to_template(request, template_id):
 
 
 @api_view(['PUT', 'DELETE'])
-@permission_classes([IsAuthenticated])
 def update_section(request, template_id, section_id):
     """
     Update or delete a section.
@@ -152,7 +149,6 @@ def update_section(request, template_id, section_id):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
 def reorder_sections(request, template_id):
     """
     Reorder sections within a template.
@@ -181,7 +177,6 @@ def reorder_sections(request, template_id):
 # =============================================================================
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
 def filter_options(request):
     """
     Get available filter options (states, districts, substations, bands, feeders).
@@ -213,7 +208,6 @@ def filter_options(request):
 # =============================================================================
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
 def preview_section_data(request):
     """
     Get data for a specific section based on filters.
@@ -265,7 +259,6 @@ def preview_section_data(request):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
 def preview_all_sections(request):
     """
     Get data for all sections in a report configuration.
@@ -325,7 +318,6 @@ def preview_all_sections(request):
 # =============================================================================
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
 def generate_report_pdf(request):
     """
     Generate a PDF report.
@@ -410,7 +402,6 @@ def generate_report_pdf(request):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
 def generate_report_html_preview(request):
     """
     Generate HTML preview of the report (for frontend rendering).
@@ -470,7 +461,6 @@ class GeneratedReportListView(ListAPIView):
 # =============================================================================
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
 def clone_template(request, template_id):
     """
     Clone an existing template to create a new one.

@@ -1,6 +1,6 @@
 # hr/views/executive_kpis/performance_views.py
 from rest_framework import status
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from django.utils import timezone
@@ -13,7 +13,6 @@ from ...serializers import KPIPerformanceUpdateSerializer
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
 def update_kpi_performance(request):
     """
     Update KPI performance data
@@ -100,7 +99,6 @@ def update_kpi_performance(request):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
 def kpi_performance_history(request, kpi_id):
     """
     Get performance history for a specific KPI
@@ -175,7 +173,6 @@ def kpi_performance_history(request, kpi_id):
 
 
 @api_view(['DELETE'])
-@permission_classes([IsAuthenticated])
 def delete_kpi_performance(request, performance_id):
     """
     Delete a specific performance record
@@ -211,7 +208,6 @@ def delete_kpi_performance(request, performance_id):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
 def bulk_update_performance(request):
     """
     Bulk update multiple KPI performances at once

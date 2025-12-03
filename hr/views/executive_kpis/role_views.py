@@ -1,6 +1,6 @@
 # hr/views/executive_kpis/role_views.py - UPDATED WITH AUTO-CALCULATION
 from rest_framework import status
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from django.db.models import Q
@@ -217,7 +217,6 @@ def get_monthly_trend_data(kpi_definition, period_date, months_back=4, **kwargs)
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
 def cto_kpis(request):
     """
     Get CTO KPI data with AUTO-CALCULATION
@@ -411,7 +410,6 @@ def cto_kpis(request):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
 def cco_kpis(request):
     """
     Get CCO KPI data with AUTO-CALCULATION
@@ -632,7 +630,6 @@ def cco_kpis(request):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
 def cfo_kpis(request):
     """
     Get CFO KPI data with AUTO-CALCULATION
@@ -722,7 +719,6 @@ def cfo_kpis(request):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
 def chro_kpis(request):
     """
     Get CHRO KPI data with AUTO-CALCULATION

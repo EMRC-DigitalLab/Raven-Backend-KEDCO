@@ -1,6 +1,6 @@
 # hr/views/executive_kpis/overview_views.py
 from rest_framework import status
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from django.db.models import Q, Avg, Max, Min, Count
@@ -13,7 +13,6 @@ from ...serializers import ExecutiveKPIDefinitionSerializer, ExecutivePerformanc
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
 def executive_kpi_overview(request):
     """
     Get comprehensive KPI overview for all executives or specific role
@@ -76,7 +75,6 @@ def executive_kpi_overview(request):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
 def kpi_alerts(request):
     """
     Get KPI alerts for dashboard
