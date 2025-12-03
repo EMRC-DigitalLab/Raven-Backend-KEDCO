@@ -414,7 +414,9 @@ def calculate_average_interruption_duration_network(from_date, to_date):
     """
     Calculate average duration per interruption for ONBOARDED feeders.
     
-    ONLY includes interruptions that OCCURRED within the period.
+    INCLUDES:
+    1. Interruptions that OCCURRED within the period (resolved or ongoing)
+    2. Interruptions that started BEFORE the period but are still ongoing (not resolved)
     
     Formula: SUM(all interruption durations) / COUNT(interruptions)
     Result: Average hours per interruption event (not per day)
@@ -428,8 +430,11 @@ def calculate_average_interruption_duration_network(from_date, to_date):
         return 0.0
     
     now = timezone.now()
+    start_of_period = timezone.make_aware(
+        datetime.combine(from_date, datetime.min.time())
+    )
     
-    # Get interruptions that OCCURRED in the period (timezone-aware)
+    # Get interruptions that are active during the period
     feeder_placeholders = ','.join(['%s'] * len(onboarded_feeder_ids))
     
     query = f"""
@@ -441,11 +446,14 @@ def calculate_average_interruption_duration_network(from_date, to_date):
                 )) / 3600.0
             ), 0) as total_hours
         FROM technical_feederinterruption
-        WHERE (occurred_at AT TIME ZONE 'Africa/Lagos')::date BETWEEN %s AND %s
-            AND feeder_id IN ({feeder_placeholders})
+        WHERE (
+            (occurred_at AT TIME ZONE 'Africa/Lagos')::date BETWEEN %s AND %s
+            OR (occurred_at < %s AND restored_at IS NULL)
+        )
+        AND feeder_id IN ({feeder_placeholders})
     """
     
-    params = [now, from_date, to_date] + onboarded_feeder_ids
+    params = [now, from_date, to_date, start_of_period] + onboarded_feeder_ids
     
     with connection.cursor() as cursor:
         cursor.execute(query, params)
@@ -463,7 +471,9 @@ def calculate_average_interruption_duration_feeder(feeder_id, from_date, to_date
     """
     Calculate average duration per interruption for a single feeder.
     
-    ONLY includes interruptions that OCCURRED within the period.
+    INCLUDES:
+    1. Interruptions that OCCURRED within the period (resolved or ongoing)
+    2. Interruptions that started BEFORE the period but are still ongoing (not resolved)
     
     Formula: SUM(all interruption durations) / COUNT(interruptions)
     Result: Average hours per interruption event (not per day)
@@ -471,6 +481,9 @@ def calculate_average_interruption_duration_feeder(feeder_id, from_date, to_date
     For ongoing interruptions, uses NOW as the end time.
     """
     now = timezone.now()
+    start_of_period = timezone.make_aware(
+        datetime.combine(from_date, datetime.min.time())
+    )
     
     query = """
         SELECT 
@@ -481,12 +494,15 @@ def calculate_average_interruption_duration_feeder(feeder_id, from_date, to_date
                 )) / 3600.0
             ), 0) as total_hours
         FROM technical_feederinterruption
-        WHERE (occurred_at AT TIME ZONE 'Africa/Lagos')::date BETWEEN %s AND %s
-            AND feeder_id = %s
+        WHERE (
+            (occurred_at AT TIME ZONE 'Africa/Lagos')::date BETWEEN %s AND %s
+            OR (occurred_at < %s AND restored_at IS NULL)
+        )
+        AND feeder_id = %s
     """
     
     with connection.cursor() as cursor:
-        cursor.execute(query, [now, from_date, to_date, feeder_id])
+        cursor.execute(query, [now, from_date, to_date, start_of_period, feeder_id])
         result = cursor.fetchone()
         interruption_count = result[0] if result else 0
         total_hours = float(result[1]) if result else 0
@@ -982,16 +998,14 @@ def technical_overview_view(request):
             period_days
         )
         
-        # NEW: Average interruption duration (hours per interruption event)
+        # Average interruption duration (hours per interruption event)
+        # Includes interruptions that started in period AND ongoing ones from before
         avg_int_duration = get_metric_with_history(
             lambda s, e: calculate_average_interruption_duration_feeder(feeder.id, s, e),
             start_date,
             end_date,
             period_days
         )
-        
-        # NEW: Ongoing interruptions info (started before period, still unresolved)
-        ongoing_interruptions = get_ongoing_interruptions_info_feeder(feeder.id, start_date)
     else:
         # For all ONBOARDED feeders, use network-wide calculation
         supply_hours = get_metric_with_history(
@@ -1017,16 +1031,14 @@ def technical_overview_view(request):
             period_days
         )
         
-        # NEW: Average interruption duration (hours per interruption event)
+        # Average interruption duration (hours per interruption event)
+        # Includes interruptions that started in period AND ongoing ones from before
         avg_int_duration = get_metric_with_history(
             lambda s, e: calculate_average_interruption_duration_network(s, e),
             start_date,
             end_date,
             period_days
         )
-        
-        # NEW: Ongoing interruptions info (started before period, still unresolved)
-        ongoing_interruptions = get_ongoing_interruptions_info_network(start_date)
     
     # Technical breakdown
     if feeder_slug:
@@ -1097,8 +1109,7 @@ def technical_overview_view(request):
             "supply_hours": supply_hours,
             "interruption_duration": interruption_duration,
             "turnaround_time": turnaround_time,
-            "avg_interruption_duration": avg_int_duration,
-            "ongoing_interruptions": ongoing_interruptions
+            "avg_interruption_duration": avg_int_duration
         },
         "technical_breakdown": breakdown,
         "interruption_sources": interruptions_data,
