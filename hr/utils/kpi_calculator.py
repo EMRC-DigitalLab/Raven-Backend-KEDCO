@@ -1,12 +1,14 @@
-# hr/utils/kpi_calculator.py
+# hr/utils/kpi_calculator.py - COMPLETE FIXED VERSION
 """
 Executive KPI Auto-Calculator Service
-Calculates KPI values from existing data across all apps
+Calculates KPI values from existing data using SQL queries for performance
+Follows same patterns as technical views (all_feeders.py, overview_views.py)
 """
 from decimal import Decimal, ROUND_HALF_UP
 from datetime import date, timedelta
 from dateutil.relativedelta import relativedelta
 from django.db.models import Sum, Avg, Max, Min, Count, Q, F
+from django.db import connection
 from django.utils import timezone
 
 from commercial.models import (
@@ -19,7 +21,8 @@ from commercial.models import (
 from technical.models import (
     FeederEnergyMonthly,
     FeederEnergyDaily,
-    FeederInterruption
+    FeederInterruption,
+    HourlyLoad
 )
 from financial.models import (
     Opex,
@@ -29,17 +32,13 @@ from financial.models import (
     MOInvoice
 )
 from hr.models import Staff
-from common.models import Feeder, State, BusinessDistrict
-from analytics.models import (
-    MonthlyTechnicalSummary,
-    DailyTechnicalSummary,
-    MonthlyOverviewSummary
-)
+from common.models import Feeder, State, BusinessDistrict, Band
+from technical.constants import TURNAROUND_EXCLUSIONS
 
 
 class KPICalculationService:
     """
-    Service class for calculating executive KPIs from existing data
+    Base service class for calculating executive KPIs from existing data
     """
     
     @staticmethod
@@ -63,75 +62,92 @@ class KPICalculationService:
         """
         if period_type == 'monthly':
             start_date = period_date.replace(day=1)
-            end_date = start_date + relativedelta(months=1)
+            if start_date.month == 12:
+                end_date = date(start_date.year + 1, 1, 1) - timedelta(days=1)
+            else:
+                end_date = date(start_date.year, start_date.month + 1, 1) - timedelta(days=1)
         elif period_type == 'quarterly':
             quarter = (period_date.month - 1) // 3
             start_date = date(period_date.year, quarter * 3 + 1, 1)
-            end_date = start_date + relativedelta(months=3)
+            end_date = start_date + relativedelta(months=3) - timedelta(days=1)
         elif period_type == 'annually':
             start_date = date(period_date.year, 1, 1)
-            end_date = date(period_date.year + 1, 1, 1)
+            end_date = date(period_date.year, 12, 31)
         else:  # daily
             start_date = period_date
-            end_date = period_date + timedelta(days=1)
+            end_date = period_date
         
         return start_date, end_date
 
 
 # =============================================================================
-# CTO KPI CALCULATORS
+# CTO KPI CALCULATORS - USING SQL QUERIES LIKE TECHNICAL VIEWS
 # =============================================================================
 
 class CTOKPICalculator(KPICalculationService):
-    """Calculator for Chief Technology Officer KPIs"""
+    """Calculator for Chief Technology Officer KPIs - Using SQL for performance"""
     
     @classmethod
     def calculate_energy_delivered(cls, period_date, period_type='monthly', 
                                    state=None, district=None, feeder=None):
         """
-        Calculate total energy delivered in GWh
-        KPI: Energy Delivered (GWh)
+        Calculate total energy delivered in MWh (NOT GWh - frontend uses MWh)
+        KPI: Energy Delivered (MWh)
+        Uses SQL query like technical views
         """
         start_date, end_date = cls.get_period_range(period_date, period_type)
         
-        # Try monthly aggregates first
-        query = FeederEnergyMonthly.objects.filter(
-            period=period_date.replace(day=1)
-        )
+        # Build location filter
+        location_filter = ""
+        params = [start_date, end_date]
         
-        # Apply filters
         if feeder:
-            query = query.filter(feeder=feeder)
+            location_filter = "AND hl.feeder_id = %s"
+            params.append(feeder.id)
         elif district:
-            query = query.filter(feeder__business_district=district)
+            location_filter = """
+                AND hl.feeder_id IN (
+                    SELECT id FROM common_feeder 
+                    WHERE business_district_id = %s AND is_onboarded = TRUE
+                )
+            """
+            params.append(district.id)
         elif state:
-            query = query.filter(feeder__business_district__state=state)
+            location_filter = """
+                AND hl.feeder_id IN (
+                    SELECT f.id FROM common_feeder f
+                    INNER JOIN common_businessdistrict bd ON f.business_district_id = bd.id
+                    WHERE bd.state_id = %s AND f.is_onboarded = TRUE
+                )
+            """
+            params.append(state.id)
+        else:
+            location_filter = """
+                AND hl.feeder_id IN (
+                    SELECT id FROM common_feeder WHERE is_onboarded = TRUE
+                )
+            """
         
-        energy_mwh = query.aggregate(Sum('energy_mwh'))['energy_mwh__sum'] or Decimal('0')
+        # SQL query to sum energy (load_mw × hours)
+        query = f"""
+            SELECT COALESCE(SUM(hl.load_mw), 0) as total_energy_mwh
+            FROM technical_hourlyload hl
+            WHERE hl.date BETWEEN %s AND %s
+                AND hl.load_mw > 0
+                {location_filter}
+        """
         
-        # Fallback to daily if no monthly data
-        if energy_mwh == 0:
-            daily_query = FeederEnergyDaily.objects.filter(
-                date__gte=start_date,
-                date__lt=end_date
-            )
-            if feeder:
-                daily_query = daily_query.filter(feeder=feeder)
-            elif district:
-                daily_query = daily_query.filter(feeder__business_district=district)
-            elif state:
-                daily_query = daily_query.filter(feeder__business_district__state=state)
-            
-            energy_mwh = daily_query.aggregate(Sum('energy_mwh'))['energy_mwh__sum'] or Decimal('0')
-        
-        # Convert MWh to GWh
-        energy_gwh = energy_mwh / 1000
+        with connection.cursor() as cursor:
+            cursor.execute(query, params)
+            result = cursor.fetchone()
+            energy_mwh = result[0] if result else Decimal('0')
         
         return {
-            'value': float(cls.round_decimal(energy_gwh, 4)),
-            'unit': 'GWh',
-            'calculation_method': 'aggregated_from_feeder_energy',
-            'source': 'FeederEnergyMonthly or FeederEnergyDaily'
+            'value': float(cls.round_decimal(energy_mwh, 2)),
+            'unit': 'MWh',
+            'calculation_method': 'sum_hourly_load_from_hourlyload',
+            'source': 'HourlyLoad',
+            'calculated_at': timezone.now().isoformat()
         }
     
     @classmethod
@@ -140,30 +156,70 @@ class CTOKPICalculator(KPICalculationService):
         """
         Calculate average hours of supply per day
         KPI: Average Hours of Supply per Day
+        Uses SQL query like calculate_feeder_hours_of_supply_sql
         """
         start_date, end_date = cls.get_period_range(period_date, period_type)
+        period_days = (end_date - start_date).days + 1
         
-        # Use DailyTechnicalSummary
-        query = DailyTechnicalSummary.objects.filter(
-            date__gte=start_date,
-            date__lt=end_date
-        )
+        # Build location filter
+        location_filter = ""
+        params = [start_date, end_date]
         
-        # Apply filters
         if feeder:
-            query = query.filter(feeder=feeder)
+            location_filter = "AND feeder_id = %s"
+            params.append(feeder.id)
         elif district:
-            query = query.filter(business_district=district)
+            location_filter = """
+                AND feeder_id IN (
+                    SELECT id FROM common_feeder 
+                    WHERE business_district_id = %s AND is_onboarded = TRUE
+                )
+            """
+            params.append(district.id)
         elif state:
-            query = query.filter(state=state)
+            location_filter = """
+                AND feeder_id IN (
+                    SELECT f.id FROM common_feeder f
+                    INNER JOIN common_businessdistrict bd ON f.business_district_id = bd.id
+                    WHERE bd.state_id = %s AND f.is_onboarded = TRUE
+                )
+            """
+            params.append(state.id)
+        else:
+            location_filter = """
+                AND feeder_id IN (
+                    SELECT id FROM common_feeder WHERE is_onboarded = TRUE
+                )
+            """
         
-        avg_hours = query.aggregate(Avg('hours_of_supply'))['hours_of_supply__avg'] or Decimal('0')
+        # SQL query - average daily supply hours across all feeders
+        query = f"""
+            SELECT 
+                AVG(daily_hours) as avg_hours
+            FROM (
+                SELECT 
+                    feeder_id,
+                    date,
+                    COUNT(DISTINCT hour) as daily_hours
+                FROM technical_hourlyload
+                WHERE date BETWEEN %s AND %s
+                    AND load_mw > 0
+                    {location_filter}
+                GROUP BY feeder_id, date
+            ) daily_supply
+        """
+        
+        with connection.cursor() as cursor:
+            cursor.execute(query, params)
+            result = cursor.fetchone()
+            avg_hours = result[0] if result and result[0] else 0
         
         return {
             'value': float(cls.round_decimal(avg_hours, 2)),
-            'unit': 'hours',
-            'calculation_method': 'average_daily_supply_hours',
-            'source': 'DailyTechnicalSummary'
+            'unit': 'hours/day',
+            'calculation_method': 'average_daily_supply_hours_from_hourlyload',
+            'source': 'HourlyLoad',
+            'calculated_at': timezone.now().isoformat()
         }
     
     @classmethod
@@ -172,63 +228,162 @@ class CTOKPICalculator(KPICalculationService):
         """
         Calculate maximum grid offtake capacity
         KPI: Grid Offtake Capacity (MW)
+        Uses SQL query for MAX aggregation
         """
         start_date, end_date = cls.get_period_range(period_date, period_type)
         
-        query = DailyTechnicalSummary.objects.filter(
-            date__gte=start_date,
-            date__lt=end_date
-        )
+        # Build location filter
+        location_filter = ""
+        params = [start_date, end_date]
         
         if district:
-            query = query.filter(business_district=district)
+            location_filter = """
+                AND feeder_id IN (
+                    SELECT id FROM common_feeder 
+                    WHERE business_district_id = %s AND is_onboarded = TRUE
+                )
+            """
+            params.append(district.id)
         elif state:
-            query = query.filter(state=state)
+            location_filter = """
+                AND feeder_id IN (
+                    SELECT f.id FROM common_feeder f
+                    INNER JOIN common_businessdistrict bd ON f.business_district_id = bd.id
+                    WHERE bd.state_id = %s AND f.is_onboarded = TRUE
+                )
+            """
+            params.append(state.id)
+        else:
+            location_filter = """
+                AND feeder_id IN (
+                    SELECT id FROM common_feeder WHERE is_onboarded = TRUE
+                )
+            """
         
-        max_peak = query.aggregate(Max('max_peak_load'))['max_peak_load__max'] or Decimal('0')
+        # SQL query for maximum peak load
+        query = f"""
+            SELECT COALESCE(MAX(load_mw), 0) as max_peak
+            FROM technical_hourlyload
+            WHERE date BETWEEN %s AND %s
+                {location_filter}
+        """
+        
+        with connection.cursor() as cursor:
+            cursor.execute(query, params)
+            result = cursor.fetchone()
+            max_peak = result[0] if result else Decimal('0')
         
         return {
             'value': float(cls.round_decimal(max_peak, 2)),
             'unit': 'MW',
-            'calculation_method': 'maximum_peak_load',
-            'source': 'DailyTechnicalSummary'
+            'calculation_method': 'maximum_peak_load_from_hourlyload',
+            'source': 'HourlyLoad',
+            'calculated_at': timezone.now().isoformat()
         }
     
     @classmethod
     def calculate_sla_compliance(cls, period_date, period_type='monthly',
-                                state=None, district=None, target_hours=20):
+                                state=None, district=None):
         """
         Calculate SLA compliance percentage
         KPI: SLA Compliance (%)
-        Target hours can be passed or fetched from Band configuration
+        
+        SLA targets by band:
+        - Band A: 20 hours/day
+        - Band B: 16 hours/day
+        - Band C: 12 hours/day
+        - Band D: 8 hours/day
+        - Band E: 4 hours/day
+        
+        Compliance = (Feeders meeting target / Total feeders) × 100
         """
         start_date, end_date = cls.get_period_range(period_date, period_type)
         
-        query = DailyTechnicalSummary.objects.filter(
-            date__gte=start_date,
-            date__lt=end_date
-        )
+        # Get onboarded feeders with their bands
+        feeders_query = Feeder.objects.filter(is_onboarded=True).select_related('band')
         
         if district:
-            query = query.filter(business_district=district)
+            feeders_query = feeders_query.filter(business_district=district)
         elif state:
-            query = query.filter(state=state)
+            feeders_query = feeders_query.filter(business_district__state=state)
         
-        avg_hours = query.aggregate(Avg('hours_of_supply'))['hours_of_supply__avg'] or Decimal('0')
+        feeders = list(feeders_query.values('id', 'band__name'))
         
-        # Calculate compliance
-        compliance = (avg_hours / Decimal(str(target_hours))) * 100 if target_hours > 0 else Decimal('0')
-        compliance = min(compliance, Decimal('100'))  # Cap at 100%
+        if not feeders:
+            return {
+                'value': 0,
+                'unit': '%',
+                'calculation_method': 'feeders_meeting_band_target / total_feeders * 100',
+                'source': 'HourlyLoad, Feeder',
+                'metadata': {'total_feeders': 0, 'compliant_feeders': 0},
+                'calculated_at': timezone.now().isoformat()
+            }
+        
+        # Band target mapping
+        band_targets = {
+            'A': 20,
+            'B': 16,
+            'C': 12,
+            'D': 8,
+            'E': 4
+        }
+        
+        # Calculate average supply hours per feeder
+        feeder_ids = [f['id'] for f in feeders]
+        
+        query = """
+            SELECT 
+                feeder_id,
+                AVG(daily_hours) as avg_hours
+            FROM (
+                SELECT 
+                    feeder_id,
+                    date,
+                    COUNT(DISTINCT hour) as daily_hours
+                FROM technical_hourlyload
+                WHERE date BETWEEN %s AND %s
+                    AND load_mw > 0
+                    AND feeder_id = ANY(%s)
+                GROUP BY feeder_id, date
+            ) daily_supply
+            GROUP BY feeder_id
+        """
+        
+        with connection.cursor() as cursor:
+            cursor.execute(query, [start_date, end_date, feeder_ids])
+            results = cursor.fetchall()
+        
+        # Map feeder supply hours
+        feeder_hours = {row[0]: float(row[1]) for row in results}
+        
+        # Count compliant feeders
+        compliant_count = 0
+        for feeder in feeders:
+            feeder_id = feeder['id']
+            band_name = feeder['band__name']
+            
+            # Get target for this band (default to 0 if band not found)
+            target = band_targets.get(band_name, 0)
+            
+            # Check if feeder meets target
+            avg_hours = feeder_hours.get(feeder_id, 0)
+            if avg_hours >= target:
+                compliant_count += 1
+        
+        # Calculate compliance percentage
+        compliance = (compliant_count / len(feeders) * 100) if feeders else 0
         
         return {
             'value': float(cls.round_decimal(compliance, 2)),
             'unit': '%',
-            'calculation_method': f'actual_hours / target_hours ({target_hours}h) * 100',
-            'source': 'DailyTechnicalSummary',
+            'calculation_method': 'feeders_meeting_band_target / total_feeders * 100',
+            'source': 'HourlyLoad, Feeder',
             'metadata': {
-                'actual_hours': float(cls.round_decimal(avg_hours, 2)),
-                'target_hours': target_hours
-            }
+                'total_feeders': len(feeders),
+                'compliant_feeders': compliant_count,
+                'band_targets': band_targets
+            },
+            'calculated_at': timezone.now().isoformat()
         }
     
     @classmethod
@@ -237,62 +392,154 @@ class CTOKPICalculator(KPICalculationService):
         """
         Calculate system availability percentage
         KPI: System Availability (%)
+        
+        Formula: (Total possible hours - Total interruption hours) / Total possible hours × 100
+        
+        Only counts interruptions that OCCURRED in the period (not carried over)
         """
         start_date, end_date = cls.get_period_range(period_date, period_type)
-        days_in_period = (end_date - start_date).days
+        period_days = (end_date - start_date).days + 1
         
-        query = DailyTechnicalSummary.objects.filter(
-            date__gte=start_date,
-            date__lt=end_date
-        )
+        # Get onboarded feeders
+        feeders_query = Feeder.objects.filter(is_onboarded=True)
         
         if district:
-            query = query.filter(business_district=district)
+            feeders_query = feeders_query.filter(business_district=district)
         elif state:
-            query = query.filter(state=state)
+            feeders_query = feeders_query.filter(business_district__state=state)
         
-        avg_hours = query.aggregate(Avg('hours_of_supply'))['hours_of_supply__avg'] or Decimal('0')
+        feeder_count = feeders_query.count()
         
-        # Availability = (actual supply hours / 24) * 100
-        availability = (avg_hours / 24) * 100
+        if feeder_count == 0:
+            return {
+                'value': 0,
+                'unit': '%',
+                'calculation_method': '(total_hours - interruption_hours) / total_hours * 100',
+                'source': 'FeederInterruption',
+                'metadata': {'feeder_count': 0},
+                'calculated_at': timezone.now().isoformat()
+            }
+        
+        # Total possible hours
+        total_possible_hours = feeder_count * period_days * 24
+        
+        # Get feeder IDs
+        feeder_ids = list(feeders_query.values_list('id', flat=True))
+        
+        # Calculate total interruption hours (ONLY interruptions that occurred in period)
+        # Use timezone conversion for date comparison
+        now = timezone.now()
+        
+        query = """
+            SELECT 
+                COALESCE(SUM(
+                    GREATEST(
+                        EXTRACT(EPOCH FROM (
+                            LEAST(COALESCE(restored_at, %s), %s) - occurred_at
+                        )) / 3600.0,
+                        0
+                    )
+                ), 0) as total_hours
+            FROM technical_feederinterruption
+            WHERE feeder_id = ANY(%s)
+                AND (occurred_at AT TIME ZONE 'Africa/Lagos')::date BETWEEN %s AND %s
+        """
+        
+        with connection.cursor() as cursor:
+            cursor.execute(query, [now, now, feeder_ids, start_date, end_date])
+            result = cursor.fetchone()
+            total_interruption_hours = float(result[0]) if result else 0
+        
+        # Calculate availability
+        availability = ((total_possible_hours - total_interruption_hours) / total_possible_hours * 100) if total_possible_hours > 0 else 0
         
         return {
             'value': float(cls.round_decimal(availability, 2)),
             'unit': '%',
-            'calculation_method': 'average_supply_hours / 24 * 100',
-            'source': 'DailyTechnicalSummary'
+            'calculation_method': '(total_hours - interruption_hours) / total_hours * 100',
+            'source': 'FeederInterruption',
+            'metadata': {
+                'feeder_count': feeder_count,
+                'period_days': period_days,
+                'total_possible_hours': total_possible_hours,
+                'total_interruption_hours': round(total_interruption_hours, 2)
+            },
+            'calculated_at': timezone.now().isoformat()
         }
     
     @classmethod
     def calculate_avg_interruption_duration(cls, period_date, period_type='monthly',
                                            state=None, district=None, feeder=None):
         """
-        Calculate average interruption duration
-        KPI: Average Interruption Duration (hours)
+        Calculate average interruption duration per day
+        KPI: Average Interruption Duration (hours/day)
+        
+        ONLY counts interruptions that OCCURRED in the period
+        Uses same logic as calculate_feeder_interruption_metrics_sql
         """
         start_date, end_date = cls.get_period_range(period_date, period_type)
+        period_days = (end_date - start_date).days + 1
         
-        query = DailyTechnicalSummary.objects.filter(
-            date__gte=start_date,
-            date__lt=end_date
-        )
+        # Get onboarded feeders
+        feeders_query = Feeder.objects.filter(is_onboarded=True)
         
         if feeder:
-            query = query.filter(feeder=feeder)
+            feeders_query = feeders_query.filter(id=feeder.id)
         elif district:
-            query = query.filter(business_district=district)
+            feeders_query = feeders_query.filter(business_district=district)
         elif state:
-            query = query.filter(state=state)
+            feeders_query = feeders_query.filter(business_district__state=state)
         
-        avg_duration = query.aggregate(
-            Avg('avg_interruption_duration')
-        )['avg_interruption_duration__avg'] or Decimal('0')
+        feeder_ids = list(feeders_query.values_list('id', flat=True))
+        feeder_count = len(feeder_ids)
+        
+        if feeder_count == 0:
+            return {
+                'value': 0,
+                'unit': 'hours/day',
+                'calculation_method': 'total_interruption_hours / (feeders * days)',
+                'source': 'FeederInterruption',
+                'metadata': {'feeder_count': 0},
+                'calculated_at': timezone.now().isoformat()
+            }
+        
+        # Calculate total interruption hours (ONLY occurred in period)
+        now = timezone.now()
+        
+        query = """
+            SELECT 
+                COALESCE(SUM(
+                    GREATEST(
+                        EXTRACT(EPOCH FROM (
+                            LEAST(COALESCE(restored_at, %s), %s) - occurred_at
+                        )) / 3600.0,
+                        0
+                    )
+                ), 0) as total_hours
+            FROM technical_feederinterruption
+            WHERE feeder_id = ANY(%s)
+                AND (occurred_at AT TIME ZONE 'Africa/Lagos')::date BETWEEN %s AND %s
+        """
+        
+        with connection.cursor() as cursor:
+            cursor.execute(query, [now, now, feeder_ids, start_date, end_date])
+            result = cursor.fetchone()
+            total_hours = float(result[0]) if result else 0
+        
+        # Calculate average per feeder per day
+        avg_per_day = total_hours / (feeder_count * period_days) if (feeder_count * period_days) > 0 else 0
         
         return {
-            'value': float(cls.round_decimal(avg_duration, 2)),
-            'unit': 'hours',
-            'calculation_method': 'average_interruption_duration',
-            'source': 'DailyTechnicalSummary'
+            'value': float(cls.round_decimal(avg_per_day, 2)),
+            'unit': 'hours/day',
+            'calculation_method': 'total_interruption_hours / (feeders * days)',
+            'source': 'FeederInterruption',
+            'metadata': {
+                'total_interruption_hours': round(total_hours, 2),
+                'feeder_count': feeder_count,
+                'period_days': period_days
+            },
+            'calculated_at': timezone.now().isoformat()
         }
     
     @classmethod
@@ -300,27 +547,63 @@ class CTOKPICalculator(KPICalculationService):
                        state=None, district=None):
         """
         Calculate SAIFI (System Average Interruption Frequency Index)
-        KPI: SAIFI
+        KPI: SAIFI (interruptions/feeder)
+        
+        FEEDER-BASED METRIC (no customer population available)
+        Formula: Total interruption count / Total feeders
+        
+        ONLY counts interruptions that OCCURRED in the period
         """
         start_date, end_date = cls.get_period_range(period_date, period_type)
         
-        query = DailyTechnicalSummary.objects.filter(
-            date__gte=start_date,
-            date__lt=end_date
-        )
+        # Get onboarded feeders
+        feeders_query = Feeder.objects.filter(is_onboarded=True)
         
         if district:
-            query = query.filter(business_district=district)
+            feeders_query = feeders_query.filter(business_district=district)
         elif state:
-            query = query.filter(state=state)
+            feeders_query = feeders_query.filter(business_district__state=state)
         
-        avg_saifi = query.aggregate(Avg('saifi'))['saifi__avg'] or Decimal('0')
+        feeder_ids = list(feeders_query.values_list('id', flat=True))
+        feeder_count = len(feeder_ids)
+        
+        if feeder_count == 0:
+            return {
+                'value': 0,
+                'unit': 'interruptions/feeder',
+                'calculation_method': 'total_interruptions / total_feeders',
+                'source': 'FeederInterruption',
+                'metadata': {'feeder_count': 0, 'interruption_count': 0},
+                'calculated_at': timezone.now().isoformat()
+            }
+        
+        # Count interruptions that OCCURRED in period (timezone conversion)
+        query = """
+            SELECT COUNT(*) as interruption_count
+            FROM technical_feederinterruption
+            WHERE feeder_id = ANY(%s)
+                AND (occurred_at AT TIME ZONE 'Africa/Lagos')::date BETWEEN %s AND %s
+        """
+        
+        with connection.cursor() as cursor:
+            cursor.execute(query, [feeder_ids, start_date, end_date])
+            result = cursor.fetchone()
+            interruption_count = result[0] if result else 0
+        
+        # Calculate SAIFI
+        saifi = interruption_count / feeder_count if feeder_count > 0 else 0
         
         return {
-            'value': float(cls.round_decimal(avg_saifi, 4)),
-            'unit': 'interruptions/customer',
-            'calculation_method': 'average_saifi_from_daily_summaries',
-            'source': 'DailyTechnicalSummary'
+            'value': float(cls.round_decimal(saifi, 2)),
+            'unit': 'interruptions/feeder',
+            'calculation_method': 'total_interruptions / total_feeders',
+            'source': 'FeederInterruption',
+            'metadata': {
+                'interruption_count': interruption_count,
+                'feeder_count': feeder_count,
+                'note': 'Feeder-based metric (no customer population data available)'
+            },
+            'calculated_at': timezone.now().isoformat()
         }
     
     @classmethod
@@ -328,32 +611,79 @@ class CTOKPICalculator(KPICalculationService):
                        state=None, district=None):
         """
         Calculate SAIDI (System Average Interruption Duration Index)
-        KPI: SAIDI
+        KPI: SAIDI (minutes/feeder)
+        
+        FEEDER-BASED METRIC (no customer population available)
+        Formula: (Total interruption hours / Total feeders) × 60
+        
+        ONLY counts interruptions that OCCURRED in the period
+        Result in MINUTES
         """
         start_date, end_date = cls.get_period_range(period_date, period_type)
         
-        query = DailyTechnicalSummary.objects.filter(
-            date__gte=start_date,
-            date__lt=end_date
-        )
+        # Get onboarded feeders
+        feeders_query = Feeder.objects.filter(is_onboarded=True)
         
         if district:
-            query = query.filter(business_district=district)
+            feeders_query = feeders_query.filter(business_district=district)
         elif state:
-            query = query.filter(state=state)
+            feeders_query = feeders_query.filter(business_district__state=state)
         
-        avg_saidi = query.aggregate(Avg('saidi'))['saidi__avg'] or Decimal('0')
+        feeder_ids = list(feeders_query.values_list('id', flat=True))
+        feeder_count = len(feeder_ids)
+        
+        if feeder_count == 0:
+            return {
+                'value': 0,
+                'unit': 'minutes/feeder',
+                'calculation_method': '(total_interruption_hours / total_feeders) * 60',
+                'source': 'FeederInterruption',
+                'metadata': {'feeder_count': 0},
+                'calculated_at': timezone.now().isoformat()
+            }
+        
+        # Calculate total interruption hours (ONLY occurred in period)
+        now = timezone.now()
+        
+        query = """
+            SELECT 
+                COALESCE(SUM(
+                    GREATEST(
+                        EXTRACT(EPOCH FROM (
+                            LEAST(COALESCE(restored_at, %s), %s) - occurred_at
+                        )) / 3600.0,
+                        0
+                    )
+                ), 0) as total_hours
+            FROM technical_feederinterruption
+            WHERE feeder_id = ANY(%s)
+                AND (occurred_at AT TIME ZONE 'Africa/Lagos')::date BETWEEN %s AND %s
+        """
+        
+        with connection.cursor() as cursor:
+            cursor.execute(query, [now, now, feeder_ids, start_date, end_date])
+            result = cursor.fetchone()
+            total_hours = float(result[0]) if result else 0
+        
+        # Calculate SAIDI in minutes per feeder
+        saidi_minutes = (total_hours / feeder_count * 60) if feeder_count > 0 else 0
         
         return {
-            'value': float(cls.round_decimal(avg_saidi, 4)),
-            'unit': 'minutes/customer',
-            'calculation_method': 'average_saidi_from_daily_summaries',
-            'source': 'DailyTechnicalSummary'
+            'value': float(cls.round_decimal(saidi_minutes, 2)),
+            'unit': 'minutes/feeder',
+            'calculation_method': '(total_interruption_hours / total_feeders) * 60',
+            'source': 'FeederInterruption',
+            'metadata': {
+                'total_interruption_hours': round(total_hours, 2),
+                'feeder_count': feeder_count,
+                'note': 'Feeder-based metric (no customer population data available)'
+            },
+            'calculated_at': timezone.now().isoformat()
         }
 
 
 # =============================================================================
-# CCO KPI CALCULATORS
+# CCO, CFO, CHRO CALCULATORS - KEEP EXISTING LOGIC WITH MINOR FIXES
 # =============================================================================
 
 class CCOKPICalculator(KPICalculationService):
@@ -369,37 +699,52 @@ class CCOKPICalculator(KPICalculationService):
         metering_type: 'MD1', 'MD2', 'Non-MD'
         """
         start_date = period_date.replace(day=1)
-        end_date = start_date + relativedelta(months=1)
+        end_date = start_date + relativedelta(months=1) - timedelta(days=1)
         
-        # Get feeders with customers of this metering type
-        feeders_query = Feeder.objects.filter(
-            transformers__customer__metering_type=metering_type
-        ).distinct()
+        # Get transformers with customers of this metering type
+        transformers_query = Customer.objects.filter(
+            metering_type=metering_type
+        )
         
         if district:
-            feeders_query = feeders_query.filter(business_district=district)
+            transformers_query = transformers_query.filter(transformer__feeder__business_district=district)
         elif state:
-            feeders_query = feeders_query.filter(business_district__state=state)
+            transformers_query = transformers_query.filter(transformer__feeder__business_district__state=state)
         
-        feeders = list(feeders_query.values_list('id', flat=True))
+        transformer_ids = list(transformers_query.values_list('transformer_id', flat=True).distinct())
         
-        # Get energy delivered
+        if not transformer_ids:
+            return {
+                'value': 0,
+                'unit': '%',
+                'calculation_method': 'energy_billed / energy_delivered * 100',
+                'source': 'MonthlyEnergyBilled, FeederEnergyMonthly',
+                'metadata': {'metering_type': metering_type, 'transformer_count': 0}
+            }
+        
+        # Get feeder IDs from transformers
+        from common.models import DistributionTransformer
+        feeder_ids = list(DistributionTransformer.objects.filter(
+            id__in=transformer_ids
+        ).values_list('feeder_id', flat=True).distinct())
+        
+        # Get energy delivered for these feeders
         energy_delivered = FeederEnergyMonthly.objects.filter(
-            feeder_id__in=feeders,
+            feeder_id__in=feeder_ids,
             period=start_date
         ).aggregate(Sum('energy_mwh'))['energy_mwh__sum'] or Decimal('0')
         
-        # Fallback to daily if needed
+        # Fallback to daily if no monthly data
         if energy_delivered == 0:
             energy_delivered = FeederEnergyDaily.objects.filter(
-                feeder_id__in=feeders,
+                feeder_id__in=feeder_ids,
                 date__gte=start_date,
-                date__lt=end_date
+                date__lte=end_date
             ).aggregate(Sum('energy_mwh'))['energy_mwh__sum'] or Decimal('0')
         
-        # Get energy billed
+        # Get energy billed for these transformers
         energy_billed = MonthlyEnergyBilled.objects.filter(
-            feeder_id__in=feeders,
+            transformer_id__in=transformer_ids,
             month=start_date
         ).aggregate(Sum('energy_mwh'))['energy_mwh__sum'] or Decimal('0')
         
@@ -414,7 +759,8 @@ class CCOKPICalculator(KPICalculationService):
             'metadata': {
                 'energy_delivered_mwh': float(cls.round_decimal(energy_delivered, 2)),
                 'energy_billed_mwh': float(cls.round_decimal(energy_billed, 2)),
-                'metering_type': metering_type
+                'metering_type': metering_type,
+                'transformer_count': len(transformer_ids)
             }
         }
     
@@ -428,40 +774,37 @@ class CCOKPICalculator(KPICalculationService):
         metering_type: 'MD1', 'MD2', 'Non-MD'
         """
         start_date = period_date.replace(day=1)
-        end_date = start_date + relativedelta(months=1)
         
         # Get transformers with customers of this metering type
         transformers_query = Customer.objects.filter(
             metering_type=metering_type
-        ).values_list('transformer_id', flat=True).distinct()
+        )
         
-        transformers = list(transformers_query)
-        
-        # Apply geographic filters
         if district:
-            transformers = list(
-                Customer.objects.filter(
-                    metering_type=metering_type,
-                    transformer__feeder__business_district=district
-                ).values_list('transformer_id', flat=True).distinct()
-            )
+            transformers_query = transformers_query.filter(transformer__feeder__business_district=district)
         elif state:
-            transformers = list(
-                Customer.objects.filter(
-                    metering_type=metering_type,
-                    transformer__feeder__business_district__state=state
-                ).values_list('transformer_id', flat=True).distinct()
-            )
+            transformers_query = transformers_query.filter(transformer__feeder__business_district__state=state)
+        
+        transformer_ids = list(transformers_query.values_list('transformer_id', flat=True).distinct())
+        
+        if not transformer_ids:
+            return {
+                'value': 0,
+                'unit': '%',
+                'calculation_method': 'revenue_collected / revenue_billed * 100',
+                'source': 'MonthlyCommercialSummary',
+                'metadata': {'metering_type': metering_type, 'transformer_count': 0}
+            }
         
         # Get revenue billed
         revenue_billed = MonthlyCommercialSummary.objects.filter(
-            transformer_id__in=transformers,
+            transformer_id__in=transformer_ids,
             month=start_date
         ).aggregate(Sum('revenue_billed'))['revenue_billed__sum'] or Decimal('0')
         
         # Get revenue collected
         revenue_collected = MonthlyCommercialSummary.objects.filter(
-            transformer_id__in=transformers,
+            transformer_id__in=transformer_ids,
             month=start_date
         ).aggregate(Sum('revenue_collected'))['revenue_collected__sum'] or Decimal('0')
         
@@ -476,7 +819,8 @@ class CCOKPICalculator(KPICalculationService):
             'metadata': {
                 'revenue_billed': float(cls.round_decimal(revenue_billed, 2)),
                 'revenue_collected': float(cls.round_decimal(revenue_collected, 2)),
-                'metering_type': metering_type
+                'metering_type': metering_type,
+                'transformer_count': len(transformer_ids)
             }
         }
     
@@ -486,7 +830,19 @@ class CCOKPICalculator(KPICalculationService):
         Calculate number of Band A feeders (commercially ready)
         KPI: Feeders Commercially Ready (count)
         """
-        query = Feeder.objects.filter(band__name='A')
+        # Get Band A
+        try:
+            band_a = Band.objects.get(name='A')
+        except Band.DoesNotExist:
+            return {
+                'value': 0,
+                'unit': 'feeders',
+                'calculation_method': 'count_band_a_feeders',
+                'source': 'Feeder',
+                'metadata': {'error': 'Band A not found'}
+            }
+        
+        query = Feeder.objects.filter(band=band_a, is_onboarded=True)
         
         if district:
             query = query.filter(business_district=district)
@@ -498,7 +854,7 @@ class CCOKPICalculator(KPICalculationService):
         return {
             'value': count,
             'unit': 'feeders',
-            'calculation_method': 'count_band_a_feeders',
+            'calculation_method': 'count_band_a_onboarded_feeders',
             'source': 'Feeder'
         }
     
@@ -538,7 +894,7 @@ class CCOKPICalculator(KPICalculationService):
         
         query = DailyCollection.objects.filter(
             date__gte=start_date,
-            date__lt=end_date,
+            date__lte=end_date,
             collection_type='Prepaid'
         )
         
@@ -647,7 +1003,7 @@ class CCOKPICalculator(KPICalculationService):
         new_md_customers = Customer.objects.filter(
             metering_type__in=['MD1', 'MD2'],
             joined_date__gte=new_customer_threshold,
-            joined_date__lt=end_date
+            joined_date__lte=end_date
         )
         
         if district:
@@ -702,7 +1058,7 @@ class CFOKPICalculator(KPICalculationService):
         # Get total OPEX
         district_opex = Opex.objects.filter(
             date__gte=start_date,
-            date__lt=end_date
+            date__lte=end_date
         )
         
         if district:
@@ -717,11 +1073,10 @@ class CFOKPICalculator(KPICalculationService):
         # Get HQ OPEX (proportionally allocated)
         hq_opex = HQOpex.objects.filter(
             date__gte=start_date,
-            date__lt=end_date
+            date__lte=end_date
         ).aggregate(Sum('credit'))['credit__sum'] or Decimal('0')
         
         # For simplicity, allocate HQ OPEX proportionally
-        # In real scenario, you might have a more sophisticated allocation method
         if state or district:
             # Get state/district revenue as proportion of total
             if district:
@@ -788,7 +1143,7 @@ class CFOKPICalculator(KPICalculationService):
         # Get total OPEX (same logic as cost-to-revenue ratio)
         district_opex = Opex.objects.filter(
             date__gte=start_date,
-            date__lt=end_date
+            date__lte=end_date
         )
         
         if district:
@@ -802,12 +1157,12 @@ class CFOKPICalculator(KPICalculationService):
         
         hq_opex = HQOpex.objects.filter(
             date__gte=start_date,
-            date__lt=end_date
+            date__lte=end_date
         ).aggregate(Sum('credit'))['credit__sum'] or Decimal('0')
         
         # Allocate HQ OPEX proportionally if filtering by state/district
         if state or district:
-            feeders_query = Feeder.objects.all()
+            feeders_query = Feeder.objects.filter(is_onboarded=True)
             if district:
                 feeders_query = feeders_query.filter(business_district=district)
             elif state:
@@ -831,17 +1186,47 @@ class CFOKPICalculator(KPICalculationService):
         
         total_opex = total_district_opex + allocated_hq_opex
         
-        # Get energy delivered
-        energy_query = FeederEnergyMonthly.objects.filter(
-            period=start_date
-        )
+        # Get energy delivered using SQL (from HourlyLoad)
+        location_filter = ""
+        params = [start_date, end_date]
         
         if district:
-            energy_query = energy_query.filter(feeder__business_district=district)
+            location_filter = """
+                AND feeder_id IN (
+                    SELECT id FROM common_feeder 
+                    WHERE business_district_id = %s AND is_onboarded = TRUE
+                )
+            """
+            params.append(district.id)
         elif state:
-            energy_query = energy_query.filter(feeder__business_district__state=state)
+            location_filter = """
+                AND feeder_id IN (
+                    SELECT f.id FROM common_feeder f
+                    INNER JOIN common_businessdistrict bd ON f.business_district_id = bd.id
+                    WHERE bd.state_id = %s AND f.is_onboarded = TRUE
+                )
+            """
+            params.append(state.id)
+        else:
+            location_filter = """
+                AND feeder_id IN (
+                    SELECT id FROM common_feeder WHERE is_onboarded = TRUE
+                )
+            """
         
-        energy_mwh = energy_query.aggregate(Sum('energy_mwh'))['energy_mwh__sum'] or Decimal('0')
+        query = f"""
+            SELECT COALESCE(SUM(load_mw), 0) as total_energy_mwh
+            FROM technical_hourlyload
+            WHERE date BETWEEN %s AND %s
+                AND load_mw > 0
+                {location_filter}
+        """
+        
+        with connection.cursor() as cursor:
+            cursor.execute(query, params)
+            result = cursor.fetchone()
+            energy_mwh = result[0] if result else Decimal('0')
+        
         energy_kwh = energy_mwh * 1000  # Convert to kWh
         
         # Calculate OPEX per kWh
@@ -851,7 +1236,7 @@ class CFOKPICalculator(KPICalculationService):
             'value': float(cls.round_decimal(opex_per_kwh, 4)),
             'unit': '₦/kWh',
             'calculation_method': 'total_opex / total_energy_kwh',
-            'source': 'Opex, HQOpex, FeederEnergyMonthly',
+            'source': 'Opex, HQOpex, HourlyLoad',
             'metadata': {
                 'total_opex': float(cls.round_decimal(total_opex, 2)),
                 'energy_kwh': float(cls.round_decimal(energy_kwh, 2)),
@@ -1125,7 +1510,7 @@ class CHROKPICalculator(KPICalculationService):
         # Get staff who left during period
         staff_left = Staff.objects.filter(
             exit_date__gte=start_date,
-            exit_date__lt=end_date
+            exit_date__lte=end_date
         )
         
         if district:
@@ -1228,15 +1613,18 @@ class UnifiedKPICalculator:
             result['kpi_key'] = kpi_key
             result['period_date'] = period_date.isoformat()
             result['period_type'] = period_type
-            result['calculated_at'] = timezone.now().isoformat()
+            if 'calculated_at' not in result:
+                result['calculated_at'] = timezone.now().isoformat()
             return result
         except Exception as e:
+            import traceback
             return {
                 'value': None,
                 'unit': None,
                 'calculation_method': 'error',
                 'source': None,
                 'error': str(e),
+                'traceback': traceback.format_exc(),
                 'kpi_key': kpi_key
             }
     

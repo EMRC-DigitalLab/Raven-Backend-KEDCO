@@ -1,12 +1,14 @@
-# hr/views/executive_kpis/role_views.py - UPDATED WITH AUTO-CALCULATION
+# hr/views/executive_kpis/role_views.py - FIXED VERSION
+"""
+Executive KPI Role Views - REAL-TIME CALCULATIONS ONLY
+No caching in ExecutivePerformance - all values calculated on-demand
+ExecutivePerformance only used for manual-entry KPIs
+"""
 from rest_framework import status
 from rest_framework.decorators import api_view
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from django.db.models import Q
 from django.utils import timezone
-from datetime import date, timedelta
-from dateutil.relativedelta import relativedelta
+from datetime import date
 from decimal import Decimal
 
 from ...models import ExecutiveKPIDefinition, ExecutivePerformance
@@ -46,180 +48,125 @@ def parse_date_params(request):
     return period_date, mode
 
 
-def get_kpi_value_auto_or_manual(kpi_definition, period_date, mode='monthly', **kwargs):
+def calculate_kpi_with_status(kpi_key, period_date, target_value, is_reverse_polarity=False, **kwargs):
     """
-    Get KPI value - auto-calculate if possible, otherwise fetch manual entry
+    Calculate KPI and determine status based on target
     
     Args:
-        kpi_definition: ExecutiveKPIDefinition instance
+        kpi_key: KPI identifier for calculator
         period_date: Date for calculation
-        mode: 'monthly' or 'range'
-        **kwargs: Additional filters (state, district, feeder)
+        target_value: Target value (or dict with min/max for range)
+        is_reverse_polarity: True if lower is better
+        **kwargs: Additional filters (state, district)
     
     Returns:
-        dict: KPI value data with metadata
+        dict: KPI data with current value, target, status, progress
     """
-    # Map KPI names to calculator keys
-    kpi_name_mapping = {
-        # CTO
-        'Energy Delivered (GWh)': 'energy_delivered_gwh',
-        'Average Hours of Supply per Day': 'avg_hours_of_supply',
-        'Grid Offtake Capacity (MW)': 'grid_offtake_capacity',
-        'SLA Compliance (%)': 'sla_compliance',
-        'System Availability (%)': 'system_availability',
-        'Average Interruption Duration (hours)': 'avg_interruption_duration',
-        'SAIFI': 'saifi',
-        'SAIDI': 'saidi',
+    try:
+        # Calculate using UnifiedKPICalculator
+        result = UnifiedKPICalculator.calculate_kpi(
+            kpi_key,
+            period_date,
+            period_type='monthly',
+            **kwargs
+        )
         
-        # CCO - Billing Efficiency
-        'MD Industrial Billing Efficiency (%)': 'billing_efficiency_md1',
-        'MD Non-Industrial Billing Efficiency (%)': 'billing_efficiency_md2',
-        'Regions Billing Efficiency (%)': 'billing_efficiency_non_md',
+        current = result.get('value', 0)
+        unit = result.get('unit', '')
         
-        # CCO - Collection Efficiency
-        'MD Industrial Collection Efficiency (%)': 'collection_efficiency_md1',
-        'MD Non-Industrial Collection Efficiency (%)': 'collection_efficiency_md2',
-        'Regions Collection Efficiency (%)': 'collection_efficiency_non_md',
-        
-        # CCO - Band A Growth
-        'Feeders Commercially Ready': 'feeders_commercially_ready',
-        'Customers in Billing System': 'customers_in_billing_system',
-        'PPM Revenue Collected (₦M)': 'ppm_revenue',
-        'Customer Attrition Rate (%)': 'customer_attrition_rate',
-        'New MD Customers Value (₦M)': 'new_md_customers_value',
-        
-        # CFO
-        'Cost-to-Revenue Ratio (%)': 'cost_to_revenue_ratio',
-        'OPEX per kWh Delivered (₦/kWh)': 'opex_per_kwh',
-        'Collection to NBET Payment Ratio': 'collection_to_nbet_ratio',
-        
-        # CHRO
-        'Staff Productivity (₦M per staff)': 'staff_productivity',
-        'Employee Utilization Rate (%)': 'employee_utilization_rate',
-        'Wage Bill vs Revenue (%)': 'wage_bill_vs_revenue',
-        'Wage Bill Reduction vs 2024 Baseline (%)': 'wage_bill_reduction',
-        'Staff Attrition Rate (%)': 'staff_attrition_rate',
-    }
-    
-    kpi_key = kpi_name_mapping.get(kpi_definition.name)
-    
-    if kpi_key:
-        # Auto-calculable KPI
-        try:
-            result = UnifiedKPICalculator.calculate_kpi(
-                kpi_key,
-                period_date,
-                period_type='monthly',
-                **kwargs
-            )
+        # Determine if target is range or single value
+        if isinstance(target_value, dict):
+            # Range target
+            target_min = target_value.get('min', 0)
+            target_max = target_value.get('max', 100)
+            is_range = True
             
-            # Store the calculated value in ExecutivePerformance for caching
-            performance, created = ExecutivePerformance.objects.update_or_create(
-                kpi_definition=kpi_definition,
-                period_date=period_date,
-                period_type='monthly',
-                defaults={
-                    'actual_value': Decimal(str(result['value'])),
-                    'data_source': 'auto_calculated',
-                    'notes': f"Auto-calculated from {result['source']}",
-                }
-            )
+            # Check if within range
+            if current >= target_min and current <= target_max:
+                status = 'on_track'
+                progress = 100
+            elif current < target_min:
+                gap_percentage = ((target_min - current) / target_min * 100) if target_min > 0 else 0
+                if gap_percentage > 30:
+                    status = 'critical'
+                elif gap_percentage > 20:
+                    status = 'off_track'
+                else:
+                    status = 'at_risk'
+                progress = (current / target_min * 100) if target_min > 0 else 0
+            else:  # Above max
+                status = 'exceeding'
+                progress = 100
+        else:
+            # Single target
+            is_range = False
+            target_min = None
+            target_max = None
             
-            return {
-                'current': result['value'],
-                'data_source': 'auto_calculated',
-                'calculation_method': result['calculation_method'],
-                'source_models': result['source'],
-                'metadata': result.get('metadata', {}),
-                'calculated_at': result.get('calculated_at'),
-                'is_auto': True
-            }
-        except Exception as e:
-            # If auto-calculation fails, try to get manual entry
-            print(f"Auto-calculation failed for {kpi_definition.name}: {e}")
-            pass
-    
-    # Fall back to manual entry
-    performance = ExecutivePerformance.objects.filter(
-        kpi_definition=kpi_definition,
-        period_date=period_date,
-        period_type='monthly'
-    ).first()
-    
-    if performance:
+            if is_reverse_polarity:
+                # Lower is better (e.g., cost ratios, attrition)
+                if current <= target_value:
+                    status = 'on_track'
+                    progress = 100
+                else:
+                    excess_percentage = ((current - target_value) / target_value * 100) if target_value > 0 else 0
+                    if excess_percentage > 30:
+                        status = 'critical'
+                    elif excess_percentage > 20:
+                        status = 'off_track'
+                    else:
+                        status = 'at_risk'
+                    progress = max(0, 100 - excess_percentage)
+            else:
+                # Higher is better (most KPIs)
+                if current >= target_value:
+                    status = 'on_track'
+                    progress = 100
+                else:
+                    progress = (current / target_value * 100) if target_value > 0 else 0
+                    gap_percentage = 100 - progress
+                    
+                    if gap_percentage > 30:
+                        status = 'critical'
+                    elif gap_percentage > 20:
+                        status = 'off_track'
+                    elif gap_percentage > 10:
+                        status = 'at_risk'
+                    else:
+                        status = 'on_track'
+        
         return {
-            'current': float(performance.actual_value),
-            'data_source': performance.data_source or 'manual_entry',
-            'notes': performance.notes,
-            'verified': performance.verified,
-            'is_auto': False
+            'current': current,
+            'target': target_value if not is_range else None,
+            'target_min': target_min,
+            'target_max': target_max,
+            'is_range': is_range,
+            'status': status,
+            'progress': min(progress, 100),
+            'unit': unit,
+            'is_auto_calculated': True,
+            'calculation_source': result.get('source', ''),
+            'metadata': result.get('metadata', {})
         }
-    else:
+    except Exception as e:
+        # If calculation fails, return error state
         return {
             'current': 0,
-            'data_source': 'no_data',
-            'is_auto': False
+            'target': target_value,
+            'status': 'error',
+            'progress': 0,
+            'unit': '',
+            'is_auto_calculated': False,
+            'error': str(e)
         }
-
-
-def get_monthly_trend_data(kpi_definition, period_date, months_back=4, **kwargs):
-    """
-    Get trend data for the last N months before period_date
-    Auto-calculates if possible, otherwise uses manual entries
-    """
-    kpi_name_mapping = {
-        'Energy Delivered (GWh)': 'energy_delivered_gwh',
-        'Average Hours of Supply per Day': 'avg_hours_of_supply',
-        'Grid Offtake Capacity (MW)': 'grid_offtake_capacity',
-        'SLA Compliance (%)': 'sla_compliance',
-        # Add all other mappings as needed
-    }
-    
-    kpi_key = kpi_name_mapping.get(kpi_definition.name)
-    monthly_data = []
-    
-    for i in range(months_back, 0, -1):
-        month_date = period_date - relativedelta(months=i)
-        
-        if kpi_key:
-            # Try auto-calculation
-            try:
-                result = UnifiedKPICalculator.calculate_kpi(
-                    kpi_key,
-                    month_date,
-                    period_type='monthly',
-                    **kwargs
-                )
-                value = result['value']
-            except:
-                # Fall back to manual entry
-                performance = ExecutivePerformance.objects.filter(
-                    kpi_definition=kpi_definition,
-                    period_date=month_date,
-                    period_type='monthly'
-                ).first()
-                value = float(performance.actual_value) if performance else 0
-        else:
-            # Manual entry only
-            performance = ExecutivePerformance.objects.filter(
-                kpi_definition=kpi_definition,
-                period_date=month_date,
-                period_type='monthly'
-            ).first()
-            value = float(performance.actual_value) if performance else 0
-        
-        monthly_data.append({
-            'month': month_date.strftime('%b'),
-            'value': value
-        })
-    
-    return monthly_data
 
 
 @api_view(['GET'])
 def cto_kpis(request):
     """
-    Get CTO KPI data with AUTO-CALCULATION
+    Get CTO KPI data with REAL-TIME AUTO-CALCULATION
+    All values calculated on-demand, no caching
+    
     Supports date filtering via query params:
     - mode: 'monthly' or 'range'
     - year, month: for monthly mode
@@ -236,156 +183,213 @@ def cto_kpis(request):
         filters = {}
         if state_id:
             from common.models import State
-            filters['state'] = State.objects.get(id=state_id)
+            try:
+                filters['state'] = State.objects.get(id=state_id)
+            except State.DoesNotExist:
+                pass
         if district_id:
             from common.models import BusinessDistrict
-            filters['district'] = BusinessDistrict.objects.get(id=district_id)
+            try:
+                filters['district'] = BusinessDistrict.objects.get(id=district_id)
+            except BusinessDistrict.DoesNotExist:
+                pass
         
         # Calculate all CTO KPIs using auto-calculation
         kpi_data = {}
         
-        # Energy Delivered
-        energy_result = CTOKPICalculator.calculate_energy_delivered(period_date, **filters)
+        # Energy Delivered (MWh - NOT GWh!)
+        energy_result = calculate_kpi_with_status(
+            'energy_delivered_gwh',
+            period_date,
+            target_value=50000.0,  # Target in MWh
+            **filters
+        )
         kpi_data['energyDelivery'] = {
-            'current': energy_result['value'],
-            'target': 50.0,  # Example target - should come from KPI definition
-            'status': 'on_track',  # Calculate based on target
-            'progress': (energy_result['value'] / 50.0 * 100) if energy_result['value'] else 0,
+            **energy_result,
             'description': 'Total electrical energy delivered to customers',
-            'unit': energy_result['unit'],
             'priority': 'high',
             'deadline': 'Monthly',
-            'monthlyData': [],  # Can be populated with historical data
-            'period_date': period_date.isoformat(),
-            'is_auto_calculated': True,
-            'calculation_source': energy_result['source']
+            'monthlyData': [],
+            'period_date': period_date.isoformat()
         }
         
         # Average Hours of Supply
-        hours_result = CTOKPICalculator.calculate_avg_hours_of_supply(period_date, **filters)
+        hours_result = calculate_kpi_with_status(
+            'avg_hours_of_supply',
+            period_date,
+            target_value=20.0,
+            **filters
+        )
         kpi_data['hoursOfSupply'] = {
-            'current': hours_result['value'],
-            'target': 20.0,  # Example target
-            'status': 'on_track',
-            'progress': (hours_result['value'] / 20.0 * 100) if hours_result['value'] else 0,
+            **hours_result,
             'description': 'Average hours of electricity supply per day',
-            'unit': hours_result['unit'],
             'priority': 'critical',
             'deadline': 'Monthly',
             'monthlyData': [],
-            'period_date': period_date.isoformat(),
-            'is_auto_calculated': True,
-            'calculation_source': hours_result['source']
+            'period_date': period_date.isoformat()
         }
         
-        # Grid Offtake
-        offtake_result = CTOKPICalculator.calculate_grid_offtake_capacity(period_date, **filters)
+        # Grid Offtake Capacity
+        offtake_result = calculate_kpi_with_status(
+            'grid_offtake_capacity',
+            period_date,
+            target_value=150.0,
+            **filters
+        )
         kpi_data['gridOfftake'] = {
-            'current': offtake_result['value'],
-            'target': 150.0,  # Example target
-            'status': 'on_track',
-            'progress': (offtake_result['value'] / 150.0 * 100) if offtake_result['value'] else 0,
+            **offtake_result,
             'description': 'Maximum power capacity drawn from the grid',
-            'unit': offtake_result['unit'],
             'priority': 'high',
             'deadline': 'Monthly',
             'monthlyData': [],
-            'period_date': period_date.isoformat(),
-            'is_auto_calculated': True,
-            'calculation_source': offtake_result['source']
+            'period_date': period_date.isoformat()
         }
         
         # SLA Compliance
-        sla_result = CTOKPICalculator.calculate_sla_compliance(period_date, **filters)
+        sla_result = calculate_kpi_with_status(
+            'sla_compliance',
+            period_date,
+            target_value=90.0,
+            **filters
+        )
         kpi_data['slaCompliance'] = {
-            'current': sla_result['value'],
-            'target': 90.0,
-            'status': 'on_track' if sla_result['value'] >= 90 else 'off_track',
-            'progress': sla_result['value'],
-            'description': 'Service Level Agreement compliance percentage',
-            'unit': sla_result['unit'],
+            **sla_result,
+            'description': 'Percentage of feeders meeting band-specific supply hour targets',
             'priority': 'critical',
             'deadline': 'Monthly',
             'monthlyData': [],
-            'period_date': period_date.isoformat(),
-            'is_auto_calculated': True,
-            'calculation_source': sla_result['source'],
-            'metadata': sla_result.get('metadata', {})
+            'period_date': period_date.isoformat()
         }
         
         # System Availability
-        availability_result = CTOKPICalculator.calculate_system_availability(period_date, **filters)
+        availability_result = calculate_kpi_with_status(
+            'system_availability',
+            period_date,
+            target_value=95.0,
+            **filters
+        )
         kpi_data['systemAvailability'] = {
-            'current': availability_result['value'],
-            'target': 95.0,
-            'status': 'on_track' if availability_result['value'] >= 95 else 'off_track',
-            'progress': availability_result['value'],
+            **availability_result,
             'description': 'Percentage of time the system was operational',
-            'unit': availability_result['unit'],
             'priority': 'high',
             'deadline': 'Monthly',
             'monthlyData': [],
-            'period_date': period_date.isoformat(),
-            'is_auto_calculated': True,
-            'calculation_source': availability_result['source']
+            'period_date': period_date.isoformat()
+        }
+        
+        # Average Interruption Duration
+        duration_result = calculate_kpi_with_status(
+            'avg_interruption_duration',
+            period_date,
+            target_value=2.0,  # Target: max 2 hours/day
+            is_reverse_polarity=True,  # Lower is better
+            **filters
+        )
+        kpi_data['avgInterruptionDuration'] = {
+            **duration_result,
+            'description': 'Average interruption hours per feeder per day',
+            'priority': 'high',
+            'deadline': 'Monthly',
+            'monthlyData': [],
+            'period_date': period_date.isoformat()
         }
         
         # SAIFI
-        saifi_result = CTOKPICalculator.calculate_saifi(period_date, **filters)
+        saifi_result = calculate_kpi_with_status(
+            'saifi',
+            period_date,
+            target_value=5.0,  # Lower is better
+            is_reverse_polarity=True,
+            **filters
+        )
         kpi_data['saifi'] = {
-            'current': saifi_result['value'],
-            'target': 5.0,  # Lower is better
-            'status': 'on_track' if saifi_result['value'] <= 5.0 else 'off_track',
-            'progress': 100 - (saifi_result['value'] / 5.0 * 100) if saifi_result['value'] <= 5.0 else 0,
-            'description': 'System Average Interruption Frequency Index',
-            'unit': saifi_result['unit'],
+            **saifi_result,
+            'description': 'System Average Interruption Frequency Index (feeder-based)',
             'priority': 'medium',
             'deadline': 'Monthly',
             'monthlyData': [],
-            'period_date': period_date.isoformat(),
-            'is_auto_calculated': True,
-            'calculation_source': saifi_result['source']
+            'period_date': period_date.isoformat()
         }
         
         # SAIDI
-        saidi_result = CTOKPICalculator.calculate_saidi(period_date, **filters)
+        saidi_result = calculate_kpi_with_status(
+            'saidi',
+            period_date,
+            target_value=300.0,  # Minutes - lower is better
+            is_reverse_polarity=True,
+            **filters
+        )
         kpi_data['saidi'] = {
-            'current': saidi_result['value'],
-            'target': 300.0,  # Minutes - lower is better
-            'status': 'on_track' if saidi_result['value'] <= 300.0 else 'off_track',
-            'progress': 100 - (saidi_result['value'] / 300.0 * 100) if saidi_result['value'] <= 300.0 else 0,
-            'description': 'System Average Interruption Duration Index',
-            'unit': saidi_result['unit'],
+            **saidi_result,
+            'description': 'System Average Interruption Duration Index (feeder-based)',
             'priority': 'medium',
             'deadline': 'Monthly',
             'monthlyData': [],
-            'period_date': period_date.isoformat(),
-            'is_auto_calculated': True,
-            'calculation_source': saidi_result['source']
+            'period_date': period_date.isoformat()
         }
         
-        # For manual entry KPIs (like feeders upgraded), still fetch from database
-        feeders_upgraded_performance = ExecutivePerformance.objects.filter(
-            kpi_definition__executive_role='CTO',
-            kpi_definition__name__icontains='Feeders Upgraded',
-            period_date=period_date,
-            period_type='monthly'
-        ).first()
-        
-        kpi_data['feedersUpgrade'] = {
-            'current': float(feeders_upgraded_performance.actual_value) if feeders_upgraded_performance else 0,
-            'target': 10.0,
-            'status': 'not_started',
-            'progress': 0,
-            'description': 'Number of feeders upgraded or rehabilitated',
-            'unit': 'feeders',
-            'priority': 'high',
-            'deadline': 'Q4 2025',
-            'monthlyData': [],
-            'period_date': period_date.isoformat(),
-            'is_auto_calculated': False,
-            'requires_manual_entry': True
-        }
+        # For manual entry KPIs (like feeders upgraded), fetch from ExecutivePerformance
+        # These cannot be auto-calculated and require manual data entry
+        try:
+            feeders_upgraded_kpi = ExecutiveKPIDefinition.objects.get(
+                executive_role='CTO',
+                name__icontains='Feeders Upgraded',
+                is_active=True
+            )
+            
+            feeders_upgraded_performance = ExecutivePerformance.objects.filter(
+                kpi_definition=feeders_upgraded_kpi,
+                period_date=period_date,
+                period_type='monthly'
+            ).first()
+            
+            if feeders_upgraded_performance:
+                current_value = float(feeders_upgraded_performance.actual_value)
+                target_value = float(feeders_upgraded_kpi.target_value) if feeders_upgraded_kpi.target_value else 10.0
+                progress = (current_value / target_value * 100) if target_value > 0 else 0
+                
+                if progress >= 100:
+                    status = 'on_track'
+                elif progress >= 70:
+                    status = 'at_risk'
+                else:
+                    status = 'off_track'
+            else:
+                current_value = 0
+                target_value = 10.0
+                progress = 0
+                status = 'not_started'
+            
+            kpi_data['feedersUpgrade'] = {
+                'current': current_value,
+                'target': target_value,
+                'status': status,
+                'progress': min(progress, 100),
+                'description': 'Number of feeders upgraded or rehabilitated',
+                'unit': 'feeders',
+                'priority': 'high',
+                'deadline': 'Q4 2025',
+                'monthlyData': [],
+                'period_date': period_date.isoformat(),
+                'is_auto_calculated': False,
+                'requires_manual_entry': True
+            }
+        except ExecutiveKPIDefinition.DoesNotExist:
+            # If KPI definition doesn't exist, show placeholder
+            kpi_data['feedersUpgrade'] = {
+                'current': 0,
+                'target': 10.0,
+                'status': 'not_started',
+                'progress': 0,
+                'description': 'Number of feeders upgraded or rehabilitated',
+                'unit': 'feeders',
+                'priority': 'high',
+                'deadline': 'Q4 2025',
+                'monthlyData': [],
+                'period_date': period_date.isoformat(),
+                'is_auto_calculated': False,
+                'requires_manual_entry': True
+            }
         
         return Response({
             'success': True,
@@ -397,14 +401,17 @@ def cto_kpis(request):
                 'last_updated': timezone.now().isoformat(),
                 'kpi_count': len(kpi_data),
                 'auto_calculated_count': sum(1 for v in kpi_data.values() if v.get('is_auto_calculated')),
-                'manual_entry_count': sum(1 for v in kpi_data.values() if not v.get('is_auto_calculated'))
+                'manual_entry_count': sum(1 for v in kpi_data.values() if not v.get('is_auto_calculated')),
+                'calculation_mode': 'real_time'
             }
         }, status=status.HTTP_200_OK)
         
     except Exception as e:
+        import traceback
         return Response({
             'success': False,
             'error': str(e),
+            'traceback': traceback.format_exc(),
             'message': 'Failed to retrieve CTO KPIs'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
@@ -412,7 +419,7 @@ def cto_kpis(request):
 @api_view(['GET'])
 def cco_kpis(request):
     """
-    Get CCO KPI data with AUTO-CALCULATION
+    Get CCO KPI data with REAL-TIME AUTO-CALCULATION
     """
     try:
         # Parse date parameters
@@ -425,10 +432,16 @@ def cco_kpis(request):
         filters = {}
         if state_id:
             from common.models import State
-            filters['state'] = State.objects.get(id=state_id)
+            try:
+                filters['state'] = State.objects.get(id=state_id)
+            except State.DoesNotExist:
+                pass
         if district_id:
             from common.models import BusinessDistrict
-            filters['district'] = BusinessDistrict.objects.get(id=district_id)
+            try:
+                filters['district'] = BusinessDistrict.objects.get(id=district_id)
+            except BusinessDistrict.DoesNotExist:
+                pass
         
         kpi_data = {
             'billingEfficiency': {
@@ -446,167 +459,169 @@ def cco_kpis(request):
         }
         
         # Billing Efficiency - MD Industrial
-        md1_billing = CCOKPICalculator.calculate_billing_efficiency_by_metering_type(
-            period_date, 'MD1', **filters
+        md1_billing = calculate_kpi_with_status(
+            'billing_efficiency_md1',
+            period_date,
+            target_value=100.0,
+            **filters
         )
         kpi_data['billingEfficiency']['kpis']['mdIndustrial'] = {
-            'current': md1_billing['value'],
-            'target': 100.0,
+            **md1_billing,
             'description': 'Billing efficiency for MD1 (industrial) customers',
-            'unit': md1_billing['unit'],
             'priority': 'critical',
             'deadline': 'Monthly',
-            'period_date': period_date.isoformat(),
-            'is_auto_calculated': True,
-            'metadata': md1_billing.get('metadata', {})
+            'period_date': period_date.isoformat()
         }
         
         # Billing Efficiency - MD Non-Industrial
-        md2_billing = CCOKPICalculator.calculate_billing_efficiency_by_metering_type(
-            period_date, 'MD2', **filters
+        md2_billing = calculate_kpi_with_status(
+            'billing_efficiency_md2',
+            period_date,
+            target_value=100.0,
+            **filters
         )
         kpi_data['billingEfficiency']['kpis']['mdNonIndustrial'] = {
-            'current': md2_billing['value'],
-            'target': 100.0,
+            **md2_billing,
             'description': 'Billing efficiency for MD2 (non-industrial) customers',
-            'unit': md2_billing['unit'],
             'priority': 'critical',
             'deadline': 'Monthly',
-            'period_date': period_date.isoformat(),
-            'is_auto_calculated': True,
-            'metadata': md2_billing.get('metadata', {})
+            'period_date': period_date.isoformat()
         }
         
         # Billing Efficiency - Regions
-        non_md_billing = CCOKPICalculator.calculate_billing_efficiency_by_metering_type(
-            period_date, 'Non-MD', **filters
+        non_md_billing = calculate_kpi_with_status(
+            'billing_efficiency_non_md',
+            period_date,
+            target_value=100.0,
+            **filters
         )
         kpi_data['billingEfficiency']['kpis']['regions'] = {
-            'current': non_md_billing['value'],
-            'target': 100.0,
+            **non_md_billing,
             'description': 'Billing efficiency for Non-MD (regional) customers',
-            'unit': non_md_billing['unit'],
             'priority': 'high',
             'deadline': 'Monthly',
-            'period_date': period_date.isoformat(),
-            'is_auto_calculated': True,
-            'metadata': non_md_billing.get('metadata', {})
+            'period_date': period_date.isoformat()
         }
         
         # Collection Efficiency - MD Industrial
-        md1_collection = CCOKPICalculator.calculate_collection_efficiency_by_metering_type(
-            period_date, 'MD1', **filters
+        md1_collection = calculate_kpi_with_status(
+            'collection_efficiency_md1',
+            period_date,
+            target_value=100.0,
+            **filters
         )
         kpi_data['collectionEfficiency']['kpis']['mdIndustrial'] = {
-            'current': md1_collection['value'],
-            'target': 100.0,
+            **md1_collection,
             'description': 'Collection efficiency for MD1 customers',
-            'unit': md1_collection['unit'],
             'priority': 'critical',
             'deadline': 'Monthly',
-            'period_date': period_date.isoformat(),
-            'is_auto_calculated': True,
-            'metadata': md1_collection.get('metadata', {})
+            'period_date': period_date.isoformat()
         }
         
         # Collection Efficiency - MD Non-Industrial
-        md2_collection = CCOKPICalculator.calculate_collection_efficiency_by_metering_type(
-            period_date, 'MD2', **filters
+        md2_collection = calculate_kpi_with_status(
+            'collection_efficiency_md2',
+            period_date,
+            target_value=100.0,
+            **filters
         )
         kpi_data['collectionEfficiency']['kpis']['mdNonIndustrial'] = {
-            'current': md2_collection['value'],
-            'target': 100.0,
+            **md2_collection,
             'description': 'Collection efficiency for MD2 customers',
-            'unit': md2_collection['unit'],
             'priority': 'critical',
             'deadline': 'Monthly',
-            'period_date': period_date.isoformat(),
-            'is_auto_calculated': True,
-            'metadata': md2_collection.get('metadata', {})
+            'period_date': period_date.isoformat()
         }
         
         # Collection Efficiency - Regions
-        non_md_collection = CCOKPICalculator.calculate_collection_efficiency_by_metering_type(
-            period_date, 'Non-MD', **filters
+        non_md_collection = calculate_kpi_with_status(
+            'collection_efficiency_non_md',
+            period_date,
+            target_value=100.0,
+            **filters
         )
         kpi_data['collectionEfficiency']['kpis']['regions'] = {
-            'current': non_md_collection['value'],
-            'target': 100.0,
+            **non_md_collection,
             'description': 'Collection efficiency for Non-MD customers',
-            'unit': non_md_collection['unit'],
             'priority': 'high',
             'deadline': 'Monthly',
-            'period_date': period_date.isoformat(),
-            'is_auto_calculated': True,
-            'metadata': non_md_collection.get('metadata', {})
+            'period_date': period_date.isoformat()
         }
         
         # Band A Growth - Feeders Commercially Ready
-        feeders_ready = CCOKPICalculator.calculate_feeders_commercially_ready(period_date, **filters)
+        feeders_ready = calculate_kpi_with_status(
+            'feeders_commercially_ready',
+            period_date,
+            target_value=50,
+            **filters
+        )
         kpi_data['bandAGrowth']['kpis']['feedersCommerciallyReady'] = {
-            'current': feeders_ready['value'],
-            'target': 50,
+            **feeders_ready,
             'description': 'Number of Band A feeders (commercially ready)',
-            'unit': feeders_ready['unit'],
             'priority': 'high',
             'deadline': 'Q4 2025',
-            'period_date': period_date.isoformat(),
-            'is_auto_calculated': True
+            'period_date': period_date.isoformat()
         }
         
         # Customers in Billing System
-        customers_count = CCOKPICalculator.calculate_customers_in_billing_system(period_date, **filters)
+        customers_count = calculate_kpi_with_status(
+            'customers_in_billing_system',
+            period_date,
+            target_value=500000,
+            **filters
+        )
         kpi_data['bandAGrowth']['kpis']['customersBillingSystem'] = {
-            'current': customers_count['value'],
-            'target': 500000,
+            **customers_count,
             'description': 'Total active customers in billing system',
-            'unit': customers_count['unit'],
             'priority': 'high',
             'deadline': 'Q4 2025',
-            'period_date': period_date.isoformat(),
-            'is_auto_calculated': True
+            'period_date': period_date.isoformat()
         }
         
         # PPM Revenue
-        ppm_revenue = CCOKPICalculator.calculate_ppm_revenue(period_date, **filters)
+        ppm_revenue = calculate_kpi_with_status(
+            'ppm_revenue',
+            period_date,
+            target_value=500.0,
+            **filters
+        )
         kpi_data['bandAGrowth']['kpis']['ppmRevenue'] = {
-            'current': ppm_revenue['value'],
-            'target': 500.0,
+            **ppm_revenue,
             'description': 'Revenue from prepaid meters',
-            'unit': ppm_revenue['unit'],
             'priority': 'high',
             'deadline': 'Monthly',
-            'period_date': period_date.isoformat(),
-            'is_auto_calculated': True,
-            'metadata': ppm_revenue.get('metadata', {})
+            'period_date': period_date.isoformat()
         }
         
         # Customer Attrition Rate
-        attrition = CCOKPICalculator.calculate_customer_attrition_rate(period_date, **filters)
+        attrition = calculate_kpi_with_status(
+            'customer_attrition_rate',
+            period_date,
+            target_value=2.0,
+            is_reverse_polarity=True,  # Lower is better
+            **filters
+        )
         kpi_data['bandAGrowth']['kpis']['customerRetention'] = {
-            'current': attrition['value'],
-            'target': 2.0,  # Lower is better
+            **attrition,
             'description': 'Customer attrition rate (lower is better)',
-            'unit': attrition['unit'],
             'priority': 'medium',
             'deadline': 'Monthly',
-            'period_date': period_date.isoformat(),
-            'is_auto_calculated': True,
-            'metadata': attrition.get('metadata', {})
+            'period_date': period_date.isoformat()
         }
         
         # New MD Customers Value
-        new_md_value = CCOKPICalculator.calculate_new_md_customers_value(period_date, **filters)
+        new_md_value = calculate_kpi_with_status(
+            'new_md_customers_value',
+            period_date,
+            target_value=100.0,
+            **filters
+        )
         kpi_data['bandAGrowth']['kpis']['newCustomersValue'] = {
-            'current': new_md_value['value'],
-            'target': 100.0,
+            **new_md_value,
             'description': 'Revenue value from new MD customers',
-            'unit': new_md_value['unit'],
             'priority': 'high',
             'deadline': 'Monthly',
-            'period_date': period_date.isoformat(),
-            'is_auto_calculated': True,
-            'metadata': new_md_value.get('metadata', {})
+            'period_date': period_date.isoformat()
         }
         
         return Response({
@@ -617,14 +632,17 @@ def cco_kpis(request):
                 'period_date': period_date.isoformat(),
                 'mode': mode,
                 'last_updated': timezone.now().isoformat(),
-                'auto_calculated_kpis': 11
+                'auto_calculated_kpis': 11,
+                'calculation_mode': 'real_time'
             }
         }, status=status.HTTP_200_OK)
         
     except Exception as e:
+        import traceback
         return Response({
             'success': False,
             'error': str(e),
+            'traceback': traceback.format_exc(),
             'message': 'Failed to retrieve CCO KPIs'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
@@ -632,7 +650,7 @@ def cco_kpis(request):
 @api_view(['GET'])
 def cfo_kpis(request):
     """
-    Get CFO KPI data with AUTO-CALCULATION
+    Get CFO KPI data with REAL-TIME AUTO-CALCULATION
     """
     try:
         period_date, mode = parse_date_params(request)
@@ -644,10 +662,16 @@ def cfo_kpis(request):
         filters = {}
         if state_id:
             from common.models import State
-            filters['state'] = State.objects.get(id=state_id)
+            try:
+                filters['state'] = State.objects.get(id=state_id)
+            except State.DoesNotExist:
+                pass
         if district_id:
             from common.models import BusinessDistrict
-            filters['district'] = BusinessDistrict.objects.get(id=district_id)
+            try:
+                filters['district'] = BusinessDistrict.objects.get(id=district_id)
+            except BusinessDistrict.DoesNotExist:
+                pass
         
         kpi_data = {
             'financialExcellence': {
@@ -657,45 +681,48 @@ def cfo_kpis(request):
         }
         
         # Cost-to-Revenue Ratio
-        cost_ratio = CFOKPICalculator.calculate_cost_to_revenue_ratio(period_date, **filters)
+        cost_ratio = calculate_kpi_with_status(
+            'cost_to_revenue_ratio',
+            period_date,
+            target_value={'min': 40.0, 'max': 50.0},  # Range target
+            **filters
+        )
         kpi_data['financialExcellence']['kpis']['costToRevenueRatio'] = {
-            'current': cost_ratio['value'],
-            'target': {'min': 40.0, 'max': 50.0},
+            **cost_ratio,
             'description': 'Ratio of operational costs to revenue collected',
-            'unit': cost_ratio['unit'],
             'priority': 'critical',
             'deadline': 'Monthly',
-            'period_date': period_date.isoformat(),
-            'is_auto_calculated': True,
-            'metadata': cost_ratio.get('metadata', {})
+            'period_date': period_date.isoformat()
         }
         
         # OPEX per kWh
-        opex_per_kwh = CFOKPICalculator.calculate_opex_per_kwh(period_date, **filters)
+        opex_per_kwh = calculate_kpi_with_status(
+            'opex_per_kwh',
+            period_date,
+            target_value=50.0,
+            is_reverse_polarity=True,  # Lower is better
+            **filters
+        )
         kpi_data['financialExcellence']['kpis']['opexPerKwh'] = {
-            'current': opex_per_kwh['value'],
-            'target': 50.0,
+            **opex_per_kwh,
             'description': 'Operational expenditure per kilowatt-hour delivered',
-            'unit': opex_per_kwh['unit'],
             'priority': 'high',
             'deadline': 'Monthly',
-            'period_date': period_date.isoformat(),
-            'is_auto_calculated': True,
-            'metadata': opex_per_kwh.get('metadata', {})
+            'period_date': period_date.isoformat()
         }
         
         # Collection to NBET Ratio
-        nbet_ratio = CFOKPICalculator.calculate_collection_to_nbet_ratio(period_date)
+        nbet_ratio = calculate_kpi_with_status(
+            'collection_to_nbet_ratio',
+            period_date,
+            target_value=1.0
+        )
         kpi_data['financialExcellence']['kpis']['collectionToNbetRatio'] = {
-            'current': nbet_ratio['value'],
-            'target': 1.0,
+            **nbet_ratio,
             'description': 'Ratio of collections to NBET obligations',
-            'unit': nbet_ratio['unit'],
             'priority': 'critical',
             'deadline': 'Monthly',
-            'period_date': period_date.isoformat(),
-            'is_auto_calculated': True,
-            'metadata': nbet_ratio.get('metadata', {})
+            'period_date': period_date.isoformat()
         }
         
         return Response({
@@ -706,14 +733,17 @@ def cfo_kpis(request):
                 'period_date': period_date.isoformat(),
                 'mode': mode,
                 'last_updated': timezone.now().isoformat(),
-                'auto_calculated_kpis': 3
+                'auto_calculated_kpis': 3,
+                'calculation_mode': 'real_time'
             }
         }, status=status.HTTP_200_OK)
         
     except Exception as e:
+        import traceback
         return Response({
             'success': False,
             'error': str(e),
+            'traceback': traceback.format_exc(),
             'message': 'Failed to retrieve CFO KPIs'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
@@ -721,7 +751,7 @@ def cfo_kpis(request):
 @api_view(['GET'])
 def chro_kpis(request):
     """
-    Get CHRO KPI data with AUTO-CALCULATION
+    Get CHRO KPI data with REAL-TIME AUTO-CALCULATION
     """
     try:
         period_date, mode = parse_date_params(request)
@@ -733,10 +763,16 @@ def chro_kpis(request):
         filters = {}
         if state_id:
             from common.models import State
-            filters['state'] = State.objects.get(id=state_id)
+            try:
+                filters['state'] = State.objects.get(id=state_id)
+            except State.DoesNotExist:
+                pass
         if district_id:
             from common.models import BusinessDistrict
-            filters['district'] = BusinessDistrict.objects.get(id=district_id)
+            try:
+                filters['district'] = BusinessDistrict.objects.get(id=district_id)
+            except BusinessDistrict.DoesNotExist:
+                pass
         
         kpi_data = {
             'humanResourceExcellence': {
@@ -746,73 +782,80 @@ def chro_kpis(request):
         }
         
         # Staff Productivity
-        productivity = CHROKPICalculator.calculate_staff_productivity(period_date, **filters)
+        productivity = calculate_kpi_with_status(
+            'staff_productivity',
+            period_date,
+            target_value=5.0,
+            **filters
+        )
         kpi_data['humanResourceExcellence']['kpis']['staffProductivity'] = {
-            'current': productivity['value'],
-            'target': 5.0,
+            **productivity,
             'description': 'Revenue generated per staff member',
-            'unit': productivity['unit'],
             'priority': 'high',
             'deadline': 'Monthly',
-            'period_date': period_date.isoformat(),
-            'is_auto_calculated': True,
-            'metadata': productivity.get('metadata', {})
+            'period_date': period_date.isoformat()
         }
         
         # Employee Utilization
-        utilization = CHROKPICalculator.calculate_employee_utilization_rate(period_date, **filters)
+        utilization = calculate_kpi_with_status(
+            'employee_utilization_rate',
+            period_date,
+            target_value=95.0,
+            **filters
+        )
         kpi_data['humanResourceExcellence']['kpis']['employeeUtilization'] = {
-            'current': utilization['value'],
-            'target': 95.0,
+            **utilization,
             'description': 'Percentage of staff with assigned roles',
-            'unit': utilization['unit'],
             'priority': 'medium',
             'deadline': 'Monthly',
-            'period_date': period_date.isoformat(),
-            'is_auto_calculated': True,
-            'metadata': utilization.get('metadata', {})
+            'period_date': period_date.isoformat()
         }
         
         # Wage Bill vs Revenue
-        wage_revenue = CHROKPICalculator.calculate_wage_bill_vs_revenue(period_date, **filters)
+        wage_revenue = calculate_kpi_with_status(
+            'wage_bill_vs_revenue',
+            period_date,
+            target_value=20.0,
+            is_reverse_polarity=True,  # Lower is better
+            **filters
+        )
         kpi_data['humanResourceExcellence']['kpis']['wageBillVsRevenue'] = {
-            'current': wage_revenue['value'],
-            'target': 20.0,
+            **wage_revenue,
             'description': 'Wage bill as percentage of revenue',
-            'unit': wage_revenue['unit'],
             'priority': 'critical',
             'deadline': 'Monthly',
-            'period_date': period_date.isoformat(),
-            'is_auto_calculated': True,
-            'metadata': wage_revenue.get('metadata', {})
+            'period_date': period_date.isoformat()
         }
         
         # Wage Bill Reduction
-        wage_reduction = CHROKPICalculator.calculate_wage_bill_reduction(period_date, **filters)
+        wage_reduction = calculate_kpi_with_status(
+            'wage_bill_reduction',
+            period_date,
+            target_value=10.0,
+            **filters
+        )
         kpi_data['humanResourceExcellence']['kpis']['wageBillReduction'] = {
-            'current': wage_reduction['value'],
-            'target': 10.0,
+            **wage_reduction,
             'description': 'Wage bill reduction vs 2024 baseline',
-            'unit': wage_reduction['unit'],
             'priority': 'high',
             'deadline': 'Q4 2025',
-            'period_date': period_date.isoformat(),
-            'is_auto_calculated': True,
-            'metadata': wage_reduction.get('metadata', {})
+            'period_date': period_date.isoformat()
         }
         
         # Staff Attrition
-        attrition = CHROKPICalculator.calculate_staff_attrition_rate(period_date, **filters)
+        attrition = calculate_kpi_with_status(
+            'staff_attrition_rate',
+            period_date,
+            target_value=5.0,
+            is_reverse_polarity=True,  # Lower is better
+            **filters
+        )
         kpi_data['humanResourceExcellence']['kpis']['staffAttrition'] = {
-            'current': attrition['value'],
-            'target': 5.0,
+            **attrition,
             'description': 'Staff attrition rate (lower is better)',
-            'unit': attrition['unit'],
             'priority': 'medium',
             'deadline': 'Monthly',
-            'period_date': period_date.isoformat(),
-            'is_auto_calculated': True,
-            'metadata': attrition.get('metadata', {})
+            'period_date': period_date.isoformat()
         }
         
         return Response({
@@ -823,13 +866,16 @@ def chro_kpis(request):
                 'period_date': period_date.isoformat(),
                 'mode': mode,
                 'last_updated': timezone.now().isoformat(),
-                'auto_calculated_kpis': 5
+                'auto_calculated_kpis': 5,
+                'calculation_mode': 'real_time'
             }
         }, status=status.HTTP_200_OK)
         
     except Exception as e:
+        import traceback
         return Response({
             'success': False,
             'error': str(e),
+            'traceback': traceback.format_exc(),
             'message': 'Failed to retrieve CHRO KPIs'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
