@@ -418,21 +418,40 @@ def calculate_average_interruption_duration_network(from_date, to_date):
     1. Interruptions that OCCURRED within the period (resolved or ongoing)
     2. Interruptions that started BEFORE the period but are still ongoing (not resolved)
     
-    Formula: SUM(all interruption durations) / COUNT(interruptions)
+    CORRECTED: Only counts the hours that fall WITHIN the filtered period.
+    - If interruption started before period: counts from period start
+    - If interruption ongoing: counts to NOW (if today) or end of period
+    - If interruption ended after period: counts to period end
+    
+    Formula: SUM(clipped interruption durations) / COUNT(interruptions)
     Result: Average hours per interruption event (not per day)
     
     For ongoing interruptions, uses NOW as the end time.
     """
+    now = timezone.now()
+    today = now.date()
+    
+    # ✨ CRITICAL: If querying future dates, return 0 (no data available yet)
+    if from_date > today:
+        return 0.0
+    
     # Get IDs of onboarded feeders
     onboarded_feeder_ids = list(Feeder.objects.filter(is_onboarded=True).values_list('id', flat=True))
     
     if not onboarded_feeder_ids:
         return 0.0
     
-    now = timezone.now()
     start_of_period = timezone.make_aware(
         datetime.combine(from_date, datetime.min.time())
     )
+    
+    # CRITICAL: If filtering for today, use NOW instead of end of day
+    if to_date == today:
+        end_of_period = now  # Current time (e.g., 14:00)
+    else:
+        end_of_period = timezone.make_aware(
+            datetime.combine(to_date, datetime.max.time())
+        )
     
     # Get interruptions that are active during the period
     feeder_placeholders = ','.join(['%s'] * len(onboarded_feeder_ids))
@@ -442,18 +461,18 @@ def calculate_average_interruption_duration_network(from_date, to_date):
             COUNT(*) as interruption_count,
             COALESCE(SUM(
                 EXTRACT(EPOCH FROM (
-                    COALESCE(restored_at, %s) - occurred_at
+                    LEAST(COALESCE(fi.restored_at, %s), %s) - GREATEST(fi.occurred_at, %s)
                 )) / 3600.0
             ), 0) as total_hours
-        FROM technical_feederinterruption
+        FROM technical_feederinterruption fi
         WHERE (
-            (occurred_at AT TIME ZONE 'Africa/Lagos')::date BETWEEN %s AND %s
-            OR (occurred_at < %s AND restored_at IS NULL)
+            (fi.occurred_at AT TIME ZONE 'Africa/Lagos')::date BETWEEN %s AND %s
+            OR (fi.occurred_at < %s AND fi.restored_at IS NULL)
         )
-        AND feeder_id IN ({feeder_placeholders})
+        AND fi.feeder_id IN ({feeder_placeholders})
     """
     
-    params = [now, from_date, to_date, start_of_period] + onboarded_feeder_ids
+    params = [now, end_of_period, start_of_period, from_date, to_date, start_of_period] + onboarded_feeder_ids
     
     with connection.cursor() as cursor:
         cursor.execute(query, params)
@@ -475,22 +494,41 @@ def calculate_average_interruption_duration_feeder(feeder_id, from_date, to_date
     1. Interruptions that OCCURRED within the period (resolved or ongoing)
     2. Interruptions that started BEFORE the period but are still ongoing (not resolved)
     
-    Formula: SUM(all interruption durations) / COUNT(interruptions)
+    CORRECTED: Only counts the hours that fall WITHIN the filtered period.
+    - If interruption started before period: counts from period start
+    - If interruption ongoing: counts to NOW (if today) or end of period
+    - If interruption ended after period: counts to period end
+    
+    Formula: SUM(clipped interruption durations) / COUNT(interruptions)
     Result: Average hours per interruption event (not per day)
     
     For ongoing interruptions, uses NOW as the end time.
     """
     now = timezone.now()
+    today = now.date()
+    
+    # ✨ CRITICAL: If querying future dates, return 0 (no data available yet)
+    if from_date > today:
+        return 0.0
+    
     start_of_period = timezone.make_aware(
         datetime.combine(from_date, datetime.min.time())
     )
+    
+    # CRITICAL: If filtering for today, use NOW instead of end of day
+    if to_date == today:
+        end_of_period = now  # Current time (e.g., 14:00)
+    else:
+        end_of_period = timezone.make_aware(
+            datetime.combine(to_date, datetime.max.time())
+        )
     
     query = """
         SELECT 
             COUNT(*) as interruption_count,
             COALESCE(SUM(
                 EXTRACT(EPOCH FROM (
-                    COALESCE(restored_at, %s) - occurred_at
+                    LEAST(COALESCE(restored_at, %s), %s) - GREATEST(occurred_at, %s)
                 )) / 3600.0
             ), 0) as total_hours
         FROM technical_feederinterruption
@@ -502,7 +540,7 @@ def calculate_average_interruption_duration_feeder(feeder_id, from_date, to_date
     """
     
     with connection.cursor() as cursor:
-        cursor.execute(query, [now, from_date, to_date, start_of_period, feeder_id])
+        cursor.execute(query, [now, end_of_period, start_of_period, from_date, to_date, start_of_period, feeder_id])
         result = cursor.fetchone()
         interruption_count = result[0] if result else 0
         total_hours = float(result[1]) if result else 0

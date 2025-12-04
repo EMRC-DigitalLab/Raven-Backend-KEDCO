@@ -265,24 +265,43 @@ def calculate_state_avg_interruption_duration_sql(state_id, from_date, to_date):
     1. Interruptions that OCCURRED within the period (resolved or ongoing)
     2. Interruptions that started BEFORE the period but are still ongoing (not resolved)
     
+    CORRECTED: Only counts the hours that fall WITHIN the filtered period.
+    - If interruption started before period: counts from period start
+    - If interruption ongoing: counts to NOW (if today) or end of period
+    - If interruption ended after period: counts to period end
+    
     Only considers ONBOARDED feeders.
     
-    Formula: SUM(all interruption durations) / COUNT(interruptions)
+    Formula: SUM(clipped interruption durations) / COUNT(interruptions)
     Result: Average hours per interruption event (not per day)
     
     For ongoing interruptions, uses NOW as the end time.
     """
     now = timezone.now()
+    today = now.date()
+    
+    # ✨ CRITICAL: If querying future dates, return 0 (no data available yet)
+    if from_date > today:
+        return 0.0
+    
     start_of_period = timezone.make_aware(
         datetime.combine(from_date, datetime.min.time())
     )
+    
+    # CRITICAL: If filtering for today, use NOW instead of end of day
+    if to_date == today:
+        end_of_period = now  # Current time (e.g., 14:00)
+    else:
+        end_of_period = timezone.make_aware(
+            datetime.combine(to_date, datetime.max.time())
+        )
     
     query = """
         SELECT 
             COUNT(*) as interruption_count,
             COALESCE(SUM(
                 EXTRACT(EPOCH FROM (
-                    COALESCE(fi.restored_at, %s) - fi.occurred_at
+                    LEAST(COALESCE(fi.restored_at, %s), %s) - GREATEST(fi.occurred_at, %s)
                 )) / 3600.0
             ), 0) as total_hours
         FROM technical_feederinterruption fi
@@ -297,7 +316,7 @@ def calculate_state_avg_interruption_duration_sql(state_id, from_date, to_date):
     """
     
     with connection.cursor() as cursor:
-        cursor.execute(query, [now, state_id, from_date, to_date, start_of_period])
+        cursor.execute(query, [now, end_of_period, start_of_period, state_id, from_date, to_date, start_of_period])
         result = cursor.fetchone()
         interruption_count = result[0] if result else 0
         total_hours = float(result[1]) if result else 0
