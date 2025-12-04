@@ -208,6 +208,7 @@ class RoleViewSet(viewsets.ModelViewSet):
         if errors:
             response_data['error_details'] = errors
         return Response(response_data, status=status.HTTP_200_OK)
+    
 class StaffViewSet(viewsets.ModelViewSet):
     queryset = Staff.objects.all()
     serializer_class = StaffSerializer
