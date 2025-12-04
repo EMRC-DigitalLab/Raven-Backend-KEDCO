@@ -438,11 +438,12 @@ class FeederInterruptionViewSet(viewsets.ModelViewSet):
             if 'interruption_type' in data:
                 interruption.interruption_type = data['interruption_type']
             
+
             try:
                 interruption.save(force_update=True)
             except Exception as e:
                 return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-            
+    
             serializer = self.get_serializer(interruption)
             return Response(serializer.data)
 

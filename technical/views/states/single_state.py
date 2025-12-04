@@ -265,24 +265,43 @@ def calculate_state_avg_interruption_duration_sql(state_id, from_date, to_date):
     1. Interruptions that OCCURRED within the period (resolved or ongoing)
     2. Interruptions that started BEFORE the period but are still ongoing (not resolved)
     
+    CORRECTED: Only counts the hours that fall WITHIN the filtered period.
+    - If interruption started before period: counts from period start
+    - If interruption ongoing: counts to NOW (if today) or end of period
+    - If interruption ended after period: counts to period end
+    
     Only considers ONBOARDED feeders.
     
-    Formula: SUM(all interruption durations) / COUNT(interruptions)
+    Formula: SUM(clipped interruption durations) / COUNT(interruptions)
     Result: Average hours per interruption event (not per day)
     
     For ongoing interruptions, uses NOW as the end time.
     """
     now = timezone.now()
+    today = now.date()
+    
+    # ✨ CRITICAL: If querying future dates, return 0 (no data available yet)
+    if from_date > today:
+        return 0.0
+    
     start_of_period = timezone.make_aware(
         datetime.combine(from_date, datetime.min.time())
     )
+    
+    # CRITICAL: If filtering for today, use NOW instead of end of day
+    if to_date == today:
+        end_of_period = now  # Current time (e.g., 14:00)
+    else:
+        end_of_period = timezone.make_aware(
+            datetime.combine(to_date, datetime.max.time())
+        )
     
     query = """
         SELECT 
             COUNT(*) as interruption_count,
             COALESCE(SUM(
                 EXTRACT(EPOCH FROM (
-                    COALESCE(fi.restored_at, %s) - fi.occurred_at
+                    LEAST(COALESCE(fi.restored_at, %s), %s) - GREATEST(fi.occurred_at, %s)
                 )) / 3600.0
             ), 0) as total_hours
         FROM technical_feederinterruption fi
@@ -297,7 +316,7 @@ def calculate_state_avg_interruption_duration_sql(state_id, from_date, to_date):
     """
     
     with connection.cursor() as cursor:
-        cursor.execute(query, [now, state_id, from_date, to_date, start_of_period])
+        cursor.execute(query, [now, end_of_period, start_of_period, state_id, from_date, to_date, start_of_period])
         result = cursor.fetchone()
         interruption_count = result[0] if result else 0
         total_hours = float(result[1]) if result else 0
@@ -342,7 +361,8 @@ def get_previous_periods(start_date, period_days, count=4):
         if period_days == 1:  # Daily
             period_start = start_date - timedelta(days=i)
             period_end = period_start
-            label = period_start.strftime("%a") if i > 1 else "Yesterday"
+            # Always use day name format (Mon, Tue, Wed, etc.)
+            label = period_start.strftime("%a")
         elif period_days == 7:  # Weekly
             period_start = start_date - timedelta(weeks=i)
             period_end = period_start + timedelta(days=6)
@@ -518,11 +538,13 @@ def get_top_bottom_feeders_sql(state_id, from_date, to_date):
     return top_5, bottom_5
 
 
-def get_load_trend_for_day_sql(state_id, day):
+def get_load_trend_hourly_sql(state_id, day):
     """
-    Get hourly load trend for a specific day
+    Get hourly load trend for a specific day (for daily mode)
     
     UPDATED: Only considers ONBOARDED feeders.
+    
+    Returns hourly breakdown (0-23) for the specified day
     """
     if not day:
         return []
@@ -554,8 +576,91 @@ def get_load_trend_for_day_sql(state_id, day):
             for row in results
         ]
     except Exception as e:
-        print(f"Error getting load trend: {str(e)}")
+        print(f"Error getting hourly load trend: {str(e)}")
         return []
+
+
+def get_load_trend_daily_sql(state_id, from_date, to_date):
+    """
+    Get daily load trend for a date range (for monthly/weekly/custom modes)
+    
+    UPDATED: Only considers ONBOARDED feeders.
+    
+    Returns daily averages for each day in the range
+    """
+    query = """
+        SELECT 
+            hl.date,
+            AVG(hl.load_mw) as avg_load
+        FROM technical_hourlyload hl
+        INNER JOIN common_feeder f ON hl.feeder_id = f.id
+        INNER JOIN common_businessdistrict bd ON f.business_district_id = bd.id
+        WHERE bd.state_id = %s
+            AND f.is_onboarded = TRUE
+            AND hl.date BETWEEN %s AND %s
+        GROUP BY hl.date
+        ORDER BY hl.date
+    """
+    
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(query, [state_id, from_date, to_date])
+            results = cursor.fetchall()
+        
+        return [
+            {
+                "date": row[0].isoformat(),
+                "value": round(float(row[1] or 0), 2)
+            }
+            for row in results
+        ]
+    except Exception as e:
+        print(f"Error getting daily load trend: {str(e)}")
+        return []
+
+
+def get_load_trend_adaptive(state_id, from_date, to_date, mode, specific_date=None):
+    """
+    Get load trend adapted to the query mode
+    
+    Args:
+        state_id: ID of the state
+        from_date: Start date of the period
+        to_date: End date of the period
+        mode: Query mode (daily, monthly, weekly, custom, yearly)
+        specific_date: Optional specific date for trend (overrides mode logic)
+    
+    Returns:
+        dict: Load trend data with appropriate format for the mode
+    """
+    if mode == "daily" or specific_date:
+        # For daily mode or when specific date is provided: show hourly breakdown
+        trend_date = specific_date if specific_date else from_date
+        series = get_load_trend_hourly_sql(state_id, trend_date)
+        
+        return {
+            "unit": "MW",
+            "mode": "hourly",
+            "date": trend_date.isoformat() if trend_date else None,
+            "series": series
+        }
+    else:
+        # For monthly/weekly/custom/yearly: show daily averages
+        series = get_load_trend_daily_sql(state_id, from_date, to_date)
+        
+        if mode == "monthly":
+            date_label = f"{from_date.year}-{from_date.month:02d}"
+        elif mode == "yearly":
+            date_label = str(from_date.year)
+        else:  # weekly, custom
+            date_label = f"{from_date.strftime('%Y-%m-%d')} to {to_date.strftime('%Y-%m-%d')}"
+        
+        return {
+            "unit": "MW",
+            "mode": "daily",
+            "date": date_label,
+            "series": series
+        }
 
 
 @api_view(["GET"])
@@ -617,16 +722,14 @@ def state_technical_summary(request):
     except ValueError as e:
         return Response({"error": str(e)}, status=400)
     
-    # Parse specific date for load trend
+    # Parse specific date for load trend (optional override)
     day_param = request.GET.get("date")
+    specific_date = None
     if day_param:
         try:
-            trend_date = _parse_iso_date(day_param)
+            specific_date = _parse_iso_date(day_param)
         except ValueError:
-            trend_date = to_date
-    else:
-        # Default to the last date in range for load trend
-        trend_date = to_date
+            specific_date = None
     
     # Calculate period days
     period_days = (to_date - from_date).days + 1
@@ -637,8 +740,10 @@ def state_technical_summary(request):
     # Get top and bottom feeders (ONBOARDED feeders only)
     top_feeders, bottom_feeders = get_top_bottom_feeders_sql(state.id, from_date, to_date)
     
-    # Get load trend for specific day (ONBOARDED feeders only)
-    load_trend = get_load_trend_for_day_sql(state.id, trend_date)
+    # Get adaptive load trend (ONBOARDED feeders only)
+    # - For daily mode: returns hourly breakdown
+    # - For monthly/weekly/custom/yearly: returns daily averages
+    load_trend = get_load_trend_adaptive(state.id, from_date, to_date, mode, specific_date)
     
     # Format period label for backward compatibility
     if mode == "monthly":
@@ -656,11 +761,7 @@ def state_technical_summary(request):
         "month": period_label,  # Keep original field name
         "top_feeders": top_feeders,
         "bottom_feeders": bottom_feeders,
-        "load_trend": {
-            "date": day_param,  # Keep original format
-            "unit": "MW",
-            "series": load_trend
-        },
+        "load_trend": load_trend,
         "metrics": metrics
     }
     
