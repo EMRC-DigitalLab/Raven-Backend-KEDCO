@@ -393,36 +393,35 @@ class FeederInterruptionViewSet(viewsets.ModelViewSet):
                     return Response({"error": "Interruption not found"}, status=status.HTTP_404_NOT_FOUND)
             else:
                 interruption = get_object_or_404(FeederInterruption, feeder__slug=slug)
-            
+    
             # 🔧 CRITICAL FIX: Ensure Django knows this is an existing object
             interruption._state.adding = False
-            
+    
             # Update only the fields we can actually set
             data = request.data.copy()
-            
+    
             # Don't update occurred_at to avoid duplicate key issues
             if 'occurred_at' in data:
                 del data['occurred_at']
-            
-            # Update fields manually (skip duration_hours - it's calculated)
+    
+            # ✅ FIX: Update fields independently
             if 'description' in data:
                 interruption.description = data['description']
-                if 'restored_at' in data:
-                    if data['restored_at']:
-                        restored_dt = parse_datetime(data['restored_at'].replace('Z', ''))
-                        if restored_dt and restored_dt.tzinfo is None:
-                            # 🔧 FIXED: Subtract 1 hour to compensate for Django's automatic conversion
-                            restored_dt = restored_dt - timezone.timedelta(hours=1)
-                            restored_dt = timezone.make_aware(restored_dt, timezone=pytz.UTC)
-                        interruption.restored_at = restored_dt
-                    else:
-                        interruption.restored_at = None
+    
+            if 'restored_at' in data:  # ✅ Moved outside description check
+                if data['restored_at']:
+                    restored_dt = parse_datetime(data['restored_at'].replace('Z', ''))
+                    if restored_dt and restored_dt.tzinfo is None:
+                        # Subtract 1 hour to compensate for Django's automatic conversion
+                        restored_dt = restored_dt - timezone.timedelta(hours=1)
+                        restored_dt = timezone.make_aware(restored_dt, timezone=pytz.UTC)
+                    interruption.restored_at = restored_dt
+                else:
+                    interruption.restored_at = None
+    
             if 'interruption_type' in data:
                 interruption.interruption_type = data['interruption_type']
-            
-            # 🔧 REMOVED: duration_hours assignment - it's a calculated property
-            # Duration will be automatically calculated based on occurred_at and restored_at
-            
+    
             # Save with force_update to ensure UPDATE operation
             try:
                 interruption.save(force_update=True)
@@ -430,7 +429,7 @@ class FeederInterruptionViewSet(viewsets.ModelViewSet):
             except Exception as e:
                 print(f"❌ Error saving: {e}")
                 return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-            
+    
             serializer = self.get_serializer(interruption)
             return Response(serializer.data)
 
