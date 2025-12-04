@@ -15,7 +15,7 @@ from django.utils.dateparse import parse_datetime
 from datetime import timedelta
 from django.http import Http404
 import pytz # type: ignore
-import datetime
+from datetime import datetime
 
 
 class EnergyDeliveredViewSet(viewsets.ModelViewSet):
@@ -39,6 +39,9 @@ class EnergyDeliveredViewSet(viewsets.ModelViewSet):
 
     @transaction.atomic
     def _handle_cumulative_data(self, request, is_bulk=False):
+        print("🔍 _handle_cumulative_data called!")
+        print(f"📦 Request data: {request.data}")
+        
         data = request.data
         if is_bulk:
             if not isinstance(data, list):
@@ -47,6 +50,8 @@ class EnergyDeliveredViewSet(viewsets.ModelViewSet):
         else:
             records = [data]
 
+        print(f"📊 Processing {len(records)} record(s)")
+
         created = []
         updated = []
         errors = []
@@ -54,56 +59,74 @@ class EnergyDeliveredViewSet(viewsets.ModelViewSet):
 
         for i, record in enumerate(records):
             try:
+                print(f"\n--- Processing record {i}: {record}")
+                
                 # --- Resolve feeder ---
                 feeder_slug = record.get('feeder')
                 if not feeder_slug:
+                    print(f"❌ Record {i}: missing 'feeder'")
                     errors.append(f"Record {i}: missing 'feeder'")
                     continue
 
                 if feeder_slug not in feeder_cache:
                     try:
                         feeder = Feeder.objects.get(slug=feeder_slug)
+                        print(f"✅ Found feeder by slug: {feeder.name}")
                     except Feeder.DoesNotExist:
                         try:
                             feeder = Feeder.objects.get(name=feeder_slug)
+                            print(f"✅ Found feeder by name: {feeder.name}")
                         except Feeder.DoesNotExist:
+                            print(f"❌ Feeder '{feeder_slug}' not found")
                             errors.append(f"Record {i}: Feeder '{feeder_slug}' not found")
                             continue
                     feeder_cache[feeder_slug] = feeder
                 else:
                     feeder = feeder_cache[feeder_slug]
+                    print(f"✅ Using cached feeder: {feeder.name}")
 
                 # --- Parse date ---
                 date_str = record.get('date')
                 try:
                     reading_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+                    print(f"✅ Parsed date: {reading_date}")
                 except (ValueError, TypeError):
+                    print(f"❌ Invalid date '{date_str}'")
                     errors.append(f"Record {i}: Invalid date '{date_str}'")
                     continue
 
                 cumulative_mwh = record.get('energy_mwh')
                 if cumulative_mwh is None:
+                    print(f"❌ Missing energy_mwh")
                     errors.append(f"Record {i}: missing 'energy_mwh'")
                     continue
+                
+                print(f"✅ Energy value: {cumulative_mwh} MWh")
 
                 # --- Upsert into CumulativeMeterReading ---
+                print(f"💾 Creating/updating CumulativeMeterReading...")
                 obj, was_created = CumulativeMeterReading.objects.update_or_create(
                     feeder=feeder,
                     reading_date=reading_date,
-                    reading_time=None,  # or parse if provided
                     defaults={
                         'cumulative_mwh': cumulative_mwh,
+                        'reading_time': None,
                         'is_estimated': False,
                         'notes': 'Imported via legacy energy-delivered endpoint'
                     }
                 )
 
                 if was_created:
+                    print(f"✅ Created new record with ID: {obj.id}")
                     created.append(obj.id)
                 else:
+                    print(f"✅ Updated existing record with ID: {obj.id}")
                     updated.append(obj.id)
 
             except Exception as e:
+                print(f"❌ Exception in record {i}: {str(e)}")
+                import traceback
+                traceback.print_exc()
                 errors.append(f"Record {i}: {str(e)}")
 
         # --- Response ---
@@ -113,6 +136,10 @@ class EnergyDeliveredViewSet(viewsets.ModelViewSet):
             "errors": len(errors),
             "total": len(records)
         }
+
+        print(f"\n📊 Final summary: {summary}")
+        if errors:
+            print(f"❌ Errors: {errors}")
 
         response = {"summary": summary}
         if errors:

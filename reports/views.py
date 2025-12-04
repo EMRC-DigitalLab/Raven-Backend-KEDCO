@@ -24,7 +24,7 @@ from .serializers import (
     AvailableSectionSerializer,
 )
 from .services import ReportDataService, get_available_sections, SECTION_DEFINITIONS
-from .pdf_generator import PDFGenerator
+# from .pdf_generator import PDFGenerator
 
 from common.models import State, BusinessDistrict, InjectionSubstation, Feeder, Band
 
