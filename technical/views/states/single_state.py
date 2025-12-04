@@ -361,7 +361,8 @@ def get_previous_periods(start_date, period_days, count=4):
         if period_days == 1:  # Daily
             period_start = start_date - timedelta(days=i)
             period_end = period_start
-            label = period_start.strftime("%a") if i > 1 else "Yesterday"
+            # Always use day name format (Mon, Tue, Wed, etc.)
+            label = period_start.strftime("%a")
         elif period_days == 7:  # Weekly
             period_start = start_date - timedelta(weeks=i)
             period_end = period_start + timedelta(days=6)
