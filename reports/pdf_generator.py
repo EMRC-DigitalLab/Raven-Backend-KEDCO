@@ -4,7 +4,7 @@ PDF generation service using WeasyPrint.
 """
 from django.template.loader import render_to_string
 from django.conf import settings
-# from weasyprint import HTML, CSS
+from weasyprint import HTML, CSS
 from weasyprint.text.fonts import FontConfiguration
 import os
 import io
