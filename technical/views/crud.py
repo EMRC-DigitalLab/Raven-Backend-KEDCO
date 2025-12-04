@@ -359,10 +359,18 @@ class FeederInterruptionViewSet(viewsets.ModelViewSet):
 
     def _find_interruption_by_time(self, slug, occurred_at_str):
         try:
-            occurred_at_dt = parse_datetime(occurred_at_str.replace('Z', ''))
-            if occurred_at_dt and occurred_at_dt.tzinfo is None:
-                occurred_at_dt = timezone.make_aware(occurred_at_dt, timezone=pytz.UTC)
+            # ✅ Keep naive - don't add timezone
+            occurred_at_dt = parse_datetime(occurred_at_str.replace('Z', '').replace('T', ' '))
             
+            print(f"Looking for interruption with time: {occurred_at_dt}")
+            
+            # DEBUG: Check what records exist for this feeder
+            all_interruptions = FeederInterruption.objects.filter(feeder__slug=slug)
+            print(f"All interruptions for {slug}:")
+            for intr in all_interruptions:
+                print(f"   - ID: {intr.id}, Time: {intr.occurred_at}, Type: {intr.interruption_type}")
+            
+            # Use wider time range
             time_tolerance = timezone.timedelta(hours=2)
             candidates = FeederInterruption.objects.filter(
                 feeder__slug=slug,
@@ -372,12 +380,17 @@ class FeederInterruptionViewSet(viewsets.ModelViewSet):
                 )
             )
             
+            print(f"Found {candidates.count()} candidates within ±2 hours")
+            for candidate in candidates:
+                print(f"   - Candidate: {candidate.occurred_at}")
+            
             if candidates.exists():
                 return candidates.first()
             else:
                 raise FeederInterruption.DoesNotExist()
             
         except Exception as e:
+            print(f"Error in _find_interruption_by_time: {e}")
             raise Http404(f"No interruption found: {str(e)}")
 
     @action(detail=False, methods=['get', 'patch', 'put', 'delete', 'post'], url_path='feeder/(?P<slug>[^/.]+)')
@@ -404,21 +417,24 @@ class FeederInterruptionViewSet(viewsets.ModelViewSet):
             interruption._state.adding = False
             data = request.data.copy()
             
+            # Don't allow updating occurred_at
             if 'occurred_at' in data:
                 del data['occurred_at']
             
+            # Update description
             if 'description' in data:
                 interruption.description = data['description']
             
+            # ✅ FIX: Keep datetime naive - don't add timezone info
             if 'restored_at' in data:
                 if data['restored_at']:
-                    restored_dt = parse_datetime(data['restored_at'].replace('Z', ''))
-                    if restored_dt and restored_dt.tzinfo is None:
-                        restored_dt = timezone.make_aware(restored_dt, timezone=pytz.UTC)
+                    # Just parse without making timezone-aware
+                    restored_dt = parse_datetime(data['restored_at'].replace('Z', '').replace('T', ' '))
                     interruption.restored_at = restored_dt
                 else:
                     interruption.restored_at = None
             
+            # Update interruption_type
             if 'interruption_type' in data:
                 interruption.interruption_type = data['interruption_type']
             
@@ -446,9 +462,13 @@ class FeederInterruptionViewSet(viewsets.ModelViewSet):
             
             occurred_at = data.get('occurred_at')
             if occurred_at:
-                occurred_at_dt = parse_datetime(occurred_at.replace('Z', ''))
-                if occurred_at_dt and occurred_at_dt.tzinfo is None:
-                    occurred_at_dt = timezone.make_aware(occurred_at_dt, timezone=pytz.UTC)
+                # ✅ Keep naive
+                occurred_at_dt = parse_datetime(occurred_at.replace('Z', '').replace('T', ' '))
+                
+                # Parse restored_at if provided - also keep naive
+                restored_at_value = None
+                if data.get('restored_at'):
+                    restored_at_value = parse_datetime(data.get('restored_at', '').replace('Z', '').replace('T', ' '))
                 
                 interruption, created = FeederInterruption.objects.get_or_create(
                     feeder=feeder,
@@ -456,7 +476,7 @@ class FeederInterruptionViewSet(viewsets.ModelViewSet):
                     interruption_type=data.get('interruption_type', ''),
                     defaults={
                         'description': data.get('description', ''),
-                        'restored_at': parse_datetime(data.get('restored_at', '').replace('Z', '')) if data.get('restored_at') else None,
+                        'restored_at': restored_at_value,
                         'duration_hours': data.get('duration_hours', 0)
                     }
                 )
@@ -475,43 +495,6 @@ class FeederInterruptionViewSet(viewsets.ModelViewSet):
             serializer.save()
             return Response(serializer.data, status=status.HTTP_201_CREATED)
 
-    def _find_interruption_by_time(self, slug, occurred_at_str):
-        try:
-            # Parse and make timezone aware
-            occurred_at_dt = parse_datetime(occurred_at_str.replace('Z', ''))
-            if occurred_at_dt and occurred_at_dt.tzinfo is None:
-                occurred_at_dt = timezone.make_aware(occurred_at_dt, timezone=pytz.UTC)
-            
-            print(f"Looking for interruption with time: {occurred_at_dt}")
-            
-            # DEBUG: Check what records exist for this feeder
-            all_interruptions = FeederInterruption.objects.filter(feeder__slug=slug)
-            print(f"All interruptions for {slug}:")
-            for intr in all_interruptions:
-                print(f"   - ID: {intr.id}, Time: {intr.occurred_at}, Type: {intr.interruption_type}")
-            
-            # Use wider time range
-            time_tolerance = timezone.timedelta(hours=2)  # Much wider range
-            candidates = FeederInterruption.objects.filter(
-                feeder__slug=slug,
-                occurred_at__range=(
-                    occurred_at_dt - time_tolerance,
-                    occurred_at_dt + time_tolerance
-                )
-            )
-            
-            print(f"Found {candidates.count()} candidates within ±2 hours")
-            for candidate in candidates:
-                print(f"   - Candidate: {candidate.occurred_at}")
-            
-            if candidates.exists():
-                return candidates.first()
-            else:
-                raise FeederInterruption.DoesNotExist()
-            
-        except Exception as e:
-            print(f"Error in _find_interruption_by_time: {e}")
-            raise Http404(f"No interruption found: {str(e)}")
 
     
 
