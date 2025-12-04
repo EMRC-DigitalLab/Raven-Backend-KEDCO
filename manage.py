@@ -3,6 +3,8 @@
 import os
 import sys
 
+if hasattr(os, "add_dll_directory"):
+    os.add_dll_directory(r"C:\msys64\ucrt64\bin")
 
 def main():
     """Run administrative tasks."""

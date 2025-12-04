@@ -1,121 +1,96 @@
-# backend/technical/management/commands/populate_energy_summaries.py
-
+# technical/management/commands/populate_energy_summaries.py
+import logging
+from datetime import date
 from django.core.management.base import BaseCommand
-from django.db.models import Sum
 from django.db import transaction
-from django.db.models.functions import ExtractYear, ExtractMonth
-from django.utils import timezone
-from datetime import timedelta, date
+from django.db.models import Sum
+from technical.models import EnergyDelivered, FeederEnergyDaily, FeederEnergyMonthly
+from django.db import models
 
-from technical.models import (
-    EnergyDelivered,
-    FeederEnergyDaily,
-    FeederEnergyMonthly,
-)
+
+logger = logging.getLogger(__name__)
 
 class Command(BaseCommand):
-    help = (
-        "Populate FeederEnergyDaily and FeederEnergyMonthly summaries.\n"
-        "By default runs incrementally (yesterday + last month).\n"
-        "Use --daily-only or --monthly-only to restrict.\n"
-        "Use --full to drop & rebuild all summaries."
-    )
+    help = "Populate FeederEnergyDaily & FeederEnergyMonthly from EnergyDelivered"
 
     def add_arguments(self, parser):
-        parser.add_argument(
-            "--daily-only",
-            action="store_true",
-            help="Only (re)compute daily summaries."
-        )
-        parser.add_argument(
-            "--monthly-only",
-            action="store_true",
-            help="Only (re)compute monthly summaries."
-        )
-        parser.add_argument(
-            "--full",
-            action="store_true",
-            help="Wipe and rebuild ALL daily & monthly summaries from scratch."
-        )
+        parser.add_argument('--from-date', type=str, help='YYYY-MM-DD')
+        parser.add_argument('--to-date', type=str, help='YYYY-MM-DD')
+        parser.add_argument('--dry-run', action='store_true')
 
     @transaction.atomic
     def handle(self, *args, **options):
-        full = options["full"]
-        do_daily = not options["monthly_only"]
-        do_monthly = not options["daily_only"]
+        qs = EnergyDelivered.objects.all().order_by('date')
+        if options['from_date']:
+            qs = qs.filter(date__gte=options['from_date'])
+        if options['to_date']:
+            qs = qs.filter(date__lte=options['to_date'])
 
-        if full:
-            self.stdout.write(self.style.WARNING("⚠ FULL RECOMPUTE: clearing summaries…"))
-            FeederEnergyDaily.objects.all().delete()
-            FeederEnergyMonthly.objects.all().delete()
+        if not qs.exists():
+            self.stdout.write("No EnergyDelivered rows found.")
+            return
 
-        # DAILY
-        if do_daily:
-            if full:
-                # full: aggregate every date in the facts table
-                daily_qs = (
-                    EnergyDelivered.objects
-                    .values("feeder_id", "date")
-                    .annotate(total_mwh=Sum("energy_mwh"))
-                )
-                self.stdout.write("▶ FULL daily aggregation (all dates)…")
-            else:
-                # incremental: only yesterday
-                yesterday = timezone.localdate() - timedelta(days=1)
-                daily_qs = (
-                    EnergyDelivered.objects
-                    .filter(date=yesterday)
-                    .values("feeder_id", "date")
-                    .annotate(total_mwh=Sum("energy_mwh"))
-                )
-                self.stdout.write(f"▶ Incremental daily: {yesterday}")
+        # 1. Group by (feeder, date) → daily
+        daily_data = qs.values('feeder_id', 'date').annotate(
+            energy=Sum('energy_mwh')
+        )
 
-            for row in daily_qs:
-                FeederEnergyDaily.objects.update_or_create(
-                    feeder_id=row["feeder_id"],
-                    date=row["date"],
-                    defaults={"energy_mwh": row["total_mwh"]},
-                )
-            self.stdout.write(f"  • Daily rows processed: {daily_qs.count()}")
-
-        # MONTHLY
-        if do_monthly:
-            if full:
-                # full: build from all daily summaries
-                src = FeederEnergyDaily.objects
-                self.stdout.write("▶ FULL monthly aggregation (all months)…")
-            else:
-                # incremental: just the last calendar month’s days
-                today = timezone.localdate()
-                first_of_this_month = today.replace(day=1)
-                last_month_end = first_of_this_month - timedelta(days=1)
-                last_month_start = last_month_end.replace(day=1)
-                src = FeederEnergyDaily.objects.filter(
-                    date__gte=last_month_start,
-                    date__lte=last_month_end
-                )
-                self.stdout.write(f"▶ Incremental monthly: {last_month_start:%Y-%m}")
-
-            monthly_qs = (
-                src
-                .annotate(
-                    year=ExtractYear("date"),
-                    month=ExtractMonth("date")
-                )
-                .values("feeder_id", "year", "month")
-                .annotate(total_mwh=Sum("energy_mwh"))
+        daily_objs = [
+            FeederEnergyDaily(
+                feeder_id=row['feeder_id'],
+                date=row['date'],
+                energy_mwh=row['energy']
             )
+            for row in daily_data
+        ]
 
-            created = 0
-            for row in monthly_qs:
-                period = date(year=row["year"], month=row["month"], day=1)
-                FeederEnergyMonthly.objects.update_or_create(
-                    feeder_id=row["feeder_id"],
-                    period=period,
-                    defaults={"energy_mwh": row["total_mwh"]},
-                )
-                created += 1
+        if options['dry_run']:
+            self.stdout.write(f"[DRY-RUN] Would create {len(daily_objs)} daily rows")
+        else:
+            FeederEnergyDaily.objects.bulk_create(
+                daily_objs,
+                update_conflicts=True,
+                update_fields=['energy_mwh'],
+                unique_fields=['feeder', 'date']
+            )
+            self.stdout.write(f"Created/updated {len(daily_objs)} daily rows")
 
-            self.stdout.write(f"  • Monthly rows processed: {monthly_qs.count()}")
+        # 2. Monthly roll-up - FIXED to deduplicate
+        monthly_data = qs.annotate(
+            month_start=models.ExpressionWrapper(
+                models.functions.TruncMonth('date'),
+                output_field=models.DateField()
+            )
+        ).values('feeder_id', 'month_start').annotate(
+            energy=Sum('energy_mwh')
+        )
 
-        self.stdout.write(self.style.SUCCESS("✔ Summaries populated."))
+        # Deduplicate by (feeder_id, period) - keep last occurrence
+        monthly_dict = {}
+        for row in monthly_data:
+            key = (row['feeder_id'], row['month_start'])
+            if key in monthly_dict:
+                # Sum if duplicate (shouldn't happen with proper aggregation, but safety check)
+                monthly_dict[key] += row['energy']
+            else:
+                monthly_dict[key] = row['energy']
+        
+        monthly_objs = [
+            FeederEnergyMonthly(
+                feeder_id=feeder_id,
+                period=period,
+                energy_mwh=energy
+            )
+            for (feeder_id, period), energy in monthly_dict.items()
+        ]
+
+        if options['dry_run']:
+            self.stdout.write(f"[DRY-RUN] Would create {len(monthly_objs)} monthly rows")
+        else:
+            FeederEnergyMonthly.objects.bulk_create(
+                monthly_objs,
+                update_conflicts=True,
+                update_fields=['energy_mwh'],
+                unique_fields=['feeder', 'period']
+            )
+            self.stdout.write(f"Created/updated {len(monthly_objs)} monthly rows")

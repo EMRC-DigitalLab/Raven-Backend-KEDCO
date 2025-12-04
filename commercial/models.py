@@ -28,16 +28,6 @@ class Customer(UUIDModel, models.Model):
         return self.name
 
 
-class DailyEnergyDelivered(UUIDModel, models.Model):
-    feeder = models.ForeignKey('common.Feeder', on_delete=models.CASCADE)
-    date = models.DateField()
-    energy_mwh = models.DecimalField(max_digits=10, decimal_places=2)
-
-    class Meta:
-        unique_together = ('feeder', 'date')
-
-
-
 class MonthlyEnergyBilled(UUIDModel, models.Model):
     feeder = models.ForeignKey('common.Feeder', on_delete=models.CASCADE)
     month = models.DateField()

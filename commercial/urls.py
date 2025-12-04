@@ -5,7 +5,6 @@ from rest_framework.routers import DefaultRouter
 from .views.crud import (CustomerViewSet,
                          SalesRepresentativeViewSet,
                          SalesRepPerformanceViewSet,
-                         DailyEnergyDeliveredViewSet,
                          MonthlyRevenueBilledViewSet,
                          DailyCollectionViewSet,
                          MonthlyEnergyBilledViewSet,
@@ -26,7 +25,6 @@ router.register(r'sales-reps', SalesRepresentativeViewSet, basename='sales-repre
 router.register(r'sales-rep-performance', SalesRepPerformanceViewSet, basename='sales-rep-performance')
 router.register(r'collections', DailyCollectionViewSet, basename='daily-collection')
 router.register(r'customers', CustomerViewSet, basename='customer')
-router.register(r'daily-energy-delivered', DailyEnergyDeliveredViewSet, basename='daily-energy-delivered')
 router.register(r'monthly-revenue-billed', MonthlyRevenueBilledViewSet, basename='monthly-revenue-billed')
 router.register(r'daily-collections', DailyCollectionViewSet, basename='daily-collections')
 router.register(r'monthly-energy-billed', MonthlyEnergyBilledViewSet, basename='monthly-energy-billed')

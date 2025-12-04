@@ -5,6 +5,7 @@ from django.db import transaction
 from datetime import datetime, date, timedelta
 from dateutil.relativedelta import relativedelta # type: ignore
 from decimal import Decimal
+from django.utils import timezone
 import hashlib
 import time
 
@@ -354,22 +355,37 @@ class Command(BaseCommand):
         return Decimal("0")
 
     def calculate_interruption_metrics(self, month_date):
-        """Calculate interruption and turnaround metrics"""
+        """Calculate interruption and turnaround metrics INCLUDING UNRESOLVED"""
+        from technical.models import FeederInterruption, calculate_interruption_metrics
+        from datetime import datetime
+        import calendar
+    
+        # Get interruptions for the month
+        if month_date.month == 12:
+            end_date = month_date.replace(year=month_date.year + 1, month=1, day=1) - timedelta(days=1)
+        else:
+            end_date = month_date.replace(month=month_date.month + 1, day=1) - timedelta(days=1)
+    
         interruptions = FeederInterruption.objects.filter(
             occurred_at__year=month_date.year,
-            occurred_at__month=month_date.month,
-            restored_at__isnull=False
+            occurred_at__month=month_date.month
         )
-        
-        if interruptions.exists():
-            total_duration = sum(
-                (interrupt.restored_at - interrupt.occurred_at).total_seconds() / 3600
-                for interrupt in interruptions
-            )
-            avg_duration = total_duration / interruptions.count()
-            return Decimal(str(round(avg_duration, 2))), Decimal(str(round(avg_duration, 2)))
-        
-        return Decimal("0"), Decimal("0")
+    
+        if not interruptions.exists():
+            return Decimal("0"), Decimal("0")
+    
+        # Calculate end of month for reference time
+        days_in_month = calendar.monthrange(month_date.year, month_date.month)[1]
+        end_of_month = datetime(month_date.year, month_date.month, days_in_month, 23, 59, 59)
+        end_of_month = timezone.make_aware(end_of_month) if timezone.is_naive(end_of_month) else end_of_month
+    
+        # Use utility function (includes unresolved interruptions)
+        metrics = calculate_interruption_metrics(interruptions, reference_time=end_of_month)
+    
+        avg_duration = Decimal(str(metrics['avg_duration_hours']))
+        avg_turnaround = avg_duration  # Same for overview
+    
+        return avg_duration, avg_turnaround
 
     def calculate_source_data_hash(self, month_date):
         """Calculate hash of source data to detect changes"""

@@ -60,6 +60,12 @@ class Command(BaseCommand):
             default='0052cf6e-15ef-4de2-9c05-5895875ef791',
             help='Substation ID to generate report for (default: CLUB substation)'
         )
+        parser.add_argument(
+            '--report-date',
+            type=str,
+            default='2025-10-06',
+            help='Report end date in YYYY-MM-DD format (default: 2025-10-06)'
+        )
 
     def handle(self, *args, **options):
         self.stdout.write(
@@ -79,6 +85,7 @@ class Command(BaseCommand):
         try:
             generator = CLUBSubstationReportGenerator(
                 substation_id=options['substation_id'],
+                report_date=options['report_date'],
                 stdout=self.stdout,
                 style=self.style
             )
@@ -728,7 +735,7 @@ class Command(BaseCommand):
 class CLUBSubstationReportGenerator:
     """Generate comprehensive technical report for CLUB substation"""
     
-    def __init__(self, substation_id="0052cf6e-15ef-4de2-9c05-5895875ef791", stdout=None, style=None):
+    def __init__(self, substation_id="0052cf6e-15ef-4de2-9c05-5895875ef791", report_date=None, stdout=None, style=None):
         self.substation_id = substation_id
         self.substation_slug = "KN-CLU"
         self.substation_name = "CLUB"
@@ -737,8 +744,20 @@ class CLUBSubstationReportGenerator:
         
         # KEDCO deployment timeline
         self.deployment_start = datetime(2025, 8, 9).date()  # Raven deployment start
-        self.current_date = datetime(2025, 10, 6).date()     # Today's date - Monday, October 6, 2025
-        self.historical_data_available = True                # Complete 2024 data available
+        
+        # Parse report date
+        if report_date:
+            if isinstance(report_date, str):
+                try:
+                    self.current_date = datetime.strptime(report_date, '%Y-%m-%d').date()
+                except ValueError:
+                    raise ValueError(f"Invalid date format: {report_date}. Use YYYY-MM-DD")
+            else:
+                self.current_date = report_date
+        else:
+            self.current_date = datetime(2025, 10, 6).date()  # Default date
+        
+        self.historical_data_available = True  # Complete 2024 data available
         
         # Calculate deployment duration
         self.days_since_deployment = (self.current_date - self.deployment_start).days + 1

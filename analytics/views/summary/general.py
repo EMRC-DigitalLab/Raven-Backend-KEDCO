@@ -45,9 +45,9 @@ class OptimizedOverviewAPIView(APIView):
         # Try to get cached response first
         cache_key = self._get_cache_key(months)
         cached_response = cache.get(cache_key)
-        if cached_response:
-            logger.debug(f"Returning cached overview data for {len(months)} months")
-            return Response(cached_response)
+        # if cached_response:
+        #     logger.debug(f"Returning cached overview data for {len(months)} months")
+        #     return Response(cached_response)
         
         # Fetch data using summary models
         overview_data = self._fetch_overview_data(months)

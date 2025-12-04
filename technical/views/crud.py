@@ -1,3 +1,4 @@
+# technical/views/crud.py
 from rest_framework import viewsets
 from technical.models import *
 from technical.serializers import *
@@ -19,21 +20,106 @@ import datetime
 
 class EnergyDeliveredViewSet(viewsets.ModelViewSet):
     serializer_class = EnergyDeliveredSerializer
+    http_method_names = ['get', 'post', 'head', 'options']  # No PUT/PATCH/DELETE
 
     def get_queryset(self):
         feeders = get_filtered_feeders(self.request)
         date_from, date_to = get_date_range_from_request(self.request, 'date')
-
         qs = EnergyDelivered.objects.filter(feeder__in=feeders)
-
         if date_from and date_to:
             qs = qs.filter(date__range=(date_from, date_to))
-        elif date_from:
-            qs = qs.filter(date__gte=date_from)
-        elif date_to:
-            qs = qs.filter(date__lte=date_to)
+        return qs.order_by('date')
 
-        return qs
+    def create(self, request, *args, **kwargs):
+        return self._handle_cumulative_data(request)
+
+    @action(detail=False, methods=['post'], url_path='bulk-create')
+    def bulk_create(self, request):
+        return self._handle_cumulative_data(request, is_bulk=True)
+
+    @transaction.atomic
+    def _handle_cumulative_data(self, request, is_bulk=False):
+        data = request.data
+        if is_bulk:
+            if not isinstance(data, list):
+                return Response({"error": "Expected list of records"}, status=400)
+            records = data
+        else:
+            records = [data]
+
+        created = []
+        updated = []
+        errors = []
+        feeder_cache = {}
+
+        for i, record in enumerate(records):
+            try:
+                # --- Resolve feeder ---
+                feeder_slug = record.get('feeder')
+                if not feeder_slug:
+                    errors.append(f"Record {i}: missing 'feeder'")
+                    continue
+
+                if feeder_slug not in feeder_cache:
+                    try:
+                        feeder = Feeder.objects.get(slug=feeder_slug)
+                    except Feeder.DoesNotExist:
+                        try:
+                            feeder = Feeder.objects.get(name=feeder_slug)
+                        except Feeder.DoesNotExist:
+                            errors.append(f"Record {i}: Feeder '{feeder_slug}' not found")
+                            continue
+                    feeder_cache[feeder_slug] = feeder
+                else:
+                    feeder = feeder_cache[feeder_slug]
+
+                # --- Parse date ---
+                date_str = record.get('date')
+                try:
+                    reading_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+                except (ValueError, TypeError):
+                    errors.append(f"Record {i}: Invalid date '{date_str}'")
+                    continue
+
+                cumulative_mwh = record.get('energy_mwh')
+                if cumulative_mwh is None:
+                    errors.append(f"Record {i}: missing 'energy_mwh'")
+                    continue
+
+                # --- Upsert into CumulativeMeterReading ---
+                obj, was_created = CumulativeMeterReading.objects.update_or_create(
+                    feeder=feeder,
+                    reading_date=reading_date,
+                    reading_time=None,  # or parse if provided
+                    defaults={
+                        'cumulative_mwh': cumulative_mwh,
+                        'is_estimated': False,
+                        'notes': 'Imported via legacy energy-delivered endpoint'
+                    }
+                )
+
+                if was_created:
+                    created.append(obj.id)
+                else:
+                    updated.append(obj.id)
+
+            except Exception as e:
+                errors.append(f"Record {i}: {str(e)}")
+
+        # --- Response ---
+        summary = {
+            "created": len(created),
+            "updated": len(updated),
+            "errors": len(errors),
+            "total": len(records)
+        }
+
+        response = {"summary": summary}
+        if errors:
+            response["errors"] = errors[:50]
+
+        status_code = status.HTTP_201_CREATED if created else status.HTTP_200_OK
+        return Response(response, status=status_code)
 
 
 # class HourlyLoadViewSet(viewsets.ModelViewSet):
@@ -307,36 +393,35 @@ class FeederInterruptionViewSet(viewsets.ModelViewSet):
                     return Response({"error": "Interruption not found"}, status=status.HTTP_404_NOT_FOUND)
             else:
                 interruption = get_object_or_404(FeederInterruption, feeder__slug=slug)
-            
+    
             # 🔧 CRITICAL FIX: Ensure Django knows this is an existing object
             interruption._state.adding = False
-            
+    
             # Update only the fields we can actually set
             data = request.data.copy()
-            
+    
             # Don't update occurred_at to avoid duplicate key issues
             if 'occurred_at' in data:
                 del data['occurred_at']
-            
-            # Update fields manually (skip duration_hours - it's calculated)
+    
+            # ✅ FIX: Update fields independently
             if 'description' in data:
                 interruption.description = data['description']
-                if 'restored_at' in data:
-                    if data['restored_at']:
-                        restored_dt = parse_datetime(data['restored_at'].replace('Z', ''))
-                        if restored_dt and restored_dt.tzinfo is None:
-                            # 🔧 FIXED: Subtract 1 hour to compensate for Django's automatic conversion
-                            restored_dt = restored_dt - timezone.timedelta(hours=1)
-                            restored_dt = timezone.make_aware(restored_dt, timezone=pytz.UTC)
-                        interruption.restored_at = restored_dt
-                    else:
-                        interruption.restored_at = None
+    
+            if 'restored_at' in data:  # ✅ Moved outside description check
+                if data['restored_at']:
+                    restored_dt = parse_datetime(data['restored_at'].replace('Z', ''))
+                    if restored_dt and restored_dt.tzinfo is None:
+                        # Subtract 1 hour to compensate for Django's automatic conversion
+                        restored_dt = restored_dt - timezone.timedelta(hours=1)
+                        restored_dt = timezone.make_aware(restored_dt, timezone=pytz.UTC)
+                    interruption.restored_at = restored_dt
+                else:
+                    interruption.restored_at = None
+    
             if 'interruption_type' in data:
                 interruption.interruption_type = data['interruption_type']
-            
-            # 🔧 REMOVED: duration_hours assignment - it's a calculated property
-            # Duration will be automatically calculated based on occurred_at and restored_at
-            
+    
             # Save with force_update to ensure UPDATE operation
             try:
                 interruption.save(force_update=True)
@@ -344,7 +429,7 @@ class FeederInterruptionViewSet(viewsets.ModelViewSet):
             except Exception as e:
                 print(f"❌ Error saving: {e}")
                 return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-            
+    
             serializer = self.get_serializer(interruption)
             return Response(serializer.data)
 
