@@ -216,29 +216,10 @@ class FeederInterruption(UUIDModel, models.Model):
     def duration_hours(self):
         """Get duration in hours, including unresolved interruptions"""
         if self.restored_at and self.occurred_at:
-            # Make both naive for calculation to avoid timezone issues
-            occurred = self.occurred_at
-            restored = self.restored_at
-            
-            # Convert to naive if aware
-            if occurred.tzinfo is not None:
-                occurred = occurred.replace(tzinfo=None)
-            if restored.tzinfo is not None:
-                restored = restored.replace(tzinfo=None)
-            
-            return (restored - occurred).total_seconds() / 3600
+            return (self.restored_at - self.occurred_at).total_seconds() / 3600
         elif self.occurred_at:
             # For unresolved interruptions, calculate duration from occurrence to now
-            occurred = self.occurred_at
-            now = timezone.now()
-            
-            # Convert to naive if aware
-            if occurred.tzinfo is not None:
-                occurred = occurred.replace(tzinfo=None)
-            if now.tzinfo is not None:
-                now = now.replace(tzinfo=None)
-            
-            return (now - occurred).total_seconds() / 3600
+            return (timezone.now() - self.occurred_at).total_seconds() / 3600
         return 0
     
     @property
