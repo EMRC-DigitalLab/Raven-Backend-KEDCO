@@ -140,6 +140,64 @@ def get_previous_periods(start_date, end_date, period_days, count=4):
     return periods
 
 
+def calculate_energy_delivered_feeder(feeder_id, from_date, to_date):
+    """
+    Calculate total energy delivered for a single feeder using hybrid approach.
+    
+    Priority:
+    1. Use EnergyDelivered if available for a date
+    2. Fall back to HourlyLoad sum for dates without EnergyDelivered
+    
+    Returns:
+        Total energy in MWh
+    """
+    # Get all dates in the range
+    current_date = from_date
+    total_energy = 0.0
+    
+    while current_date <= to_date:
+        # Try to get from EnergyDelivered first
+        try:
+            energy_record = EnergyDelivered.objects.get(
+                feeder_id=feeder_id,
+                date=current_date
+            )
+            total_energy += float(energy_record.energy_mwh)
+        except EnergyDelivered.DoesNotExist:
+            # Fall back to HourlyLoad
+            hourly_sum = HourlyLoad.objects.filter(
+                feeder_id=feeder_id,
+                date=current_date
+            ).aggregate(total=Sum('load_mw'))
+            total_energy += float(hourly_sum['total'] or 0)
+        
+        current_date += timedelta(days=1)
+    
+    return round(total_energy, 2)
+
+
+def calculate_energy_delivered_network(from_date, to_date):
+    """
+    Calculate total energy delivered across all ONBOARDED feeders using hybrid approach.
+    
+    Priority:
+    1. Use EnergyDelivered if available for a feeder-date combination
+    2. Fall back to HourlyLoad sum for feeder-dates without EnergyDelivered
+    
+    Returns:
+        Total energy in MWh
+    """
+    # Get all onboarded feeders
+    onboarded_feeders = Feeder.objects.filter(is_onboarded=True)
+    total_energy = 0.0
+    
+    for feeder in onboarded_feeders:
+        feeder_energy = calculate_energy_delivered_feeder(feeder.id, from_date, to_date)
+        total_energy += feeder_energy
+    
+    return round(total_energy, 2)
+
+
 def calculate_hours_of_supply_feeder(feeder_id, from_date, to_date):
     """
     Calculate average hours of supply per day for a single feeder.
@@ -1108,19 +1166,13 @@ def technical_overview_view(request):
         prev_end = prev_start + timedelta(days=period_days - 1)
     
     # Calculate highlight metrics - OPTIMIZED with feeder filter
-    # Energy delivered: Calculate from HourlyLoad (Sum of MW × 1 hour = MWh)
-    energy_result = HourlyLoad.objects.filter(
-        date__range=(start_date, end_date),
-        **feeder_filter
-    ).aggregate(total=Sum('load_mw'))
-    energy_now = float(energy_result['total'] or 0)
-    
-    # Previous period energy from HourlyLoad
-    energy_prev_result = HourlyLoad.objects.filter(
-        date__range=(prev_start, prev_end),
-        **feeder_filter
-    ).aggregate(total=Sum('load_mw'))
-    energy_prev = float(energy_prev_result['total'] or 0)
+    # Energy delivered: Use hybrid approach (EnergyDelivered + HourlyLoad fallback)
+    if feeder_slug:
+        energy_now = calculate_energy_delivered_feeder(feeder.id, start_date, end_date)
+        energy_prev = calculate_energy_delivered_feeder(feeder.id, prev_start, prev_end)
+    else:
+        energy_now = calculate_energy_delivered_network(start_date, end_date)
+        energy_prev = calculate_energy_delivered_network(prev_start, prev_end)
     
     # Average load - network-wide or single feeder
     if feeder_slug:
