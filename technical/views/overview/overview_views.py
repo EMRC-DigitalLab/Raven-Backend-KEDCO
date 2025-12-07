@@ -143,6 +143,7 @@ def get_previous_periods(start_date, end_date, period_days, count=4):
 def calculate_energy_delivered_feeder(feeder_id, from_date, to_date):
     """
     Calculate total energy delivered for a single feeder using hybrid approach.
+    OPTIMIZED: Uses bulk queries instead of day-by-day loops.
     
     Priority:
     1. Use EnergyDelivered if available for a date
@@ -151,27 +152,38 @@ def calculate_energy_delivered_feeder(feeder_id, from_date, to_date):
     Returns:
         Total energy in MWh
     """
-    # Get all dates in the range
-    current_date = from_date
-    total_energy = 0.0
+    # Step 1: Get all EnergyDelivered records for this feeder in one query
+    energy_records = EnergyDelivered.objects.filter(
+        feeder_id=feeder_id,
+        date__range=(from_date, to_date)
+    ).values('date', 'energy_mwh')
     
+    # Create a dict of date -> energy for quick lookup
+    energy_dict = {record['date']: float(record['energy_mwh']) for record in energy_records}
+    
+    # Step 2: Identify missing dates
+    missing_dates = []
+    current_date = from_date
     while current_date <= to_date:
-        # Try to get from EnergyDelivered first
-        try:
-            energy_record = EnergyDelivered.objects.get(
-                feeder_id=feeder_id,
-                date=current_date
-            )
-            total_energy += float(energy_record.energy_mwh)
-        except EnergyDelivered.DoesNotExist:
-            # Fall back to HourlyLoad
-            hourly_sum = HourlyLoad.objects.filter(
-                feeder_id=feeder_id,
-                date=current_date
-            ).aggregate(total=Sum('load_mw'))
-            total_energy += float(hourly_sum['total'] or 0)
-        
+        if current_date not in energy_dict:
+            missing_dates.append(current_date)
         current_date += timedelta(days=1)
+    
+    # Step 3: Get HourlyLoad sums for missing dates in one query
+    if missing_dates:
+        hourly_sums = HourlyLoad.objects.filter(
+            feeder_id=feeder_id,
+            date__in=missing_dates
+        ).values('date').annotate(
+            total=Sum('load_mw')
+        )
+        
+        # Add hourly sums to energy_dict
+        for record in hourly_sums:
+            energy_dict[record['date']] = float(record['total'] or 0)
+    
+    # Step 4: Sum all energy values
+    total_energy = sum(energy_dict.values())
     
     return round(total_energy, 2)
 
@@ -179,6 +191,7 @@ def calculate_energy_delivered_feeder(feeder_id, from_date, to_date):
 def calculate_energy_delivered_network(from_date, to_date):
     """
     Calculate total energy delivered across all ONBOARDED feeders using hybrid approach.
+    OPTIMIZED: Uses raw SQL for maximum performance.
     
     Priority:
     1. Use EnergyDelivered if available for a feeder-date combination
@@ -187,13 +200,70 @@ def calculate_energy_delivered_network(from_date, to_date):
     Returns:
         Total energy in MWh
     """
-    # Get all onboarded feeders
-    onboarded_feeders = Feeder.objects.filter(is_onboarded=True)
-    total_energy = 0.0
+    # Get IDs of onboarded feeders
+    onboarded_feeder_ids = list(Feeder.objects.filter(is_onboarded=True).values_list('id', flat=True))
     
-    for feeder in onboarded_feeders:
-        feeder_energy = calculate_energy_delivered_feeder(feeder.id, from_date, to_date)
-        total_energy += feeder_energy
+    if not onboarded_feeder_ids:
+        return 0.0
+    
+    feeder_placeholders = ','.join(['%s'] * len(onboarded_feeder_ids))
+    
+    # Use raw SQL for optimal performance
+    # This query does a LEFT JOIN to get EnergyDelivered, and falls back to HourlyLoad sum
+    query = f"""
+        WITH date_series AS (
+            SELECT generate_series(
+                %s::date,
+                %s::date,
+                '1 day'::interval
+            )::date AS date
+        ),
+        feeder_dates AS (
+            SELECT 
+                f.id as feeder_id,
+                ds.date
+            FROM (
+                SELECT unnest(ARRAY[{feeder_placeholders}]::uuid[]) as id
+            ) f
+            CROSS JOIN date_series ds
+        ),
+        energy_delivered_data AS (
+            SELECT 
+                fd.feeder_id,
+                fd.date,
+                ed.energy_mwh as delivered_energy
+            FROM feeder_dates fd
+            LEFT JOIN technical_energydelivered ed 
+                ON ed.feeder_id = fd.feeder_id 
+                AND ed.date = fd.date
+        ),
+        hourly_load_data AS (
+            SELECT 
+                feeder_id,
+                date,
+                SUM(load_mw) as hourly_energy
+            FROM technical_hourlyload
+            WHERE date BETWEEN %s AND %s
+                AND feeder_id IN ({feeder_placeholders})
+            GROUP BY feeder_id, date
+        )
+        SELECT 
+            COALESCE(
+                SUM(COALESCE(ed.delivered_energy, hl.hourly_energy, 0)),
+                0
+            ) as total_energy
+        FROM energy_delivered_data ed
+        LEFT JOIN hourly_load_data hl 
+            ON hl.feeder_id = ed.feeder_id 
+            AND hl.date = ed.date
+    """
+    
+    params = [from_date, to_date] + onboarded_feeder_ids + [from_date, to_date] + onboarded_feeder_ids
+    
+    with connection.cursor() as cursor:
+        cursor.execute(query, params)
+        result = cursor.fetchone()
+        total_energy = float(result[0]) if result and result[0] else 0.0
     
     return round(total_energy, 2)
 
