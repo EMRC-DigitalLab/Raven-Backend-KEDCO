@@ -893,6 +893,7 @@ def get_interruption_breakdown_feeder(feeder_id, start_date, end_date, period_da
     UPDATED Logic:
     - Counts ONLY interruptions that occurred within the period
     - Does NOT include interruptions that started before (even if still ongoing)
+    - Uses timezone-aware datetime ranges for consistency
     
     Returns count of interruptions by type for THIS feeder in the period.
     """
@@ -914,19 +915,28 @@ def get_interruption_breakdown_feeder(feeder_id, start_date, end_date, period_da
         target_end = target_start + timedelta(days=period_days - 1)
         label = f"Cycle {period_offset + 1}"
     
-    # Count interruptions that OCCURRED within the period only
+    # ✅ Create timezone-aware datetime boundaries
+    start_datetime = timezone.make_aware(
+        datetime.combine(target_start, datetime.min.time())
+    )
+    end_datetime = timezone.make_aware(
+        datetime.combine(target_end, datetime.max.time())
+    )
+    
+    # Count interruptions that OCCURRED within the period using timezone-aware ranges
     query = """
         SELECT 
             COALESCE(interruption_type, 'Unknown') as itype,
             COUNT(*) as count
         FROM technical_feederinterruption
         WHERE feeder_id = %s
-            AND DATE(occurred_at) BETWEEN %s AND %s
+            AND occurred_at >= %s
+            AND occurred_at <= %s
         GROUP BY interruption_type
     """
     
     with connection.cursor() as cursor:
-        cursor.execute(query, [feeder_id, target_start, target_end])
+        cursor.execute(query, [feeder_id, start_datetime, end_datetime])
         results = cursor.fetchall()
     
     # Process results
@@ -954,6 +964,7 @@ def get_interruption_breakdown_network(start_date, end_date, period_days, period
     - Counts ONLY interruptions that occurred within the period
     - Does NOT include interruptions that started before (even if still ongoing)
     - Only considers interruptions from ONBOARDED feeders
+    - Uses timezone-aware datetime ranges for consistency
     
     Returns count of interruptions by type across all onboarded feeders in the period.
     """
@@ -986,6 +997,14 @@ def get_interruption_breakdown_network(start_date, end_date, period_days, period
             "breakdown": {}
         }
     
+    # ✅ Create timezone-aware datetime boundaries
+    start_datetime = timezone.make_aware(
+        datetime.combine(target_start, datetime.min.time())
+    )
+    end_datetime = timezone.make_aware(
+        datetime.combine(target_end, datetime.max.time())
+    )
+    
     # Count interruptions that OCCURRED within the period only, for ONBOARDED feeders
     feeder_placeholders = ','.join(['%s'] * len(onboarded_feeder_ids))
     query = f"""
@@ -993,12 +1012,13 @@ def get_interruption_breakdown_network(start_date, end_date, period_days, period
             COALESCE(interruption_type, 'Unknown') as itype,
             COUNT(*) as count
         FROM technical_feederinterruption
-        WHERE DATE(occurred_at) BETWEEN %s AND %s
+        WHERE occurred_at >= %s
+            AND occurred_at <= %s
             AND feeder_id IN ({feeder_placeholders})
         GROUP BY interruption_type
     """
     
-    params = [target_start, target_end] + onboarded_feeder_ids
+    params = [start_datetime, end_datetime] + onboarded_feeder_ids
     
     with connection.cursor() as cursor:
         cursor.execute(query, params)
