@@ -183,6 +183,109 @@ class DurationFilter(admin.SimpleListFilter):
         elif self.value() == 'very_long':
             return queryset.filter(duration_seconds__gte=timedelta(hours=12))
 
+class OverlappingInterruptionsFilter(admin.SimpleListFilter):
+    """
+    Filter to identify interruptions that overlap with other interruptions on the same feeder.
+    
+    This helps identify situations where multiple faults are occurring simultaneously on a feeder,
+    which is important for understanding actual customer impact vs. total interruption count.
+    """
+    title = 'Overlapping Status'
+    parameter_name = 'overlapping'
+
+    def lookups(self, request, model_admin):
+        return [
+            ('has_overlaps', 'Has Overlapping Interruptions'),
+            ('no_overlaps', 'No Overlapping Interruptions'),
+            ('simultaneous_3plus', '3+ Simultaneous Interruptions'),
+        ]
+
+    def queryset(self, request, queryset):
+        from django.db.models import Q
+        from django.utils import timezone
+        
+        if self.value() == 'has_overlaps':
+            # Find interruptions that have overlaps
+            overlapping_ids = []
+            
+            for interruption in queryset.select_related('feeder'):
+                # Get the end time (restored_at or now for ongoing)
+                end_time = interruption.restored_at if interruption.restored_at else timezone.now()
+                
+                # Find other interruptions on same feeder that overlap
+                overlaps = FeederInterruption.objects.filter(
+                    feeder=interruption.feeder
+                ).exclude(
+                    id=interruption.id
+                ).filter(
+                    Q(
+                        # Other interruption started before this one ended
+                        occurred_at__lt=end_time,
+                        # AND other ended after this one started
+                        restored_at__gt=interruption.occurred_at
+                    ) | Q(
+                        # OR other interruption is ongoing and started before this ended
+                        occurred_at__lt=end_time,
+                        restored_at__isnull=True
+                    )
+                )
+                
+                if overlaps.exists():
+                    overlapping_ids.append(interruption.id)
+            
+            return queryset.filter(id__in=overlapping_ids)
+        
+        elif self.value() == 'no_overlaps':
+            # Find interruptions that DON'T have overlaps
+            overlapping_ids = []
+            
+            for interruption in queryset.select_related('feeder'):
+                end_time = interruption.restored_at if interruption.restored_at else timezone.now()
+                
+                overlaps = FeederInterruption.objects.filter(
+                    feeder=interruption.feeder
+                ).exclude(
+                    id=interruption.id
+                ).filter(
+                    Q(
+                        occurred_at__lt=end_time,
+                        restored_at__gt=interruption.occurred_at
+                    ) | Q(
+                        occurred_at__lt=end_time,
+                        restored_at__isnull=True
+                    )
+                )
+                
+                if overlaps.exists():
+                    overlapping_ids.append(interruption.id)
+            
+            return queryset.exclude(id__in=overlapping_ids)
+        
+        elif self.value() == 'simultaneous_3plus':
+            # Find interruptions that have 3 or more simultaneous interruptions
+            multi_overlap_ids = []
+            
+            for interruption in queryset.select_related('feeder'):
+                end_time = interruption.restored_at if interruption.restored_at else timezone.now()
+                
+                overlaps_count = FeederInterruption.objects.filter(
+                    feeder=interruption.feeder
+                ).exclude(
+                    id=interruption.id
+                ).filter(
+                    Q(
+                        occurred_at__lt=end_time,
+                        restored_at__gt=interruption.occurred_at
+                    ) | Q(
+                        occurred_at__lt=end_time,
+                        restored_at__isnull=True
+                    )
+                ).count()
+                
+                if overlaps_count >= 2:  # 2+ others = 3+ total including this one
+                    multi_overlap_ids.append(interruption.id)
+            
+            return queryset.filter(id__in=multi_overlap_ids)
 
 # Admin classes
 @admin.register(CumulativeMeterReading)
@@ -688,7 +791,7 @@ class FeederInterruptionAdmin(admin.ModelAdmin):
     ]
     list_filter = [
         'feeder', 'interruption_type', InterruptionStatusFilter, 
-        DurationFilter,
+        DurationFilter, OverlappingInterruptionsFilter,
         'occurred_at'
     ]
     date_hierarchy = 'occurred_at'
