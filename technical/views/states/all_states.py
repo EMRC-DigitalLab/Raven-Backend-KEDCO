@@ -516,24 +516,12 @@ def calculate_state_metrics_optimized(state, from_date, to_date, mode):
     - Only considers ONBOARDED feeders
     - Uses actual elapsed time for current periods (fractional days)
     - Uses timezone-aware datetime ranges for consistency
-    - Includes hybrid energy calculation
     
     CORRECTED: Interruption duration includes all active interruptions, 
     but FTC only counts interruptions that occurred within the period.
     """
     try:
-        # 1. Energy Delivered (Hybrid: EnergyDelivered + HourlyLoad fallback) - ONBOARDED feeders only
-        energy_delivered = calculate_state_energy_delivered_sql(
-            state.id,
-            from_date,
-            to_date
-        )
-    except Exception as e:
-        print(f"DEBUG: SQL failed for energy delivered, using fallback: {str(e)}")
-        energy_delivered = 0.0
-    
-    try:
-        # 2. Average Supply Hours (per day) - ONBOARDED feeders only
+        # 1. Average Supply Hours (per day) - ONBOARDED feeders only
         avg_supply = calculate_state_hours_of_supply_sql(
             state.id, 
             from_date, 
@@ -549,7 +537,7 @@ def calculate_state_metrics_optimized(state, from_date, to_date, mode):
         avg_supply = calculate_avg_supply_orm(state.id, from_date, to_date, feeder_ids)
     
     try:
-        # 3. Interruption Duration (ALL interruptions active during period) - ONBOARDED feeders only
+        # 2. Interruption Duration (ALL interruptions active during period) - ONBOARDED feeders only
         avg_duration, ftc_all = calculate_state_interruption_metrics_sql(
             state.id,
             from_date,
@@ -567,7 +555,7 @@ def calculate_state_metrics_optimized(state, from_date, to_date, mode):
         )
     
     try:
-        # 4. Turnaround Time (LOCAL faults only, active during period) - ONBOARDED feeders only
+        # 3. Turnaround Time (LOCAL faults only, active during period) - ONBOARDED feeders only
         turnaround, ftc_local = calculate_state_interruption_metrics_sql(
             state.id,
             from_date,
@@ -586,7 +574,7 @@ def calculate_state_metrics_optimized(state, from_date, to_date, mode):
         )
     
     try:
-        # 5. Average Interruption Duration (hours per interruption event) - ONBOARDED feeders only
+        # 4. Average Interruption Duration (hours per interruption event) - ONBOARDED feeders only
         avg_int_duration = calculate_state_avg_interruption_duration_sql(
             state.id,
             from_date,
@@ -604,7 +592,7 @@ def calculate_state_metrics_optimized(state, from_date, to_date, mode):
         )
     
     try:
-        # 6. Peak Load (maximum load in the period) - ONBOARDED feeders only
+        # 5. Peak Load (maximum load in the period) - ONBOARDED feeders only
         peak_load = calculate_state_peak_load_sql(
             state.id,
             from_date,
@@ -624,7 +612,7 @@ def calculate_state_metrics_optimized(state, from_date, to_date, mode):
         peak_load = round(float(peak_data["peak"] or 0), 2)
     
     try:
-        # 7. Infrastructure counts - ONBOARDED feeders only
+        # 6. Infrastructure counts - ONBOARDED feeders only
         infrastructure = get_state_infrastructure_counts_sql(state.id)
     except Exception as e:
         print(f"DEBUG: SQL failed for infrastructure counts, using ORM fallback: {str(e)}")
@@ -654,7 +642,6 @@ def calculate_state_metrics_optimized(state, from_date, to_date, mode):
         turnaround = 24.0
     
     return {
-        "energy_delivered": energy_delivered,
         "avg_supply": avg_supply,
         "avg_duration": avg_duration,
         "turnaround": turnaround,
@@ -701,7 +688,6 @@ def all_states_technical_summary(request):
     - ?mode=custom&from_date=2024-08-01T00:00:00.000Z&to_date=2024-08-15T23:59:59.999Z
     
     Key Metrics (CORRECTED - ONBOARDED FEEDERS ONLY):
-    - energy_delivered: Total energy delivered in MWh (hybrid calculation)
     - avg_supply: Average hours per day of electricity supply across ALL ONBOARDED feeders (0-24)
     - avg_duration: Average hours per day of interruptions across ALL ONBOARDED feeders (0-24)
       * Includes ALL interruptions active during the period
@@ -755,7 +741,6 @@ def all_states_technical_summary(request):
             overview.append({
                 "state": state.name,
                 "metrics": {
-                    "energy_delivered": 0.0,
                     "avg_supply": 0.0,
                     "avg_duration": 0.0,
                     "turnaround": 0.0,
