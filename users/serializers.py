@@ -164,13 +164,21 @@ class LoginSerializer(serializers.Serializer):
         if not username_or_email or not password:
             raise serializers.ValidationError('Username/email and password are required.')
         
-        # First, try to authenticate with the value as username
-        user = authenticate(username=username_or_email, password=password)
+        # Normalize input to lowercase for case-insensitive lookup
+        username_or_email_lower = username_or_email.lower().strip()
         
-        # If that fails and the input looks like an email, try to find user by email
+        # First, try to authenticate with the value as username (case-insensitive)
+        user = None
+        try:
+            user_obj = User.objects.get(username__iexact=username_or_email_lower)
+            user = authenticate(username=user_obj.username, password=password)
+        except User.DoesNotExist:
+            pass
+        
+        # If that fails and the input looks like an email, try to find user by email (case-insensitive)
         if not user and '@' in username_or_email:
             try:
-                user_obj = User.objects.get(email=username_or_email)
+                user_obj = User.objects.get(email__iexact=username_or_email_lower)
                 # Now try to authenticate using the found user's username
                 user = authenticate(username=user_obj.username, password=password)
             except User.DoesNotExist:
@@ -183,7 +191,6 @@ class LoginSerializer(serializers.Serializer):
             return attrs
         else:
             raise serializers.ValidationError('Invalid username/email or password.')
-
 
 
 class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
@@ -201,13 +208,21 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         if not username_or_email or not password:
             raise serializers.ValidationError('Username/email and password are required.')
         
-        # First, try to authenticate with the value as username
-        user = authenticate(username=username_or_email, password=password)
+        # Normalize input to lowercase for case-insensitive lookup
+        username_or_email_lower = username_or_email.lower().strip()
         
-        # If that fails and the input looks like an email, try to find user by email
+        # First, try to authenticate with the value as username (case-insensitive)
+        user = None
+        try:
+            user_obj = User.objects.get(username__iexact=username_or_email_lower)
+            user = authenticate(username=user_obj.username, password=password)
+        except User.DoesNotExist:
+            pass
+        
+        # If that fails and the input looks like an email, try to find user by email (case-insensitive)
         if not user and '@' in username_or_email:
             try:
-                user_obj = User.objects.get(email=username_or_email)
+                user_obj = User.objects.get(email__iexact=username_or_email_lower)
                 # Now try to authenticate using the found user's username
                 user = authenticate(username=user_obj.username, password=password)
             except User.DoesNotExist:
