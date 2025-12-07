@@ -412,7 +412,7 @@ def calculate_interruption_duration_network(from_date, to_date, exclude_types=No
     - Includes ALL interruptions active during the period (not just those that started in the period)
     - Calculates only the hours that fall within the filtered period boundaries
     - Numerator: Sum of all interruption hours across all ONBOARDED feeders with interruptions
-    - Denominator: Total ONBOARDED feeders × Days in period
+    - Denominator: Total ONBOARDED feeders × Days in period (using actual elapsed time for current day)
     - This properly accounts for onboarded feeders with no interruptions (they contribute 0)
     
     NOTE: For feeders with multiple overlapping interruptions, we cap each feeder's
@@ -425,7 +425,17 @@ def calculate_interruption_duration_network(from_date, to_date, exclude_types=No
     if from_date > today:
         return 0.0
     
-    period_days = (to_date - from_date).days + 1
+    # ✅ Calculate actual elapsed time for current periods
+    if to_date == today:
+        # For current day, calculate fractional days based on current hour
+        full_days = (to_date - from_date).days
+        current_hour = now.hour
+        fractional_day = current_hour / 24.0
+        period_days = full_days + fractional_day
+    else:
+        # For past periods, use full days
+        period_days = (to_date - from_date).days + 1
+    
     total_feeders = Feeder.objects.filter(is_onboarded=True).count()
     
     if total_feeders == 0:
@@ -889,7 +899,10 @@ def get_load_trend_optimized(start_date, end_date, mode, feeder_id=None):
     For monthly mode: returns daily averages for each day of the month
     For daily mode: returns hourly averages for that specific day
     
-    UPDATED: Only considers ONBOARDED feeders (when not filtering by specific feeder)
+    UPDATED: 
+    - Only considers ONBOARDED feeders (when not filtering by specific feeder)
+    - Returns 0 for missing values up to current time
+    - Does not return future time slots
     
     Args:
         start_date: Start date
@@ -897,6 +910,9 @@ def get_load_trend_optimized(start_date, end_date, mode, feeder_id=None):
         mode: Mode (monthly, daily, custom, etc.)
         feeder_id: Optional feeder ID to filter by specific feeder
     """
+    today = timezone.now().date()
+    now = timezone.now()
+    
     # Build base query with optional feeder filter
     base_filter = {'date__range': (start_date, end_date)}
     if feeder_id:
@@ -913,13 +929,23 @@ def get_load_trend_optimized(start_date, end_date, mode, feeder_id=None):
             avg_load=Avg('load_mw')
         ).order_by('date')
         
-        series = [
-            {
-                "day": entry["date"].day,
-                "value": round(float(entry["avg_load"] or 0), 2)
-            }
+        # Create a dictionary for quick lookup
+        loads_dict = {
+            entry["date"]: round(float(entry["avg_load"] or 0), 2)
             for entry in daily_loads
-        ]
+        }
+        
+        # Generate series with all days up to today (or end_date if in the past)
+        series = []
+        current_date = start_date
+        effective_end = min(end_date, today)
+        
+        while current_date <= effective_end:
+            series.append({
+                "day": current_date.day,
+                "value": loads_dict.get(current_date, 0)
+            })
+            current_date += timedelta(days=1)
         
         return {
             "unit": "MW",
@@ -936,12 +962,27 @@ def get_load_trend_optimized(start_date, end_date, mode, feeder_id=None):
             avg_load=Avg('load_mw')
         ).order_by('hour')
         
+        # Create a dictionary for quick lookup
+        loads_dict = {
+            entry["hour"]: round(float(entry["avg_load"] or 0), 2)
+            for entry in hourly_loads
+        }
+        
+        # Determine max hour to return
+        if start_date == today:
+            # For current day, only return up to current hour
+            max_hour = now.hour
+        else:
+            # For past days, return all 24 hours
+            max_hour = 23
+        
+        # Generate series with all hours from 0 to max_hour
         series = [
             {
-                "hour": entry["hour"],
-                "value": round(float(entry["avg_load"] or 0), 2)
+                "hour": hour,
+                "value": loads_dict.get(hour, 0)
             }
-            for entry in hourly_loads
+            for hour in range(max_hour + 1)
         ]
         
         return {
@@ -958,13 +999,23 @@ def get_load_trend_optimized(start_date, end_date, mode, feeder_id=None):
             avg_load=Avg('load_mw')
         ).order_by('date')
         
-        series = [
-            {
-                "date": entry["date"].isoformat(),
-                "value": round(float(entry["avg_load"] or 0), 2)
-            }
+        # Create a dictionary for quick lookup
+        loads_dict = {
+            entry["date"]: round(float(entry["avg_load"] or 0), 2)
             for entry in daily_loads
-        ]
+        }
+        
+        # Generate series with all days up to today (or end_date if in the past)
+        series = []
+        current_date = start_date
+        effective_end = min(end_date, today)
+        
+        while current_date <= effective_end:
+            series.append({
+                "date": current_date.isoformat(),
+                "value": loads_dict.get(current_date, 0)
+            })
+            current_date += timedelta(days=1)
         
         return {
             "unit": "MW",
