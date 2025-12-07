@@ -30,16 +30,27 @@ def delta(current, previous):
 def parse_date_range(request):
     """Parse date parameters and determine filtering mode"""
     mode = request.GET.get("mode", "monthly")
+    today = datetime.now().date()
+    now = timezone.now()
     
     if mode == "monthly":
         year = int(request.GET.get("year", datetime.now().year))
         month = int(request.GET.get("month", datetime.now().month))
         start_date, end_date = get_month_range(year, month)
+        
+        # ✅ Cap end_date at today for current/future months
+        if end_date >= today:
+            end_date = today
+        
+        # Calculate actual period days (whole days completed)
+        period_days = (end_date - start_date).days + 1
+        
         return {
             "mode": "monthly",
             "start_date": start_date,
             "end_date": end_date,
-            "period_days": (end_date - start_date).days + 1
+            "period_days": period_days,
+            "is_current_period": end_date == today
         }
     
     elif mode == "daily":
@@ -53,7 +64,8 @@ def parse_date_range(request):
             "mode": "daily",
             "start_date": from_date,
             "end_date": from_date,
-            "period_days": 1
+            "period_days": 1,
+            "is_current_period": from_date == today
         }
     
     else:  # custom range
@@ -67,13 +79,18 @@ def parse_date_range(request):
             # Default to current month if no dates provided
             from_date, to_date = get_month_range(datetime.now().year, datetime.now().month)
         
+        # ✅ Cap end_date at today for current/future periods
+        if to_date >= today:
+            to_date = today
+        
         period_days = (to_date - from_date).days + 1
         
         return {
             "mode": "custom",
             "start_date": from_date,
             "end_date": to_date,
-            "period_days": period_days
+            "period_days": period_days,
+            "is_current_period": to_date == today
         }
 
 
@@ -129,7 +146,7 @@ def calculate_hours_of_supply_feeder(feeder_id, from_date, to_date):
     
     Logic:
     - Sum all distinct hours where load > 0 across all days
-    - Divide by number of days in period
+    - Divide by number of days in period (using actual elapsed time for current day)
     - This gives average hours per day for THIS feeder
     """
     query = """
@@ -146,8 +163,20 @@ def calculate_hours_of_supply_feeder(feeder_id, from_date, to_date):
         result = cursor.fetchone()
         total_hours = result[0] if result and result[0] else 0
     
-    # Calculate average per day
-    period_days = (to_date - from_date).days + 1
+    # ✅ Calculate actual elapsed time for current periods
+    today = timezone.now().date()
+    now = timezone.now()
+    
+    if to_date == today:
+        # For current day, calculate fractional days based on current hour
+        full_days = (to_date - from_date).days
+        current_hour = now.hour
+        fractional_day = current_hour / 24.0
+        period_days = full_days + fractional_day
+    else:
+        # For past periods, use full days
+        period_days = (to_date - from_date).days + 1
+    
     avg_hours_per_day = total_hours / period_days if period_days > 0 else 0
     
     return round(min(avg_hours_per_day, 24.0), 2)
@@ -159,10 +188,23 @@ def calculate_hours_of_supply_network(from_date, to_date):
     
     UPDATED Logic:
     - Numerator: Sum of all hours supplied across all onboarded feeders with data
-    - Denominator: Total ONBOARDED feeders × Days in period
+    - Denominator: Total ONBOARDED feeders × Days in period (using actual elapsed time for current day)
     - This properly accounts for onboarded feeders with no data (they contribute 0)
     """
-    period_days = (to_date - from_date).days + 1
+    # ✅ Calculate actual elapsed time for current periods
+    today = timezone.now().date()
+    now = timezone.now()
+    
+    if to_date == today:
+        # For current day, calculate fractional days based on current hour
+        full_days = (to_date - from_date).days
+        current_hour = now.hour
+        fractional_day = current_hour / 24.0
+        period_days = full_days + fractional_day
+    else:
+        # For past periods, use full days
+        period_days = (to_date - from_date).days + 1
+    
     total_feeders = Feeder.objects.filter(is_onboarded=True).count()
     
     if total_feeders == 0:
@@ -203,9 +245,22 @@ def calculate_average_load_network(from_date, to_date):
     Calculate average load per feeder per hour across ONBOARDED feeders only.
     
     Formula: Total Load / (Total ONBOARDED Feeders × Total Hours in Period)
+    Uses actual elapsed hours for current periods.
     """
-    period_days = (to_date - from_date).days + 1
-    period_hours = period_days * 24
+    # ✅ Calculate actual elapsed time for current periods
+    today = timezone.now().date()
+    now = timezone.now()
+    
+    if to_date == today:
+        # For current day, calculate actual elapsed hours
+        full_days = (to_date - from_date).days
+        current_hour = now.hour
+        period_hours = (full_days * 24) + current_hour
+    else:
+        # For past periods, use full hours
+        period_days = (to_date - from_date).days + 1
+        period_hours = period_days * 24
+    
     total_feeders = Feeder.objects.filter(is_onboarded=True).count()
     
     if total_feeders == 0:
@@ -230,9 +285,21 @@ def calculate_average_load_feeder(feeder_id, from_date, to_date):
     Calculate average load for a single feeder.
     
     Formula: Total Load / Total Hours in Period
+    Uses actual elapsed hours for current periods.
     """
-    period_days = (to_date - from_date).days + 1
-    period_hours = period_days * 24
+    # ✅ Calculate actual elapsed time for current periods
+    today = timezone.now().date()
+    now = timezone.now()
+    
+    if to_date == today:
+        # For current day, calculate actual elapsed hours
+        full_days = (to_date - from_date).days
+        current_hour = now.hour
+        period_hours = (full_days * 24) + current_hour
+    else:
+        # For past periods, use full hours
+        period_days = (to_date - from_date).days + 1
+        period_hours = period_days * 24
     
     result = HourlyLoad.objects.filter(
         feeder_id=feeder_id,
@@ -240,7 +307,7 @@ def calculate_average_load_feeder(feeder_id, from_date, to_date):
     ).aggregate(total_load=Sum('load_mw'))
     
     total_load = float(result['total_load'] or 0)
-    avg_load = total_load / period_hours
+    avg_load = total_load / period_hours if period_hours > 0 else 0
     
     return round(avg_load, 2)
 
@@ -253,6 +320,7 @@ def calculate_interruption_duration_feeder(feeder_id, from_date, to_date, exclud
     - Includes ALL interruptions active during the period (not just those that started in the period)
     - Calculates only the hours that fall within the filtered period boundaries
     - Caps total interruption hours at (24 × period_days) to handle overlapping interruptions
+    - Uses actual elapsed time for current periods
     
     Args:
         feeder_id: ID of the feeder
@@ -263,7 +331,24 @@ def calculate_interruption_duration_feeder(feeder_id, from_date, to_date, exclud
     Returns:
         Average hours of interruption per day for this feeder
     """
-    period_days = (to_date - from_date).days + 1
+    # ✅ FIXED: Check for future dates
+    now = timezone.now()
+    today = now.date()
+    
+    if from_date > today:
+        return 0.0
+    
+    # ✅ Calculate actual elapsed time for current periods
+    if to_date == today:
+        # For current day, calculate fractional days based on current hour
+        full_days = (to_date - from_date).days
+        current_hour = now.hour
+        fractional_day = current_hour / 24.0
+        period_days = full_days + fractional_day
+    else:
+        # For past periods, use full days
+        period_days = (to_date - from_date).days + 1
+    
     max_possible_hours = 24.0 * period_days
     
     start_of_period = timezone.make_aware(
@@ -333,6 +418,13 @@ def calculate_interruption_duration_network(from_date, to_date, exclude_types=No
     NOTE: For feeders with multiple overlapping interruptions, we cap each feeder's
     daily interruption at 24 hours to avoid double-counting.
     """
+    # ✅ FIXED: Check for future dates
+    now = timezone.now()
+    today = now.date()
+    
+    if from_date > today:
+        return 0.0
+    
     period_days = (to_date - from_date).days + 1
     total_feeders = Feeder.objects.filter(is_onboarded=True).count()
     
