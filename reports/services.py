@@ -355,16 +355,41 @@ class ReportDataService:
         hours_of_supply = self._calculate_hours_of_supply()
         
         # Load metrics
+        today = timezone.now().date()
+        now = timezone.now()
+
+        if self.to_date == today:
+            # For current day, calculate actual elapsed hours
+            full_days = (self.to_date - self.from_date).days
+            current_hour = now.hour
+            current_minute = now.minute
+    
+            # Include minutes for precision
+            hours_elapsed = current_hour + (current_minute / 60.0)
+            period_hours = (full_days * 24) + hours_elapsed
+    
+            # Ensure minimum period to avoid division by zero
+            if period_hours == 0:
+                period_hours = 1  # 1 hour minimum
+        else:
+            # For past periods, use full hours
+            period_days_calc = (self.to_date - self.from_date).days + 1
+            period_hours = period_days_calc * 24
+
+        # Sum total load across all feeders
         load_data = HourlyLoad.objects.filter(
             feeder_id__in=self.feeder_ids,
             date__range=(self.from_date, self.to_date)
         ).aggregate(
-            avg_load=Avg('load_mw'),
+            total_load=Sum('load_mw'),
             max_load=Max('load_mw')
         )
-        
-        avg_load = float(load_data['avg_load'] or 0)
+
+        total_load = float(load_data['total_load'] or 0)
         peak_load = float(load_data['max_load'] or 0)
+
+        # Average = Total Load / (Total Feeders × Total Hours)
+        avg_load = total_load / (total_feeders * period_hours) if (total_feeders * period_hours) > 0 else 0
         
         # ✅ FIXED: Use hybrid energy calculation
         total_energy = self._calculate_energy_delivered_hybrid()
