@@ -113,8 +113,19 @@ def calculate_band_hours_of_supply_sql(feeder_ids, from_date, to_date):
         # For current day, calculate fractional days based on current hour
         full_days = (to_date - from_date).days
         current_hour = now.hour
-        fractional_day = current_hour / 24.0
+        current_minute = now.minute
+        
+        # ✅ CRITICAL: Use minutes for more precision and avoid zero at midnight
+        # Calculate fractional day including minutes (e.g., 14:30 = 14.5 hours = 0.604 days)
+        hours_elapsed = current_hour + (current_minute / 60.0)
+        fractional_day = hours_elapsed / 24.0
+        
         period_days = full_days + fractional_day
+        
+        # ✅ CRITICAL: Ensure minimum period to avoid division by zero
+        # If querying today at midnight (00:00), use at least 1 hour
+        if period_days == 0:
+            period_days = 1 / 24.0  # 1 hour minimum
     else:
         # For past periods, use full days
         period_days = (to_date - from_date).days + 1
@@ -138,7 +149,7 @@ def calculate_band_hours_of_supply_sql(feeder_ids, from_date, to_date):
         total_hours = result[0] if result and result[0] else 0
     
     # Average = Total hours / (Total onboarded feeders × Days)
-    avg_hours_per_day = total_hours / (total_feeders * period_days)
+    avg_hours_per_day = total_hours / (total_feeders * period_days) if period_days > 0 else 0
     
     return round(min(float(avg_hours_per_day), 24.0), 2)
 
@@ -175,8 +186,19 @@ def calculate_band_interruption_metrics_sql(feeder_ids, from_date, to_date, excl
         # For current day, calculate fractional days based on current hour
         full_days = (to_date - from_date).days
         current_hour = now.hour
-        fractional_day = current_hour / 24.0
+        current_minute = now.minute
+        
+        # ✅ CRITICAL: Use minutes for more precision and avoid zero at midnight
+        # Calculate fractional day including minutes (e.g., 14:30 = 14.5 hours = 0.604 days)
+        hours_elapsed = current_hour + (current_minute / 60.0)
+        fractional_day = hours_elapsed / 24.0
+        
         period_days = full_days + fractional_day
+        
+        # ✅ CRITICAL: Ensure minimum period to avoid division by zero
+        # If querying today at midnight (00:00), use at least 1 hour
+        if period_days == 0:
+            period_days = 1 / 24.0  # 1 hour minimum
     else:
         # For past periods, use full days
         period_days = (to_date - from_date).days + 1
@@ -259,7 +281,7 @@ def calculate_band_interruption_metrics_sql(feeder_ids, from_date, to_date, excl
         total_interruptions = result[0] if result and result[0] else 0
     
     # Average = Total hours / (Total onboarded feeders × Days)
-    avg_hours_per_day = total_hours / (total_feeders * period_days)
+    avg_hours_per_day = total_hours / (total_feeders * period_days) if period_days > 0 else 0
     
     # Ensure non-negative and cap at 24
     avg_hours_per_day = max(0, min(avg_hours_per_day, 24.0))
