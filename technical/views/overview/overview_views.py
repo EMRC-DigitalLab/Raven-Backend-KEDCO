@@ -360,18 +360,29 @@ def calculate_average_load_network(from_date, to_date):
     """
     Calculate average load per feeder per hour across ONBOARDED feeders only.
     
+    For single-day queries: Uses actual elapsed hours
+    For multi-day queries: Uses total hours in period
+    
     Formula: Total Load / (Total ONBOARDED Feeders × Total Hours in Period)
     Uses actual elapsed hours for current periods.
     """
-    # ✅ Calculate actual elapsed time for current periods
     today = timezone.now().date()
     now = timezone.now()
     
+    # Calculate period hours
     if to_date == today:
         # For current day, calculate actual elapsed hours
         full_days = (to_date - from_date).days
         current_hour = now.hour
-        period_hours = (full_days * 24) + current_hour
+        current_minute = now.minute
+        
+        # Include minutes for precision
+        hours_elapsed = current_hour + (current_minute / 60.0)
+        period_hours = (full_days * 24) + hours_elapsed
+        
+        # ✅ CRITICAL: Ensure minimum period to avoid division by zero
+        if period_hours == 0:
+            period_hours = 1  # 1 hour minimum
     else:
         # For past periods, use full hours
         period_days = (to_date - from_date).days + 1
@@ -391,7 +402,7 @@ def calculate_average_load_network(from_date, to_date):
     total_load = float(result['total_load'] or 0)
     
     # Average = Total Load / (Total Onboarded Feeders × Total Hours)
-    avg_load = total_load / (total_feeders * period_hours)
+    avg_load = total_load / (total_feeders * period_hours) if (total_feeders * period_hours) > 0 else 0
     
     return round(avg_load, 2)
 
@@ -403,7 +414,6 @@ def calculate_average_load_feeder(feeder_id, from_date, to_date):
     Formula: Total Load / Total Hours in Period
     Uses actual elapsed hours for current periods.
     """
-    # ✅ Calculate actual elapsed time for current periods
     today = timezone.now().date()
     now = timezone.now()
     
@@ -411,7 +421,15 @@ def calculate_average_load_feeder(feeder_id, from_date, to_date):
         # For current day, calculate actual elapsed hours
         full_days = (to_date - from_date).days
         current_hour = now.hour
-        period_hours = (full_days * 24) + current_hour
+        current_minute = now.minute
+        
+        # Include minutes for precision
+        hours_elapsed = current_hour + (current_minute / 60.0)
+        period_hours = (full_days * 24) + hours_elapsed
+        
+        # ✅ CRITICAL: Ensure minimum period to avoid division by zero
+        if period_hours == 0:
+            period_hours = 1  # 1 hour minimum
     else:
         # For past periods, use full hours
         period_days = (to_date - from_date).days + 1
