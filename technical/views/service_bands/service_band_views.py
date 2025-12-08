@@ -98,37 +98,13 @@ def calculate_band_hours_of_supply_sql(feeder_ids, from_date, to_date):
     
     UPDATED Logic:
     - Only considers ONBOARDED feeders (feeder_ids already filtered)
-    - Uses actual elapsed time for current periods
+    - For single-day queries (especially today): Returns total hours supplied (not daily average)
+    - For multi-day queries: Returns average hours per day
     - Numerator: Sum of all hours supplied across all ONBOARDED feeders
-    - Denominator: Total ONBOARDED feeders × Days in period (fractional for current periods)
+    - Denominator: Total ONBOARDED feeders × Days in period
     """
     if not feeder_ids:
         return 0.0
-    
-    # ✅ Calculate actual elapsed time for current periods
-    today = timezone.now().date()
-    now = timezone.now()
-    
-    if to_date == today:
-        # For current day, calculate fractional days based on current hour
-        full_days = (to_date - from_date).days
-        current_hour = now.hour
-        current_minute = now.minute
-        
-        # ✅ CRITICAL: Use minutes for more precision and avoid zero at midnight
-        # Calculate fractional day including minutes (e.g., 14:30 = 14.5 hours = 0.604 days)
-        hours_elapsed = current_hour + (current_minute / 60.0)
-        fractional_day = hours_elapsed / 24.0
-        
-        period_days = full_days + fractional_day
-        
-        # ✅ CRITICAL: Ensure minimum period to avoid division by zero
-        # If querying today at midnight (00:00), use at least 1 hour
-        if period_days == 0:
-            period_days = 1 / 24.0  # 1 hour minimum
-    else:
-        # For past periods, use full days
-        period_days = (to_date - from_date).days + 1
     
     total_feeders = len(feeder_ids)
     
@@ -148,10 +124,17 @@ def calculate_band_hours_of_supply_sql(feeder_ids, from_date, to_date):
         result = cursor.fetchone()
         total_hours = result[0] if result and result[0] else 0
     
-    # Average = Total hours / (Total onboarded feeders × Days)
-    avg_hours_per_day = total_hours / (total_feeders * period_days) if period_days > 0 else 0
+    # ✅ CRITICAL: For single-day queries, return total hours per feeder (not daily average)
+    # For multi-day queries, return daily average
+    if from_date == to_date:
+        # Single day: Return average hours supplied per feeder
+        avg_hours = total_hours / total_feeders if total_feeders > 0 else 0
+    else:
+        # Multi-day: Return average hours per day per feeder
+        period_days = (to_date - from_date).days + 1
+        avg_hours = total_hours / (total_feeders * period_days) if (total_feeders * period_days) > 0 else 0
     
-    return round(min(float(avg_hours_per_day), 24.0), 2)
+    return round(min(float(avg_hours), 24.0), 2)
 
 
 def calculate_band_interruption_metrics_sql(feeder_ids, from_date, to_date, exclude_types=None):
@@ -160,13 +143,12 @@ def calculate_band_interruption_metrics_sql(feeder_ids, from_date, to_date, excl
     
     UPDATED Logic:
     - Only considers ONBOARDED feeders (feeder_ids already filtered)
-    - Uses actual elapsed time for current periods
+    - For single-day queries (especially today): Returns total hours (not daily average)
+    - For multi-day queries: Returns average hours per day
     - Includes ALL interruptions active during the period
     - Calculates only hours within the filtered period boundaries
     - Uses timezone-aware datetime ranges for consistency
-    - Caps per-feeder totals at (24 × days) to handle overlapping interruptions
-    - Numerator: Sum of capped per-feeder hours
-    - Denominator: Total ONBOARDED feeders × Days in period (fractional for current periods)
+    - Caps per-feeder totals at 24 hours for single day, (24 × days) for multi-day
     
     Returns:
         tuple: (avg_duration_per_day, total_interruption_count)
@@ -181,30 +163,18 @@ def calculate_band_interruption_metrics_sql(feeder_ids, from_date, to_date, excl
     if from_date > today:
         return 0.0, 0
     
-    # ✅ Calculate actual elapsed time for current periods
-    if to_date == today:
-        # For current day, calculate fractional days based on current hour
-        full_days = (to_date - from_date).days
-        current_hour = now.hour
-        current_minute = now.minute
-        
-        # ✅ CRITICAL: Use minutes for more precision and avoid zero at midnight
-        # Calculate fractional day including minutes (e.g., 14:30 = 14.5 hours = 0.604 days)
-        hours_elapsed = current_hour + (current_minute / 60.0)
-        fractional_day = hours_elapsed / 24.0
-        
-        period_days = full_days + fractional_day
-        
-        # ✅ CRITICAL: Ensure minimum period to avoid division by zero
-        # If querying today at midnight (00:00), use at least 1 hour
-        if period_days == 0:
-            period_days = 1 / 24.0  # 1 hour minimum
-    else:
-        # For past periods, use full days
-        period_days = (to_date - from_date).days + 1
+    # Determine if single-day or multi-day query
+    is_single_day = (from_date == to_date)
     
-    total_feeders = len(feeder_ids)
-    max_hours = period_days * 24.0
+    if is_single_day:
+        # Single day: cap per feeder at 24 hours
+        total_feeders = len(feeder_ids)
+        max_hours = 24.0
+    else:
+        # Multi-day: cap per feeder at (24 × days)
+        period_days = (to_date - from_date).days + 1
+        total_feeders = len(feeder_ids)
+        max_hours = period_days * 24.0
     
     # ✅ Create timezone-aware datetime boundaries
     start_of_period = timezone.make_aware(
@@ -280,13 +250,19 @@ def calculate_band_interruption_metrics_sql(feeder_ids, from_date, to_date, excl
         result = cursor.fetchone()
         total_interruptions = result[0] if result and result[0] else 0
     
-    # Average = Total hours / (Total onboarded feeders × Days)
-    avg_hours_per_day = total_hours / (total_feeders * period_days) if period_days > 0 else 0
+    # ✅ CRITICAL: For single-day queries, return average hours per feeder (not daily average)
+    # For multi-day queries, return average hours per day per feeder
+    if is_single_day:
+        # Single day: Average hours per feeder
+        avg_hours = total_hours / total_feeders if total_feeders > 0 else 0
+    else:
+        # Multi-day: Average hours per day per feeder
+        avg_hours = total_hours / (total_feeders * period_days) if (total_feeders * period_days) > 0 else 0
     
     # Ensure non-negative and cap at 24
-    avg_hours_per_day = max(0, min(avg_hours_per_day, 24.0))
+    avg_hours = max(0, min(avg_hours, 24.0))
     
-    return round(avg_hours_per_day, 2), int(total_interruptions)
+    return round(avg_hours, 2), int(total_interruptions)
 
 
 def calculate_band_peak_load_sql(feeder_ids, from_date, to_date):
