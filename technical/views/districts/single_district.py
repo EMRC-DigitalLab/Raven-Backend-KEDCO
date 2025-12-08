@@ -167,30 +167,18 @@ def calculate_district_hours_of_supply_sql(district_id, from_date, to_date):
     """
     Calculate average hours of supply per day for a district.
     
+    For single-day queries (especially today): Returns total hours per feeder (not daily average)
+    For multi-day queries: Returns average hours per day per feeder
+    
     UPDATED Logic:
     - Only considers ONBOARDED feeders
-    - Uses actual elapsed time for current periods
     - Numerator: Sum of all hours supplied across all ONBOARDED feeders with data in the district
-    - Denominator: Total ONBOARDED feeders in district × Days in period (fractional for current periods)
+    - Denominator: Total ONBOARDED feeders in district × Days (or just feeders for single day)
     - This properly accounts for onboarded feeders with no data (they contribute 0)
     
     Returns:
         float: Average hours per day (capped at 24.0)
     """
-    # ✅ Calculate actual elapsed time for current periods
-    today = timezone.now().date()
-    now = timezone.now()
-    
-    if to_date == today:
-        # For current day, calculate fractional days based on current hour
-        full_days = (to_date - from_date).days
-        current_hour = now.hour
-        fractional_day = current_hour / 24.0
-        period_days = full_days + fractional_day
-    else:
-        # For past periods, use full days
-        period_days = (to_date - from_date).days + 1
-    
     feeder_count_query = """
         SELECT COUNT(DISTINCT f.id)
         FROM common_feeder f
@@ -221,25 +209,34 @@ def calculate_district_hours_of_supply_sql(district_id, from_date, to_date):
         result = cursor.fetchone()
         total_hours = result[0] if result and result[0] else 0
     
-    # Average = Total hours / (Total onboarded feeders × Days)
-    avg_hours_per_day = total_hours / (total_feeders * period_days)
+    # ✅ CRITICAL: For single-day queries, return average hours per feeder (not daily average)
+    # For multi-day queries, return average hours per day per feeder
+    if from_date == to_date:
+        # Single day: Average hours per feeder
+        avg_hours = total_hours / total_feeders if total_feeders > 0 else 0
+    else:
+        # Multi-day: Average hours per day per feeder
+        period_days = (to_date - from_date).days + 1
+        avg_hours = total_hours / (total_feeders * period_days) if (total_feeders * period_days) > 0 else 0
     
     # Cap at 24 hours maximum
-    return round(min(avg_hours_per_day, 24.0), 2)
+    return round(min(avg_hours, 24.0), 2)
 
 
 def calculate_district_interruption_metrics_sql(district_id, from_date, to_date, exclude_types=None):
     """
     Calculate average interruption duration per day for a district.
     
+    For single-day queries (especially today): Returns total hours per feeder (not daily average)
+    For multi-day queries: Returns average hours per day per feeder
+    
     UPDATED Logic:
     - Only considers ONBOARDED feeders
-    - Uses actual elapsed time for current periods
     - Includes ALL interruptions active during the period (not just those that started in the period)
     - Calculates only the hours that fall within the filtered period boundaries
     - Uses timezone-aware datetime ranges for consistency
     - Numerator: Sum of all interruption hours across all ONBOARDED feeders with interruptions
-    - Denominator: Total ONBOARDED feeders in district × Days in period (fractional for current periods)
+    - Denominator: Total ONBOARDED feeders in district × Days (or just feeders for single day)
     - This properly accounts for onboarded feeders with no interruptions (they contribute 0)
     
     Args:
@@ -260,16 +257,14 @@ def calculate_district_interruption_metrics_sql(district_id, from_date, to_date,
     if from_date > today:
         return 0.0, 0
     
-    # ✅ Calculate actual elapsed time for current periods
-    if to_date == today:
-        # For current day, calculate fractional days based on current hour
-        full_days = (to_date - from_date).days
-        current_hour = now.hour
-        fractional_day = current_hour / 24.0
-        period_days = full_days + fractional_day
+    # Determine if single-day or multi-day query
+    is_single_day = (from_date == to_date)
+    
+    if is_single_day:
+        max_hours_per_feeder = 24.0
     else:
-        # For past periods, use full days
         period_days = (to_date - from_date).days + 1
+        max_hours_per_feeder = 24.0 * period_days
     
     # ✅ Create timezone-aware datetime boundaries
     start_of_period = timezone.make_aware(
@@ -288,8 +283,7 @@ def calculate_district_interruption_metrics_sql(district_id, from_date, to_date,
     
     exclusion_clause = ""
     # Parameters for duration calculation (includes all active interruptions)
-    max_hours = period_days * 24.0
-    duration_params = [end_of_period, end_of_period, start_of_period, max_hours, district_id, start_of_period, end_of_period, start_of_period, start_of_period]
+    duration_params = [end_of_period, end_of_period, start_of_period, max_hours_per_feeder, district_id, start_of_period, end_of_period, start_of_period, start_of_period]
     
     # Parameters for count calculation (only interruptions that occurred in period)
     count_params = [district_id, start_of_period, end_of_period]
@@ -300,7 +294,7 @@ def calculate_district_interruption_metrics_sql(district_id, from_date, to_date,
         duration_params.extend(exclude_types)
         count_params.extend(exclude_types)
     
-    # Calculate per-feeder totals first, then cap each at (24 * period_days)
+    # Calculate per-feeder totals first, then cap each at max_hours_per_feeder
     # Only considers ONBOARDED feeders
     # ✅ Uses timezone-aware datetime ranges
     interruption_duration_query = f"""
@@ -364,13 +358,19 @@ def calculate_district_interruption_metrics_sql(district_id, from_date, to_date,
         result = cursor.fetchone()
         total_interruptions = result[0] if result and result[0] else 0
     
-    # Average = Total hours / (Total onboarded feeders × Days)
-    avg_hours_per_day = total_hours / (total_feeders * period_days)
+    # ✅ CRITICAL: For single-day queries, return average hours per feeder (not daily average)
+    # For multi-day queries, return average hours per day per feeder
+    if is_single_day:
+        # Single day: Average hours per feeder
+        avg_hours = total_hours / total_feeders if total_feeders > 0 else 0
+    else:
+        # Multi-day: Average hours per day per feeder
+        avg_hours = total_hours / (total_feeders * period_days) if (total_feeders * period_days) > 0 else 0
     
     # Ensure non-negative and cap at 24
-    avg_hours_per_day = max(0, min(avg_hours_per_day, 24.0))
+    avg_hours = max(0, min(avg_hours, 24.0))
     
-    return round(avg_hours_per_day, 2), int(total_interruptions)
+    return round(avg_hours, 2), int(total_interruptions)
 
 
 def calculate_district_avg_interruption_duration_sql(district_id, from_date, to_date):
