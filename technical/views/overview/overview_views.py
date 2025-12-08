@@ -272,10 +272,8 @@ def calculate_hours_of_supply_feeder(feeder_id, from_date, to_date):
     """
     Calculate average hours of supply per day for a single feeder.
     
-    Logic:
-    - Sum all distinct hours where load > 0 across all days
-    - Divide by number of days in period (using actual elapsed time for current day)
-    - This gives average hours per day for THIS feeder
+    For single-day queries (especially today): Returns total hours supplied (not daily average)
+    For multi-day queries: Returns average hours per day
     """
     query = """
         SELECT 
@@ -291,48 +289,31 @@ def calculate_hours_of_supply_feeder(feeder_id, from_date, to_date):
         result = cursor.fetchone()
         total_hours = result[0] if result and result[0] else 0
     
-    # ✅ Calculate actual elapsed time for current periods
-    today = timezone.now().date()
-    now = timezone.now()
-    
-    if to_date == today:
-        # For current day, calculate fractional days based on current hour
-        full_days = (to_date - from_date).days
-        current_hour = now.hour
-        fractional_day = current_hour / 24.0
-        period_days = full_days + fractional_day
+    # ✅ CRITICAL: For single-day queries, return total hours (not daily average)
+    # For multi-day queries, return daily average
+    if from_date == to_date:
+        # Single day: Return total hours supplied
+        avg_hours = float(total_hours)
     else:
-        # For past periods, use full days
+        # Multi-day: Return average hours per day
         period_days = (to_date - from_date).days + 1
+        avg_hours = total_hours / period_days if period_days > 0 else 0
     
-    avg_hours_per_day = total_hours / period_days if period_days > 0 else 0
-    
-    return round(min(avg_hours_per_day, 24.0), 2)
+    return round(min(avg_hours, 24.0), 2)
 
 
 def calculate_hours_of_supply_network(from_date, to_date):
     """
     Calculate average hours of supply per day across ALL ONBOARDED feeders.
     
+    For single-day queries (especially today): Returns total hours per feeder (not daily average)
+    For multi-day queries: Returns average hours per day per feeder
+    
     UPDATED Logic:
     - Numerator: Sum of all hours supplied across all onboarded feeders with data
-    - Denominator: Total ONBOARDED feeders × Days in period (using actual elapsed time for current day)
+    - Denominator: Total ONBOARDED feeders × Days (or just feeders for single day)
     - This properly accounts for onboarded feeders with no data (they contribute 0)
     """
-    # ✅ Calculate actual elapsed time for current periods
-    today = timezone.now().date()
-    now = timezone.now()
-    
-    if to_date == today:
-        # For current day, calculate fractional days based on current hour
-        full_days = (to_date - from_date).days
-        current_hour = now.hour
-        fractional_day = current_hour / 24.0
-        period_days = full_days + fractional_day
-    else:
-        # For past periods, use full days
-        period_days = (to_date - from_date).days + 1
-    
     total_feeders = Feeder.objects.filter(is_onboarded=True).count()
     
     if total_feeders == 0:
@@ -362,10 +343,17 @@ def calculate_hours_of_supply_network(from_date, to_date):
         result = cursor.fetchone()
         total_hours_all_feeders = result[0] if result and result[0] else 0
     
-    # Average = Total hours / (Total onboarded feeders × Days)
-    avg_hours_per_day = total_hours_all_feeders / (total_feeders * period_days)
+    # ✅ CRITICAL: For single-day queries, return average hours per feeder (not daily average)
+    # For multi-day queries, return average hours per day per feeder
+    if from_date == to_date:
+        # Single day: Average hours per feeder
+        avg_hours = total_hours_all_feeders / total_feeders if total_feeders > 0 else 0
+    else:
+        # Multi-day: Average hours per day per feeder
+        period_days = (to_date - from_date).days + 1
+        avg_hours = total_hours_all_feeders / (total_feeders * period_days) if (total_feeders * period_days) > 0 else 0
     
-    return round(min(avg_hours_per_day, 24.0), 2)
+    return round(min(avg_hours, 24.0), 2)
 
 
 def calculate_average_load_network(from_date, to_date):
@@ -444,11 +432,13 @@ def calculate_interruption_duration_feeder(feeder_id, from_date, to_date, exclud
     """
     Calculate average interruption duration per day for a single feeder.
     
+    For single-day queries (especially today): Returns total hours (not daily average)
+    For multi-day queries: Returns average hours per day
+    
     CORRECTED Logic:
     - Includes ALL interruptions active during the period (not just those that started in the period)
     - Calculates only the hours that fall within the filtered period boundaries
-    - Caps total interruption hours at (24 × period_days) to handle overlapping interruptions
-    - Uses actual elapsed time for current periods
+    - Caps total interruption hours at 24 for single day, (24 × period_days) for multi-day
     
     Args:
         feeder_id: ID of the feeder
@@ -466,18 +456,14 @@ def calculate_interruption_duration_feeder(feeder_id, from_date, to_date, exclud
     if from_date > today:
         return 0.0
     
-    # ✅ Calculate actual elapsed time for current periods
-    if to_date == today:
-        # For current day, calculate fractional days based on current hour
-        full_days = (to_date - from_date).days
-        current_hour = now.hour
-        fractional_day = current_hour / 24.0
-        period_days = full_days + fractional_day
-    else:
-        # For past periods, use full days
-        period_days = (to_date - from_date).days + 1
+    # Determine if single-day or multi-day query
+    is_single_day = (from_date == to_date)
     
-    max_possible_hours = 24.0 * period_days
+    if is_single_day:
+        max_possible_hours = 24.0
+    else:
+        period_days = (to_date - from_date).days + 1
+        max_possible_hours = 24.0 * period_days
     
     start_of_period = timezone.make_aware(
         datetime.combine(from_date, datetime.min.time())
@@ -488,7 +474,7 @@ def calculate_interruption_duration_feeder(feeder_id, from_date, to_date, exclud
     
     # Build exclusion clause
     exclusion_clause = ""
-    params = [end_of_period, end_of_period, start_of_period, feeder_id, from_date, end_of_period, start_of_period, start_of_period]
+    params = [end_of_period, end_of_period, start_of_period, feeder_id, start_of_period, end_of_period, start_of_period, start_of_period]
     
     if exclude_types:
         placeholders = ','.join(['%s'] * len(exclude_types))
@@ -496,6 +482,7 @@ def calculate_interruption_duration_feeder(feeder_id, from_date, to_date, exclud
         params.extend(exclude_types)
     
     # CORRECTED: Sum all interruption hours but cap at max possible
+    # ✅ Uses timezone-aware datetime ranges
     query = f"""
         SELECT 
             COALESCE(SUM(
@@ -509,7 +496,7 @@ def calculate_interruption_duration_feeder(feeder_id, from_date, to_date, exclud
         FROM technical_feederinterruption
         WHERE feeder_id = %s
             AND (
-                DATE(occurred_at) BETWEEN %s AND DATE(%s)
+                occurred_at >= %s AND occurred_at <= %s
                 OR (occurred_at < %s AND (restored_at IS NULL OR restored_at >= %s))
             )
             {exclusion_clause}
@@ -523,24 +510,33 @@ def calculate_interruption_duration_feeder(feeder_id, from_date, to_date, exclud
     # Cap total hours at maximum possible (handles overlapping interruptions)
     total_hours = min(total_hours, max_possible_hours)
     
-    # Calculate average per day
-    avg_hours_per_day = total_hours / period_days if period_days > 0 else 0
+    # ✅ CRITICAL: For single-day queries, return total hours (not daily average)
+    # For multi-day queries, return daily average
+    if is_single_day:
+        # Single day: Return total hours
+        avg_hours = total_hours
+    else:
+        # Multi-day: Return average hours per day
+        avg_hours = total_hours / period_days if period_days > 0 else 0
     
     # Ensure non-negative and cap at 24
-    avg_hours_per_day = max(0, min(avg_hours_per_day, 24.0))
+    avg_hours = max(0, min(avg_hours, 24.0))
     
-    return round(avg_hours_per_day, 2)
+    return round(avg_hours, 2)
 
 
 def calculate_interruption_duration_network(from_date, to_date, exclude_types=None):
     """
     Calculate average interruption duration per day across ALL ONBOARDED feeders.
     
+    For single-day queries (especially today): Returns total hours per feeder (not daily average)
+    For multi-day queries: Returns average hours per day per feeder
+    
     UPDATED Logic:
     - Includes ALL interruptions active during the period (not just those that started in the period)
     - Calculates only the hours that fall within the filtered period boundaries
     - Numerator: Sum of all interruption hours across all ONBOARDED feeders with interruptions
-    - Denominator: Total ONBOARDED feeders × Days in period (using actual elapsed time for current day)
+    - Denominator: Total ONBOARDED feeders × Days (or just feeders for single day)
     - This properly accounts for onboarded feeders with no interruptions (they contribute 0)
     
     NOTE: For feeders with multiple overlapping interruptions, we cap each feeder's
@@ -553,16 +549,14 @@ def calculate_interruption_duration_network(from_date, to_date, exclude_types=No
     if from_date > today:
         return 0.0
     
-    # ✅ Calculate actual elapsed time for current periods
-    if to_date == today:
-        # For current day, calculate fractional days based on current hour
-        full_days = (to_date - from_date).days
-        current_hour = now.hour
-        fractional_day = current_hour / 24.0
-        period_days = full_days + fractional_day
+    # Determine if single-day or multi-day query
+    is_single_day = (from_date == to_date)
+    
+    if is_single_day:
+        max_hours_per_feeder = 24.0
     else:
-        # For past periods, use full days
         period_days = (to_date - from_date).days + 1
+        max_hours_per_feeder = 24.0 * period_days
     
     total_feeders = Feeder.objects.filter(is_onboarded=True).count()
     
@@ -588,7 +582,8 @@ def calculate_interruption_duration_network(from_date, to_date, exclude_types=No
     
     # Build exclusion clause
     exclusion_clause = ""
-    base_params = [end_of_period, end_of_period, start_of_period, from_date, end_of_period, start_of_period, start_of_period]
+    # ✅ Uses timezone-aware datetime ranges
+    base_params = [end_of_period, end_of_period, start_of_period, start_of_period, end_of_period, start_of_period, start_of_period]
     base_params.extend(onboarded_feeder_ids)
     
     if exclude_types:
@@ -596,8 +591,9 @@ def calculate_interruption_duration_network(from_date, to_date, exclude_types=No
         exclusion_clause = f"AND interruption_type NOT IN ({placeholders})"
         base_params.extend(exclude_types)
     
-    # CORRECTED: Calculate per-feeder totals first, then cap each at (24 * period_days)
+    # CORRECTED: Calculate per-feeder totals first, then cap each at max_hours_per_feeder
     # This prevents multiple overlapping interruptions from inflating the average
+    # ✅ Uses timezone-aware datetime ranges
     query = f"""
         SELECT 
             COALESCE(SUM(capped_hours), 0) as total_hours
@@ -613,11 +609,11 @@ def calculate_interruption_duration_network(from_date, to_date, exclude_types=No
                             0
                         )
                     ),
-                    {24.0 * period_days}
+                    {max_hours_per_feeder}
                 ) as capped_hours
             FROM technical_feederinterruption
             WHERE (
-                DATE(occurred_at) BETWEEN %s AND DATE(%s)
+                occurred_at >= %s AND occurred_at <= %s
                 OR (occurred_at < %s AND (restored_at IS NULL OR restored_at >= %s))
             )
             {feeder_filter}
@@ -631,10 +627,19 @@ def calculate_interruption_duration_network(from_date, to_date, exclude_types=No
         result = cursor.fetchone()
         total_hours_all_feeders = float(result[0]) if result and result[0] else 0
     
-    # Average = Total hours / (Total onboarded feeders × Days)
-    avg_hours_per_day = total_hours_all_feeders / (total_feeders * period_days)
+    # ✅ CRITICAL: For single-day queries, return average hours per feeder (not daily average)
+    # For multi-day queries, return average hours per day per feeder
+    if is_single_day:
+        # Single day: Average hours per feeder
+        avg_hours = total_hours_all_feeders / total_feeders if total_feeders > 0 else 0
+    else:
+        # Multi-day: Average hours per day per feeder
+        avg_hours = total_hours_all_feeders / (total_feeders * period_days) if (total_feeders * period_days) > 0 else 0
     
     # Ensure non-negative and cap at 24
+    avg_hours = max(0, min(avg_hours, 24.0))
+    
+    return round(avg_hours, 2)
     avg_hours_per_day = max(0, min(avg_hours_per_day, 24.0))
     
     return round(avg_hours_per_day, 2)
