@@ -164,6 +164,7 @@ def calculate_district_hours_of_supply_sql(district_id, from_date, to_date):
     UPDATED Logic:
     - Only considers ONBOARDED feeders
     - Uses actual elapsed time for current periods
+    - For TODAY: Only counts hours up to current hour (not future hours)
     - Numerator: Total hours supplied across all ONBOARDED feeders in district
     - Denominator: Total ONBOARDED feeders in district × Days (fractional for current periods)
     """
@@ -175,8 +176,13 @@ def calculate_district_hours_of_supply_sql(district_id, from_date, to_date):
         # For current day, calculate fractional days based on current hour
         full_days = (to_date - from_date).days
         current_hour = now.hour
-        fractional_day = current_hour / 24.0
+        current_minute = now.minute
+        fractional_day = (current_hour + (current_minute / 60.0)) / 24.0
         period_days = full_days + fractional_day
+        
+        # ✅ CRITICAL: Ensure minimum period to avoid division by zero
+        if period_days == 0:
+            period_days = 1 / 24.0  # At least 1 hour
     else:
         # For past periods, use full days
         period_days = (to_date - from_date).days + 1
@@ -189,17 +195,38 @@ def calculate_district_hours_of_supply_sql(district_id, from_date, to_date):
             AND f.is_onboarded = TRUE
     """
     
-    # Get total hours supplied (ONBOARDED feeders only)
-    hours_query = """
-        SELECT 
-            COUNT(DISTINCT CONCAT(hl.feeder_id, '-', hl.date, '-', hl.hour)) as total_hours
-        FROM technical_hourlyload hl
-        INNER JOIN common_feeder f ON hl.feeder_id = f.id
-        WHERE f.business_district_id = %s
-            AND f.is_onboarded = TRUE
-            AND hl.date BETWEEN %s AND %s
-            AND hl.load_mw > 0
-    """
+    # ✅ CORRECTED: Filter hours based on whether we're querying today
+    if to_date == today:
+        # For today: Only count hours up to current hour
+        current_hour = now.hour
+        hours_query = """
+            SELECT 
+                COUNT(DISTINCT CONCAT(hl.feeder_id, '-', hl.date, '-', hl.hour)) as total_hours
+            FROM technical_hourlyload hl
+            INNER JOIN common_feeder f ON hl.feeder_id = f.id
+            WHERE f.business_district_id = %s
+                AND f.is_onboarded = TRUE
+                AND hl.date BETWEEN %s AND %s
+                AND hl.load_mw > 0
+                AND (
+                    hl.date < %s 
+                    OR (hl.date = %s AND hl.hour <= %s)
+                )
+        """
+        query_params = [district_id, from_date, to_date, to_date, to_date, current_hour]
+    else:
+        # For past periods: Count all hours
+        hours_query = """
+            SELECT 
+                COUNT(DISTINCT CONCAT(hl.feeder_id, '-', hl.date, '-', hl.hour)) as total_hours
+            FROM technical_hourlyload hl
+            INNER JOIN common_feeder f ON hl.feeder_id = f.id
+            WHERE f.business_district_id = %s
+                AND f.is_onboarded = TRUE
+                AND hl.date BETWEEN %s AND %s
+                AND hl.load_mw > 0
+        """
+        query_params = [district_id, from_date, to_date]
     
     with connection.cursor() as cursor:
         cursor.execute(feeder_count_query, [district_id])
@@ -209,7 +236,7 @@ def calculate_district_hours_of_supply_sql(district_id, from_date, to_date):
         if total_feeders == 0:
             return 0.0
         
-        cursor.execute(hours_query, [district_id, from_date, to_date])
+        cursor.execute(hours_query, query_params)
         result = cursor.fetchone()
         total_hours = result[0] if result and result[0] else 0
     
