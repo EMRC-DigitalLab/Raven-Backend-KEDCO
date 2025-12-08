@@ -26,7 +26,6 @@ def _parse_iso_date(date_str):
 def get_date_range_and_mode_from_request(request):
     """Enhanced date range parsing with support for multiple modes"""
     mode = request.GET.get("mode", "monthly")
-    today = datetime.now().date()
     
     if mode in ["daily", "weekly", "custom", "range"]:
         try:
@@ -49,10 +48,6 @@ def get_date_range_and_mode_from_request(request):
             from_date = _parse_iso_date(from_date_str)
             to_date = _parse_iso_date(to_date_str)
             
-            # ✅ Cap end_date at today for current/future periods
-            if to_date >= today:
-                to_date = today
-            
             return from_date, to_date, mode
             
         except (KeyError, ValueError) as e:
@@ -63,11 +58,6 @@ def get_date_range_and_mode_from_request(request):
             year = int(request.GET.get("year", datetime.now().year))
             from_date = datetime(year, 1, 1).date()
             to_date = datetime(year, 12, 31).date()
-            
-            # ✅ Cap end_date at today for current/future years
-            if to_date >= today:
-                to_date = today
-            
             return from_date, to_date, "yearly"
         except (KeyError, ValueError):
             raise ValueError("Invalid or missing year for yearly mode")
@@ -78,11 +68,6 @@ def get_date_range_and_mode_from_request(request):
             month = int(request.GET.get("month", datetime.now().month))
             from_date = datetime(year, month, 1).date()
             to_date = (datetime(year, month, 1) + relativedelta(months=1) - timedelta(days=1)).date()
-            
-            # ✅ Cap end_date at today for current/future months
-            if to_date >= today:
-                to_date = today
-            
             return from_date, to_date, "monthly"
         except (KeyError, ValueError):
             raise ValueError("Invalid or missing year or month for monthly mode")
@@ -91,50 +76,32 @@ def get_date_range_and_mode_from_request(request):
 def calculate_feeder_hours_of_supply_sql(feeder_id, from_date, to_date):
     """
     Calculate average hours of supply per day for a single feeder using raw SQL.
-    
-    UPDATED Logic:
-    - Uses actual elapsed time for current periods
-    - Includes ALL days in the period (days without supply count as 0)
-    - Numerator: Total hours supplied across all days
-    - Denominator: Total days in period (fractional for current periods)
-    
     Returns the average number of hours per day where load was supplied.
     """
     # ✨ CRITICAL: If querying future dates, return 0 (no data available yet)
     today = timezone.now().date()
-    now = timezone.now()
-    
     if from_date > today:
         return 0.0
     
-    # ✅ Calculate actual elapsed time for current periods
-    if to_date == today:
-        # For current day, calculate fractional days based on current hour
-        full_days = (to_date - from_date).days
-        current_hour = now.hour
-        fractional_day = current_hour / 24.0
-        period_days = full_days + fractional_day
-    else:
-        # For past periods, use full days
-        period_days = (to_date - from_date).days + 1
-    
-    # Count total hours with supply
     query = """
         SELECT 
-            COUNT(DISTINCT CONCAT(date, '-', hour)) as total_hours
-        FROM technical_hourlyload
-        WHERE feeder_id = %s
-            AND date BETWEEN %s AND %s
-            AND load_mw > 0
+            AVG(daily_hours) as avg_hours
+        FROM (
+            SELECT 
+                date,
+                COUNT(DISTINCT hour) as daily_hours
+            FROM technical_hourlyload
+            WHERE feeder_id = %s
+                AND date BETWEEN %s AND %s
+                AND load_mw > 0
+            GROUP BY date
+        ) daily_supply
     """
     
     with connection.cursor() as cursor:
         cursor.execute(query, [feeder_id, from_date, to_date])
         result = cursor.fetchone()
-        total_hours = result[0] if result and result[0] else 0
-    
-    # Average = Total hours / Period days (includes days without supply)
-    avg_hours = total_hours / period_days if period_days > 0 else 0
+        avg_hours = result[0] if result and result[0] else 0
     
     return round(min(float(avg_hours), 24.0), 2)
 
@@ -143,11 +110,12 @@ def calculate_feeder_interruption_metrics_sql(feeder_id, from_date, to_date, exc
     """
     Calculate average interruption duration per day for a single feeder using raw SQL.
     
-    UPDATED Logic:
-    - Uses actual elapsed time for current periods
-    - Includes ALL interruptions active during the period (not just those that started in the period)
-    - Calculates only the hours that fall within the filtered period boundaries
-    - Uses timezone-aware datetime ranges for consistency
+    LOGIC:
+    - Includes interruptions that STARTED within the date range
+    - Includes interruptions that started BEFORE but are still ongoing (not resolved)
+    - Includes interruptions that started BEFORE but ended DURING the period
+    - Clips duration to only the hours that fall within the filtered period boundaries
+    - Converts all timestamps to Lagos timezone before date comparison
     - SUMS all interruption durations (overlaps are counted separately)
     
     Returns:
@@ -156,43 +124,39 @@ def calculate_feeder_interruption_metrics_sql(feeder_id, from_date, to_date, exc
             - total_interruption_count: COUNT of interruptions that occurred in period (for FTC)
     """
     # ✨ CRITICAL: If querying future dates, return 0 (no data available yet)
-    now = timezone.now()
-    today = now.date()
-    
+    today = timezone.now().date()
     if from_date > today:
         return 0.0, 0
     
-    # ✅ Calculate actual elapsed time for current periods
-    if to_date == today:
-        # For current day, calculate fractional days based on current hour
-        full_days = (to_date - from_date).days
-        current_hour = now.hour
-        fractional_day = current_hour / 24.0
-        period_days = full_days + fractional_day
-    else:
-        # For past periods, use full days
-        period_days = (to_date - from_date).days + 1
+    period_days = (to_date - from_date).days + 1
     
-    # ✅ Create timezone-aware datetime boundaries
+    # For today's date, use current time; for past dates, use end of day
+    now = timezone.now()
+    
     start_of_period = timezone.make_aware(
         datetime.combine(from_date, datetime.min.time())
     )
-    end_of_period = timezone.make_aware(
-        datetime.combine(to_date, datetime.max.time())
-    )
+    
+    if to_date >= today:
+        # Querying today - use current time as end boundary
+        end_of_period = now
+        print(f"DEBUG: Querying today/future - end_of_period set to NOW: {end_of_period}")
+    else:
+        # Querying past date - use end of day
+        end_of_period = timezone.make_aware(
+            datetime.combine(to_date, datetime.max.time())
+        )
+        print(f"DEBUG: Querying past date - end_of_period set to end of day: {end_of_period}")
     
     print(f"DEBUG FEEDER {feeder_id}: from_date={from_date}, to_date={to_date}, today={today}")
     print(f"DEBUG FEEDER {feeder_id}: start_of_period={start_of_period}, end_of_period={end_of_period}, now={now}")
-    print(f"DEBUG FEEDER {feeder_id}: period_days={period_days}")
     
     # Build exclusion clause
     exclusion_clause = ""
-    # Parameters for duration calculation (includes all active interruptions)
-    # ✅ Uses timezone-aware datetime ranges
-    duration_params = [now, end_of_period, start_of_period, feeder_id, start_of_period, end_of_period, start_of_period, start_of_period]
-    
-    # Parameters for count calculation (only interruptions that occurred in period)
-    count_params = [feeder_id, start_of_period, end_of_period]
+    # Parameters: now (for restored_at fallback), end_of_period (clip end), start_of_period (clip start), 
+    #             feeder_id, from_date, to_date, start_of_period (for ongoing check < start), start_of_period (for ongoing check >= start)
+    duration_params = [now, end_of_period, start_of_period, feeder_id, from_date, to_date, start_of_period, start_of_period]
+    count_params = [feeder_id, from_date, to_date]
     
     if exclude_types:
         placeholders = ','.join(['%s'] * len(exclude_types))
@@ -202,7 +166,6 @@ def calculate_feeder_interruption_metrics_sql(feeder_id, from_date, to_date, exc
     
     # Simple SUM - include interruptions that started before but are still active during the period
     # Clip duration to period boundaries using LEAST/GREATEST
-    # ✅ Uses timezone-aware datetime ranges
     duration_query = f"""
         SELECT 
             COALESCE(SUM(
@@ -216,20 +179,18 @@ def calculate_feeder_interruption_metrics_sql(feeder_id, from_date, to_date, exc
         FROM technical_feederinterruption
         WHERE feeder_id = %s
             AND (
-                occurred_at >= %s AND occurred_at <= %s
+                (occurred_at AT TIME ZONE 'Africa/Lagos')::date BETWEEN %s AND %s
                 OR (occurred_at < %s AND (restored_at IS NULL OR restored_at >= %s))
             )
             {exclusion_clause}
     """
     
     # Count query: ONLY interruptions that STARTED in period (for FTC metric)
-    # ✅ Uses timezone-aware datetime ranges
     count_query = f"""
         SELECT COUNT(*) as interruption_count
         FROM technical_feederinterruption
         WHERE feeder_id = %s
-            AND occurred_at >= %s
-            AND occurred_at <= %s
+            AND (occurred_at AT TIME ZONE 'Africa/Lagos')::date BETWEEN %s AND %s
             {exclusion_clause}
     """
     
@@ -246,7 +207,7 @@ def calculate_feeder_interruption_metrics_sql(feeder_id, from_date, to_date, exc
         result = cursor.fetchone()
         total_interruptions = result[0] if result and result[0] else 0
     
-    # Calculate average per day (using fractional days for current periods)
+    # Calculate average per day
     avg_hours_per_day = total_hours / period_days if period_days > 0 else 0
     
     print(f"DEBUG FEEDER {feeder_id}: avg_hours_per_day before cap = {avg_hours_per_day}")
@@ -263,22 +224,17 @@ def calculate_feeder_metrics_optimized(feeder, from_date, to_date, mode):
     """
     Calculate feeder metrics using optimized SQL queries.
     
-    UPDATED:
-    - Uses actual elapsed time for current periods (fractional days)
-    - Uses timezone-aware datetime ranges for consistency
-    - Hours of supply includes ALL days (days without supply count as 0)
-    
     CORRECTED: Interruption duration includes all active interruptions,
     but count only includes interruptions that occurred in period.
     
     For individual feeders, we calculate:
-    - Average hours per day of supply (includes days without supply as 0)
+    - Average hours per day of supply
     - Average hours per day of interruptions (all active during period)
     - Average hours per day of local faults (all active during period, excludes L/S and TCN)
     - Total interruption count (only occurred during period)
     """
     try:
-        # 1. Average Supply Hours (per day, includes days without supply, fractional for current periods)
+        # 1. Average Supply Hours (per day)
         avg_supply = float(calculate_feeder_hours_of_supply_sql(
             feeder.id, 
             from_date, 
@@ -287,27 +243,19 @@ def calculate_feeder_metrics_optimized(feeder, from_date, to_date, mode):
     except Exception as e:
         print(f"DEBUG: SQL failed for supply hours on feeder {feeder.name}, using ORM: {str(e)}")
         # Fallback to ORM
-        today = timezone.now().date()
-        now = timezone.now()
-        
-        # Calculate period days with fractional support
-        if to_date == today:
-            full_days = (to_date - from_date).days
-            current_hour = now.hour
-            fractional_day = current_hour / 24.0
-            period_days = full_days + fractional_day
-        else:
-            period_days = (to_date - from_date).days + 1
-        
-        # Count total hours with supply
-        total_hours = HourlyLoad.objects.filter(
+        daily_supply = HourlyLoad.objects.filter(
             feeder_id=feeder.id,
             date__range=(from_date, to_date),
             load_mw__gt=0
-        ).values('date', 'hour').distinct().count()
+        ).values('date').annotate(
+            daily_hours=Count('hour', distinct=True)
+        )
         
-        avg_supply = total_hours / period_days if period_days > 0 else 0
-        avg_supply = round(min(float(avg_supply), 24.0), 2)
+        if daily_supply.exists():
+            avg_supply = daily_supply.aggregate(avg=Avg('daily_hours'))['avg'] or 0
+            avg_supply = round(min(float(avg_supply), 24.0), 2)
+        else:
+            avg_supply = 0.0
     
     try:
         # 2. Interruption Duration (ALL interruptions active during period, per day) - CORRECTED
@@ -322,15 +270,6 @@ def calculate_feeder_metrics_optimized(feeder, from_date, to_date, mode):
         # Fallback to ORM
         now = timezone.now()
         today = now.date()
-        
-        # Calculate period days with fractional support
-        if to_date == today:
-            full_days = (to_date - from_date).days
-            current_hour = now.hour
-            fractional_day = current_hour / 24.0
-            period_days = full_days + fractional_day
-        else:
-            period_days = (to_date - from_date).days + 1
         
         start_of_period = timezone.make_aware(
             datetime.combine(from_date, datetime.min.time())
@@ -348,7 +287,7 @@ def calculate_feeder_metrics_optimized(feeder, from_date, to_date, mode):
         interruptions = FeederInterruption.objects.filter(
             feeder_id=feeder.id
         ).filter(
-            Q(occurred_at__gte=start_of_period, occurred_at__lte=end_of_period) |
+            Q(occurred_at__date__range=(from_date, to_date)) |
             Q(occurred_at__lt=start_of_period, restored_at__gte=start_of_period) |
             Q(occurred_at__lt=start_of_period, restored_at__isnull=True)
         )
@@ -356,8 +295,7 @@ def calculate_feeder_metrics_optimized(feeder, from_date, to_date, mode):
         # Count only those that occurred in period
         ftc_all = FeederInterruption.objects.filter(
             feeder_id=feeder.id,
-            occurred_at__gte=start_of_period,
-            occurred_at__lte=end_of_period
+            occurred_at__date__range=(from_date, to_date)
         ).count()
         
         total_hours = 0
@@ -373,6 +311,7 @@ def calculate_feeder_metrics_optimized(feeder, from_date, to_date, mode):
                 duration = (end_time - start_time).total_seconds() / 3600
                 total_hours += duration
         
+        period_days = (to_date - from_date).days + 1
         avg_duration = round(total_hours / period_days, 2) if period_days > 0 else 0
     
     try:
@@ -389,15 +328,6 @@ def calculate_feeder_metrics_optimized(feeder, from_date, to_date, mode):
         # Fallback to ORM
         now = timezone.now()
         today = now.date()
-        
-        # Calculate period days with fractional support
-        if to_date == today:
-            full_days = (to_date - from_date).days
-            current_hour = now.hour
-            fractional_day = current_hour / 24.0
-            period_days = full_days + fractional_day
-        else:
-            period_days = (to_date - from_date).days + 1
         
         start_of_period = timezone.make_aware(
             datetime.combine(from_date, datetime.min.time())
@@ -417,7 +347,7 @@ def calculate_feeder_metrics_optimized(feeder, from_date, to_date, mode):
         ).exclude(
             interruption_type__in=TURNAROUND_EXCLUSIONS
         ).filter(
-            Q(occurred_at__gte=start_of_period, occurred_at__lte=end_of_period) |
+            Q(occurred_at__date__range=(from_date, to_date)) |
             Q(occurred_at__lt=start_of_period, restored_at__gte=start_of_period) |
             Q(occurred_at__lt=start_of_period, restored_at__isnull=True)
         )
@@ -425,8 +355,7 @@ def calculate_feeder_metrics_optimized(feeder, from_date, to_date, mode):
         # Count only those that occurred in period
         ftc_local = FeederInterruption.objects.filter(
             feeder_id=feeder.id,
-            occurred_at__gte=start_of_period,
-            occurred_at__lte=end_of_period
+            occurred_at__date__range=(from_date, to_date)
         ).exclude(interruption_type__in=TURNAROUND_EXCLUSIONS).count()
         
         total_hours = 0
@@ -442,6 +371,7 @@ def calculate_feeder_metrics_optimized(feeder, from_date, to_date, mode):
                 duration = (end_time - start_time).total_seconds() / 3600
                 total_hours += duration
         
+        period_days = (to_date - from_date).days + 1
         turnaround = round(total_hours / period_days, 2) if period_days > 0 else 0
     
     # Validation - cap at 24 hours
@@ -505,11 +435,7 @@ class FeederAvailabilityOverview(APIView):
     """
     Optimized feeder availability overview API supporting multiple modes.
     
-    UPDATED: 
-    - Only considers ONBOARDED feeders for all calculations
-    - Uses actual elapsed time for current periods (fractional days)
-    - Uses timezone-aware datetime ranges for consistency
-    - Hours of supply includes ALL days (days without supply count as 0)
+    UPDATED: Only considers ONBOARDED feeders for all calculations.
     
     Modes:
     - monthly: Month-based filtering (year, month params)
@@ -544,7 +470,7 @@ class FeederAvailabilityOverview(APIView):
             "feeder_name": "Feeder Name",
             "feeder_slug": "feeder-name",
             "voltage_level": "11kv",
-            "avg_hours_of_supply": 18.5,        // Hours/day (0-24) - includes days without supply
+            "avg_hours_of_supply": 18.5,        // Hours/day (0-24)
             "duration_of_interruptions": 3.2,   // Hours/day (0-24) - All active interruptions
             "turnaround_time": 1.5,             // Hours/day (0-24) - Local faults only
             "ftc": 12                           // Count of interruptions that occurred in period
@@ -553,12 +479,8 @@ class FeederAvailabilityOverview(APIView):
     
     Key Metrics (CORRECTED - ONBOARDED FEEDERS ONLY):
     - avg_hours_of_supply: Average hours per day of electricity supply (0-24)
-      * Includes ALL days in period (days without supply count as 0)
-      * Uses fractional days for current periods
     - duration_of_interruptions: Average hours per day of ALL interruptions active during period (0-24)
-      * Uses fractional days for current periods
     - turnaround_time: Average hours per day of LOCAL faults active during period (0-24)
-      * Uses fractional days for current periods
     - ftc: Feeder Tripping Count - total number of interruptions that OCCURRED in period
     
     NOTE: Only ONBOARDED feeders are included in the results.
@@ -584,12 +506,6 @@ class FeederAvailabilityOverview(APIView):
                 month_int = int(month)
                 from_date = datetime(year_int, month_int, 1).date()
                 to_date = (datetime(year_int, month_int, 1) + relativedelta(months=1) - timedelta(days=1)).date()
-                
-                # ✅ Cap at today
-                today = datetime.now().date()
-                if to_date >= today:
-                    to_date = today
-                
                 mode = "monthly"
             except (ValueError, TypeError):
                 return Response({"error": "Invalid year or month"}, status=400)
@@ -599,12 +515,6 @@ class FeederAvailabilityOverview(APIView):
             try:
                 from_date = datetime.strptime(from_date_legacy, '%Y-%m-%d').date()
                 to_date = datetime.strptime(to_date_legacy, '%Y-%m-%d').date()
-                
-                # ✅ Cap at today
-                today = datetime.now().date()
-                if to_date >= today:
-                    to_date = today
-                
                 mode = "custom"
             except ValueError:
                 return Response({"error": "Invalid date format. Use YYYY-MM-DD"}, status=400)
@@ -646,39 +556,22 @@ def get_feeder_availability_summary(month=None, year=None, from_date=None, to_da
     
     UPDATED: Only returns ONBOARDED feeders.
     """
-    today = datetime.now().date()
-    
     # Determine date range
     if month and year:
         from_date = datetime(year, month, 1).date()
         to_date = (datetime(year, month, 1) + relativedelta(months=1) - timedelta(days=1)).date()
-        
-        # ✅ Cap at today
-        if to_date >= today:
-            to_date = today
-        
         mode = "monthly"
     elif from_date and to_date:
         if isinstance(from_date, str):
             from_date = datetime.strptime(from_date, '%Y-%m-%d').date()
         if isinstance(to_date, str):
             to_date = datetime.strptime(to_date, '%Y-%m-%d').date()
-        
-        # ✅ Cap at today
-        if to_date >= today:
-            to_date = today
-        
         mode = "custom"
     else:
         # Default to current month
         now = datetime.now()
         from_date = datetime(now.year, now.month, 1).date()
         to_date = (datetime(now.year, now.month, 1) + relativedelta(months=1) - timedelta(days=1)).date()
-        
-        # ✅ Cap at today
-        if to_date >= today:
-            to_date = today
-        
         mode = "monthly"
     
     return get_feeder_availability_summary_optimized(
