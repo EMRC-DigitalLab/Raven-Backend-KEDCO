@@ -6,7 +6,6 @@ from django.db import connection
 from datetime import datetime, timedelta
 from dateutil.relativedelta import relativedelta
 from django.utils import timezone
-from technical.serializers import FeederAvailabilitySerializer
 from common.models import Feeder
 from technical.models import HourlyLoad, FeederInterruption
 from technical.constants import TURNAROUND_EXCLUSIONS
@@ -232,6 +231,7 @@ def calculate_feeder_metrics_optimized(feeder, from_date, to_date, mode):
     - Average hours per day of interruptions (all active during period)
     - Average hours per day of local faults (all active during period, excludes L/S and TCN)
     - Total interruption count (only occurred during period)
+    - Substation name
     """
     try:
         # 1. Average Supply Hours (per day)
@@ -383,6 +383,7 @@ def calculate_feeder_metrics_optimized(feeder, from_date, to_date, mode):
         "feeder_name": feeder.name,
         "feeder_slug": feeder.slug,
         "voltage_level": feeder.voltage_level,
+        "substation_name": feeder.substation.name,
         "avg_hours_of_supply": round(avg_supply, 2),
         "duration_of_interruptions": round(avg_duration, 2),
         "turnaround_time": round(turnaround, 2),
@@ -399,7 +400,7 @@ def get_feeder_availability_summary_optimized(from_date, to_date, mode, state=No
     UPDATED: Only considers ONBOARDED feeders.
     """
     # Filter feeders based on location parameters - ONLY ONBOARDED
-    feeders_query = Feeder.objects.filter(is_onboarded=True).select_related('business_district__state')
+    feeders_query = Feeder.objects.filter(is_onboarded=True).select_related('business_district__state', 'substation')
     
     if business_district:
         feeders_query = feeders_query.filter(business_district__name=business_district)
@@ -470,6 +471,7 @@ class FeederAvailabilityOverview(APIView):
             "feeder_name": "Feeder Name",
             "feeder_slug": "feeder-name",
             "voltage_level": "11kv",
+            "substation_name": "Substation Name",
             "avg_hours_of_supply": 18.5,        // Hours/day (0-24)
             "duration_of_interruptions": 3.2,   // Hours/day (0-24) - All active interruptions
             "turnaround_time": 1.5,             // Hours/day (0-24) - Local faults only
@@ -482,6 +484,7 @@ class FeederAvailabilityOverview(APIView):
     - duration_of_interruptions: Average hours per day of ALL interruptions active during period (0-24)
     - turnaround_time: Average hours per day of LOCAL faults active during period (0-24)
     - ftc: Feeder Tripping Count - total number of interruptions that OCCURRED in period
+    - substation_name: Name of the injection substation to which the feeder belongs
     
     NOTE: Only ONBOARDED feeders are included in the results.
     """
@@ -541,10 +544,8 @@ class FeederAvailabilityOverview(APIView):
             clean_item = {k: v for k, v in item.items() if not k.startswith('_')}
             clean_data.append(clean_item)
         
-        # Serialize the data
-        serializer = FeederAvailabilitySerializer(clean_data, many=True)
-        
-        return Response(serializer.data)
+        # Return data directly (bypassing serializer to include substation_name)
+        return Response(clean_data)
 
 
 # Utility functions for backward compatibility
