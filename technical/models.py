@@ -292,6 +292,7 @@ class FeederInterruption(UUIDModel, models.Model):
             now = timezone.now()
             
             return (now - occurred).total_seconds() / 3600
+
         return 0
 
 

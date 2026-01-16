@@ -1,4 +1,4 @@
-# reports/models.py
+# reports/models.py - UPDATED WITH HR AND EXECUTIVE CATEGORIES
 from django.db import models
 from django.contrib.auth import get_user_model
 from uuid import uuid4
@@ -28,9 +28,27 @@ class ReportTemplate(UUIDModel):
         ('published', 'Published'),
         ('archived', 'Archived'),
     ]
+    
+    # ✅ NEW: Report categories
+    CATEGORY_CHOICES = [
+        ('technical', 'Technical Performance'),
+        ('commercial', 'Commercial Performance'),
+        ('financial', 'Financial Performance'),
+        ('hr', 'Human Resources'),
+        ('executive', 'Executive Performance'),
+        ('general', 'General Report'),
+    ]
 
     name = models.CharField(max_length=255)
     description = models.TextField(blank=True)
+    
+    # ✅ NEW: Category field
+    category = models.CharField(
+        max_length=20, 
+        choices=CATEGORY_CHOICES, 
+        default='general',
+        help_text='Type of report (Technical, HR, Executive, etc.)'
+    )
     
     # Report metadata
     report_title = models.CharField(max_length=255, default="Monthly Performance Report")
@@ -47,7 +65,7 @@ class ReportTemplate(UUIDModel):
         related_name='report_templates'
     )
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='draft')
-    is_public = models.BooleanField(default=False)  # Can other users use this template?
+    is_public = models.BooleanField(default=False)
     
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)
@@ -55,9 +73,13 @@ class ReportTemplate(UUIDModel):
 
     class Meta:
         ordering = ['-updated_at']
+        indexes = [
+            models.Index(fields=['category', 'status']),
+            models.Index(fields=['created_by', 'category']),
+        ]
 
     def __str__(self):
-        return f"{self.name} - {self.created_by.username}"
+        return f"{self.name} ({self.get_category_display()}) - {self.created_by.username}"
 
 
 class ReportSection(UUIDModel):
@@ -82,11 +104,33 @@ class ReportSection(UUIDModel):
         ('district_performance_table', 'District Performance Table'),
         ('service_band_summary', 'Service Band Summary'),
         
+        # ✅ NEW: HR sections
+        ('hr_overview', 'HR Overview'),
+        ('staff_metrics', 'Staff Metrics Cards'),
+        ('department_headcount', 'Headcount by Department'),
+        ('staff_productivity', 'Staff Productivity Metrics'),
+        ('wage_bill_analysis', 'Wage Bill Analysis'),
+        ('attrition_analysis', 'Attrition Analysis'),
+        ('recruitment_summary', 'Recruitment Summary'),
+        ('training_summary', 'Training & Development Summary'),
+        ('performance_appraisals', 'Performance Appraisals Summary'),
+        
+        # ✅ NEW: Executive Performance sections
+        ('executive_overview', 'Executive Performance Overview'),
+        ('cfo_performance', 'CFO Performance Metrics'),
+        ('cto_performance', 'CTO Performance Metrics'),
+        ('cco_performance', 'CCO Performance Metrics'),
+        ('chro_performance', 'CHRO Performance Metrics'),
+        ('executive_kpi_summary', 'Executive KPI Summary Table'),
+        ('executive_comparison', 'Executive Performance Comparison'),
+        ('board_kpi_status', 'Board KPI Status'),
+        ('kpi_trends', 'KPI Trends Over Time'),
+        
         # Generic sections
         ('custom_text', 'Custom Text/Notes'),
         ('gaps_improvements', 'Gaps and Improvement Areas'),
         
-        # Future sections (commercial, financial, etc.)
+        # Commercial & Financial (existing placeholders)
         ('commercial_summary', 'Commercial Summary'),
         ('financial_summary', 'Financial Summary'),
         ('collection_efficiency', 'Collection Efficiency'),
@@ -98,23 +142,18 @@ class ReportSection(UUIDModel):
         related_name='sections'
     )
     section_type = models.CharField(max_length=50, choices=SECTION_TYPE_CHOICES)
-    title = models.CharField(max_length=255, blank=True)  # Custom title override
+    title = models.CharField(max_length=255, blank=True)
     
     # Section ordering
     order = models.PositiveIntegerField(default=0)
     is_enabled = models.BooleanField(default=True)
     
     # Section-specific configuration (stored as JSON)
-    # Examples:
-    # - For metric cards: which metrics to show
-    # - For charts: chart type, colors, etc.
-    # - For tables: which columns to include
-    # - For custom text: the actual text content
     config = models.JSONField(default=dict, blank=True)
     
     # Chart settings (if applicable)
     show_chart = models.BooleanField(default=False)
-    chart_type = models.CharField(max_length=20, blank=True)  # line, bar, pie, etc.
+    chart_type = models.CharField(max_length=20, blank=True)
 
     class Meta:
         ordering = ['order']
@@ -137,6 +176,14 @@ class GeneratedReport(UUIDModel):
     
     # Report details at time of generation
     report_title = models.CharField(max_length=255)
+    
+    # ✅ NEW: Category tracking
+    category = models.CharField(
+        max_length=20,
+        choices=ReportTemplate.CATEGORY_CHOICES,
+        default='general'
+    )
+    
     filters_used = models.JSONField(default=dict)
     sections_included = models.JSONField(default=list)
     
@@ -150,10 +197,14 @@ class GeneratedReport(UUIDModel):
     
     # File reference (if stored)
     file_path = models.CharField(max_length=500, blank=True)
-    file_size = models.PositiveIntegerField(null=True, blank=True)  # in bytes
+    file_size = models.PositiveIntegerField(null=True, blank=True)
 
     class Meta:
         ordering = ['-generated_at']
+        indexes = [
+            models.Index(fields=['category', 'generated_at']),
+            models.Index(fields=['generated_by', 'category']),
+        ]
 
     def __str__(self):
-        return f"{self.report_title} - {self.generated_at.strftime('%Y-%m-%d %H:%M')}"
+        return f"{self.report_title} ({self.get_category_display()}) - {self.generated_at.strftime('%Y-%m-%d %H:%M')}"

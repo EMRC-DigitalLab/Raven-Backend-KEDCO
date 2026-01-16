@@ -184,6 +184,75 @@ class DurationFilter(admin.SimpleListFilter):
             return queryset.filter(duration_seconds__gte=timedelta(hours=12))
 
 
+class OverlappingInterruptionsFilter(admin.SimpleListFilter):
+    """
+    OPTIMIZED filter - checks overlaps ONLY within same feeder.
+    Respects existing filters (date, feeder, etc.)
+    """
+    title = 'Overlapping Status'
+    parameter_name = 'overlapping'
+
+    def lookups(self, request, model_admin):
+        return [
+            ('has_overlaps', 'Has Overlapping Interruptions'),
+            ('ongoing_multiple', 'Multiple Ongoing (Same Feeder)'),
+        ]
+
+    def queryset(self, request, queryset):
+        from django.db import connection
+        from django.utils import timezone
+        
+        if not self.value():
+            return queryset
+        
+        if self.value() == 'has_overlaps':
+            # Get IDs from current filtered queryset (respects date/feeder filters)
+            current_ids = list(queryset.values_list('id', flat=True))
+            
+            if not current_ids:
+                return queryset.none()
+            
+            # Only check overlaps for interruptions in the filtered set
+            now = timezone.now()
+            placeholders = ','.join(['%s'] * len(current_ids))
+            
+            sql = f"""
+                SELECT DISTINCT t1.id
+                FROM technical_feederinterruption t1
+                INNER JOIN technical_feederinterruption t2 
+                    ON t1.feeder_id = t2.feeder_id  
+                    AND t1.id != t2.id
+                WHERE t1.id IN ({placeholders})
+                    AND (
+                        t2.occurred_at < COALESCE(t1.restored_at, %s)
+                        AND
+                        (t2.restored_at > t1.occurred_at OR t2.restored_at IS NULL)
+                    )
+            """
+            
+            with connection.cursor() as cursor:
+                cursor.execute(sql, current_ids + [now])
+                overlapping_ids = [row[0] for row in cursor.fetchall()]
+            
+            return queryset.filter(id__in=overlapping_ids)
+        
+        elif self.value() == 'ongoing_multiple':
+            # Find feeders with multiple ongoing interruptions
+            # Only within the current filtered queryset
+            from django.db.models import Count
+            
+            feeders_with_multiple = queryset.filter(
+                restored_at__isnull=True
+            ).values('feeder').annotate(
+                ongoing_count=Count('id')
+            ).filter(ongoing_count__gte=2).values_list('feeder', flat=True)
+            
+            return queryset.filter(
+                feeder__in=list(feeders_with_multiple),
+                restored_at__isnull=True
+            )
+
+
 # Admin classes
 @admin.register(CumulativeMeterReading)
 class CumulativeMeterReadingAdmin(admin.ModelAdmin):
@@ -688,7 +757,7 @@ class FeederInterruptionAdmin(admin.ModelAdmin):
     ]
     list_filter = [
         'feeder', 'interruption_type', InterruptionStatusFilter, 
-        DurationFilter,
+        DurationFilter, OverlappingInterruptionsFilter,
         'occurred_at'
     ]
     date_hierarchy = 'occurred_at'

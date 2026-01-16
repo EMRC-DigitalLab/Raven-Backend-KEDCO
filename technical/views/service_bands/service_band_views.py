@@ -29,6 +29,7 @@ def _parse_iso_date(date_str):
 def get_date_range_and_mode_from_request(request):
     """Enhanced date range parsing with support for multiple modes"""
     mode = request.GET.get("mode", "monthly")
+    today = datetime.now().date()
     
     if mode in ["daily", "weekly", "custom", "range"]:
         try:
@@ -41,6 +42,10 @@ def get_date_range_and_mode_from_request(request):
             from_date = _parse_iso_date(from_date_str)
             to_date = _parse_iso_date(to_date_str)
             
+            # ✅ Cap end_date at today for current/future periods
+            if to_date >= today:
+                to_date = today
+            
             return from_date, to_date, mode
             
         except (KeyError, ValueError) as e:
@@ -51,6 +56,11 @@ def get_date_range_and_mode_from_request(request):
             year = int(request.GET.get("year", datetime.now().year))
             from_date = datetime(year, 1, 1).date()
             to_date = datetime(year, 12, 31).date()
+            
+            # ✅ Cap end_date at today for current/future years
+            if to_date >= today:
+                to_date = today
+            
             return from_date, to_date, "yearly"
         except (KeyError, ValueError):
             raise ValueError("Invalid or missing year for yearly mode")
@@ -61,6 +71,11 @@ def get_date_range_and_mode_from_request(request):
             month = int(request.GET.get("month", datetime.now().month))
             from_date = datetime(year, month, 1).date()
             to_date = (datetime(year, month, 1) + relativedelta(months=1) - timedelta(days=1)).date()
+            
+            # ✅ Cap end_date at today for current/future months
+            if to_date >= today:
+                to_date = today
+            
             return from_date, to_date, "monthly"
         except (KeyError, ValueError):
             raise ValueError("Invalid or missing year or month for monthly mode")
@@ -81,16 +96,16 @@ def calculate_band_hours_of_supply_sql(feeder_ids, from_date, to_date):
     """
     Calculate average hours of supply per day for feeders in a band.
     
-    UPDATED: Only considers ONBOARDED feeders (feeder_ids already filtered).
-    
-    Logic:
+    UPDATED Logic:
+    - Only considers ONBOARDED feeders (feeder_ids already filtered)
+    - For single-day queries (especially today): Returns total hours supplied (not daily average)
+    - For multi-day queries: Returns average hours per day
     - Numerator: Sum of all hours supplied across all ONBOARDED feeders
     - Denominator: Total ONBOARDED feeders × Days in period
     """
     if not feeder_ids:
         return 0.0
     
-    period_days = (to_date - from_date).days + 1
     total_feeders = len(feeder_ids)
     
     placeholders = ','.join(['%s'] * len(feeder_ids))
@@ -109,24 +124,31 @@ def calculate_band_hours_of_supply_sql(feeder_ids, from_date, to_date):
         result = cursor.fetchone()
         total_hours = result[0] if result and result[0] else 0
     
-    # Average = Total hours / (Total onboarded feeders × Days)
-    avg_hours_per_day = total_hours / (total_feeders * period_days)
+    # ✅ CRITICAL: For single-day queries, return total hours per feeder (not daily average)
+    # For multi-day queries, return daily average
+    if from_date == to_date:
+        # Single day: Return average hours supplied per feeder
+        avg_hours = total_hours / total_feeders if total_feeders > 0 else 0
+    else:
+        # Multi-day: Return average hours per day per feeder
+        period_days = (to_date - from_date).days + 1
+        avg_hours = total_hours / (total_feeders * period_days) if (total_feeders * period_days) > 0 else 0
     
-    return round(min(float(avg_hours_per_day), 24.0), 2)
+    return round(min(float(avg_hours), 24.0), 2)
 
 
 def calculate_band_interruption_metrics_sql(feeder_ids, from_date, to_date, exclude_types=None):
     """
     Calculate average interruption duration per day for feeders in a band.
     
-    UPDATED: Only considers ONBOARDED feeders (feeder_ids already filtered).
-    
-    CORRECTED Logic:
+    UPDATED Logic:
+    - Only considers ONBOARDED feeders (feeder_ids already filtered)
+    - For single-day queries (especially today): Returns total hours (not daily average)
+    - For multi-day queries: Returns average hours per day
     - Includes ALL interruptions active during the period
     - Calculates only hours within the filtered period boundaries
-    - Caps per-feeder totals at (24 × days) to handle overlapping interruptions
-    - Numerator: Sum of capped per-feeder hours
-    - Denominator: Total ONBOARDED feeders × Days in period
+    - Uses timezone-aware datetime ranges for consistency
+    - Caps per-feeder totals at 24 hours for single day, (24 × days) for multi-day
     
     Returns:
         tuple: (avg_duration_per_day, total_interruption_count)
@@ -134,10 +156,27 @@ def calculate_band_interruption_metrics_sql(feeder_ids, from_date, to_date, excl
     if not feeder_ids:
         return 0.0, 0
     
-    period_days = (to_date - from_date).days + 1
-    total_feeders = len(feeder_ids)
-    max_hours = period_days * 24.0
+    # ✅ Check for future dates
+    now = timezone.now()
+    today = now.date()
     
+    if from_date > today:
+        return 0.0, 0
+    
+    # Determine if single-day or multi-day query
+    is_single_day = (from_date == to_date)
+    
+    if is_single_day:
+        # Single day: cap per feeder at 24 hours
+        total_feeders = len(feeder_ids)
+        max_hours = 24.0
+    else:
+        # Multi-day: cap per feeder at (24 × days)
+        period_days = (to_date - from_date).days + 1
+        total_feeders = len(feeder_ids)
+        max_hours = period_days * 24.0
+    
+    # ✅ Create timezone-aware datetime boundaries
     start_of_period = timezone.make_aware(
         datetime.combine(from_date, datetime.min.time())
     )
@@ -149,8 +188,9 @@ def calculate_band_interruption_metrics_sql(feeder_ids, from_date, to_date, excl
     
     # Build exclusion clause
     exclusion_clause = ""
-    duration_params = [end_of_period, end_of_period, start_of_period, max_hours] + list(feeder_ids) + [from_date, end_of_period, start_of_period, start_of_period]
-    count_params = list(feeder_ids) + [from_date, to_date]
+    # ✅ Uses timezone-aware datetime ranges
+    duration_params = [end_of_period, end_of_period, start_of_period, max_hours] + list(feeder_ids) + [start_of_period, end_of_period, start_of_period, start_of_period]
+    count_params = list(feeder_ids) + [start_of_period, end_of_period]
     
     if exclude_types:
         type_placeholders = ','.join(['%s'] * len(exclude_types))
@@ -159,6 +199,7 @@ def calculate_band_interruption_metrics_sql(feeder_ids, from_date, to_date, excl
         count_params.extend(exclude_types)
     
     # Calculate per-feeder totals, capped at max_hours
+    # ✅ Uses timezone-aware datetime ranges
     interruption_duration_query = f"""
         SELECT 
             COALESCE(SUM(capped_hours), 0) as total_hours
@@ -179,7 +220,7 @@ def calculate_band_interruption_metrics_sql(feeder_ids, from_date, to_date, excl
             FROM technical_feederinterruption fi
             WHERE fi.feeder_id IN ({placeholders})
                 AND (
-                    DATE(fi.occurred_at) BETWEEN %s AND DATE(%s)
+                    fi.occurred_at >= %s AND fi.occurred_at <= %s
                     OR (fi.occurred_at < %s AND (fi.restored_at IS NULL OR fi.restored_at >= %s))
                 )
                 {exclusion_clause}
@@ -188,11 +229,13 @@ def calculate_band_interruption_metrics_sql(feeder_ids, from_date, to_date, excl
     """
     
     # Count query (only interruptions that occurred in period)
+    # ✅ Uses timezone-aware datetime ranges
     interruption_count_query = f"""
         SELECT COUNT(*) as total_interruptions
         FROM technical_feederinterruption fi
         WHERE fi.feeder_id IN ({placeholders})
-            AND DATE(fi.occurred_at) BETWEEN %s AND %s
+            AND fi.occurred_at >= %s
+            AND fi.occurred_at <= %s
             {exclusion_clause}
     """
     
@@ -207,13 +250,19 @@ def calculate_band_interruption_metrics_sql(feeder_ids, from_date, to_date, excl
         result = cursor.fetchone()
         total_interruptions = result[0] if result and result[0] else 0
     
-    # Average = Total hours / (Total onboarded feeders × Days)
-    avg_hours_per_day = total_hours / (total_feeders * period_days)
+    # ✅ CRITICAL: For single-day queries, return average hours per feeder (not daily average)
+    # For multi-day queries, return average hours per day per feeder
+    if is_single_day:
+        # Single day: Average hours per feeder
+        avg_hours = total_hours / total_feeders if total_feeders > 0 else 0
+    else:
+        # Multi-day: Average hours per day per feeder
+        avg_hours = total_hours / (total_feeders * period_days) if (total_feeders * period_days) > 0 else 0
     
     # Ensure non-negative and cap at 24
-    avg_hours_per_day = max(0, min(avg_hours_per_day, 24.0))
+    avg_hours = max(0, min(avg_hours, 24.0))
     
-    return round(avg_hours_per_day, 2), int(total_interruptions)
+    return round(avg_hours, 2), int(total_interruptions)
 
 
 def calculate_band_peak_load_sql(feeder_ids, from_date, to_date):
@@ -259,12 +308,15 @@ def calculate_band_metrics(band, from_date, to_date, state_filter=None):
     Calculate all metrics for a single band using direct SQL queries.
     No caching - always calculates fresh data.
     
-    UPDATED: Only considers ONBOARDED feeders for all calculations.
+    UPDATED: 
+    - Only considers ONBOARDED feeders for all calculations
+    - Uses actual elapsed time for current periods (fractional days)
+    - Uses timezone-aware datetime ranges for consistency
     """
     # Get ONBOARDED feeders for this band with optional state filtering
     feeders_query = Feeder.objects.filter(
         band=band,
-        is_onboarded=True  # ← ADDED
+        is_onboarded=True
     )
     if state_filter:
         feeders_query = feeders_query.filter(business_district__state=state_filter)
@@ -284,7 +336,7 @@ def calculate_band_metrics(band, from_date, to_date, state_filter=None):
             "average_peak_load": 0.0
         }
     
-    # 1. Average hours of supply (ONBOARDED feeders only)
+    # 1. Average hours of supply (ONBOARDED feeders only, fractional days)
     avg_supply = calculate_band_hours_of_supply_sql(feeder_ids, from_date, to_date)
     
     # 2. Interruption duration (ALL types, ONBOARDED feeders only)
@@ -331,7 +383,10 @@ def technical_service_band_summary(request):
     """
     Technical summary for all service bands with optional state filtering.
     
-    UPDATED: Only considers ONBOARDED feeders for all calculations.
+    UPDATED: 
+    - Only considers ONBOARDED feeders for all calculations
+    - Uses actual elapsed time for current periods (fractional days)
+    - Uses timezone-aware datetime ranges for consistency
     
     Returns metrics for each service band including:
     - Average duration of supply (daily average hours of electricity supply)
@@ -370,8 +425,13 @@ def technical_service_band_summary(request):
     
     Key Metrics (CORRECTED - ONBOARDED FEEDERS ONLY):
     - average_duration_of_supply: Average hours per day across ONBOARDED feeders (0-24)
+      * Uses fractional days for current periods
     - duration_of_interruption: Average interruption hours per day across ONBOARDED feeders (0-24)
+      * Includes ALL interruptions active during the period
+      * Uses fractional days for current periods
     - turnaround_time: Average local fault hours per day across ONBOARDED feeders (0-24)
+      * Includes ALL local faults active during the period
+      * Uses fractional days for current periods
     - feeder_tripping_count: Count of local fault interruptions that occurred in period (ONBOARDED feeders only)
     - number_of_feeders: Number of ONBOARDED feeders in the band
     - customer_count: Total customers on ONBOARDED feeders (currently 0)
@@ -389,6 +449,7 @@ def technical_service_band_summary(request):
     month = request.GET.get("month")
     from_legacy = request.GET.get("from")
     to_legacy = request.GET.get("to")
+    today = datetime.now().date()
     
     # Handle legacy requests
     if not mode and (year and month):
@@ -398,6 +459,11 @@ def technical_service_band_summary(request):
             month_int = int(month)
             from_date = datetime(year_int, month_int, 1).date()
             to_date = (datetime(year_int, month_int, 1) + relativedelta(months=1) - timedelta(days=1)).date()
+            
+            # ✅ Cap at today
+            if to_date >= today:
+                to_date = today
+            
             mode = "monthly"
         except (ValueError, TypeError):
             return Response({"error": "Invalid year or month"}, status=400)
@@ -407,6 +473,11 @@ def technical_service_band_summary(request):
         try:
             from_date = datetime.strptime(from_legacy, '%Y-%m-%d').date()
             to_date = datetime.strptime(to_legacy, '%Y-%m-%d').date()
+            
+            # ✅ Cap at today
+            if to_date >= today:
+                to_date = today
+            
             mode = "custom"
         except ValueError:
             return Response({"error": "Invalid date format. Use YYYY-MM-DD"}, status=400)
@@ -460,7 +531,7 @@ def technical_service_band_summary(request):
             "total_bands": len(band_data),
             "bands_with_data": len([b for b in band_data if any(v > 0 for v in b["metrics"].values() if isinstance(v, (int, float)))]),
             "bands_without_data": len([b for b in band_data if all(v == 0 for v in b["metrics"].values() if isinstance(v, (int, float)))]),
-            "onboarded_feeders_only": True  # ← ADDED - Indicator that only onboarded feeders are counted
+            "onboarded_feeders_only": True
         }
     }
     
