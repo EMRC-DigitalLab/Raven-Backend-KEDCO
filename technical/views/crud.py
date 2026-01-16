@@ -243,10 +243,10 @@ class HourlyLoadViewSet(viewsets.ModelViewSet):
                         # Parse date
                         try:
                             if 'T' in date_str:
-                                date_obj = datetime.datetime.fromisoformat(date_str.replace('Z', '+00:00')).date()
+                                date_obj = datetime.fromisoformat(date_str.replace('Z', '+00:00')).date()
                                 date_obj = date_obj + timedelta(days=1)
                             else:
-                                date_obj = datetime.datetime.strptime(date_str, '%Y-%m-%d').date()
+                                date_obj = datetime.strptime(date_str, '%Y-%m-%d').date()
                         except ValueError:
                             errors.append(f"Record {i}: Invalid date format '{date_str}'")
                             continue
