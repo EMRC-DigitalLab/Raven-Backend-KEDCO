@@ -39,6 +39,8 @@ class EnergyDeliveredViewSet(viewsets.ModelViewSet):
 
     @transaction.atomic
     def _handle_cumulative_data(self, request, is_bulk=False):
+        from decimal import Decimal, InvalidOperation
+        
         print("🔍 _handle_cumulative_data called!")
         print(f"📦 Request data: {request.data}")
         
@@ -101,7 +103,20 @@ class EnergyDeliveredViewSet(viewsets.ModelViewSet):
                     errors.append(f"Record {i}: missing 'energy_mwh'")
                     continue
                 
-                print(f"✅ Energy value: {cumulative_mwh} MWh")
+                # ✅ FIX: Convert to Decimal to avoid type mismatch errors
+                try:
+                    if isinstance(cumulative_mwh, str):
+                        cumulative_mwh = Decimal(cumulative_mwh)
+                    elif isinstance(cumulative_mwh, (int, float)):
+                        cumulative_mwh = Decimal(str(cumulative_mwh))
+                    elif not isinstance(cumulative_mwh, Decimal):
+                        cumulative_mwh = Decimal(str(cumulative_mwh))
+                    
+                    print(f"✅ Energy value: {cumulative_mwh} MWh (type: {type(cumulative_mwh).__name__})")
+                except (InvalidOperation, ValueError, TypeError) as e:
+                    print(f"❌ Invalid energy_mwh value: {cumulative_mwh}")
+                    errors.append(f"Record {i}: Invalid energy_mwh '{cumulative_mwh}' - {str(e)}")
+                    continue
 
                 # --- Upsert into CumulativeMeterReading ---
                 print(f"💾 Creating/updating CumulativeMeterReading...")
