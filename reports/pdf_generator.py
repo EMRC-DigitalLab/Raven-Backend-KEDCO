@@ -4,8 +4,18 @@ PDF generation service using WeasyPrint.
 """
 from django.template.loader import render_to_string
 from django.conf import settings
-from weasyprint import HTML, CSS
-from weasyprint.text.fonts import FontConfiguration
+try:
+    from weasyprint import HTML, CSS
+    from weasyprint.text.fonts import FontConfiguration
+    WEASYPRINT_AVAILABLE = True
+except (OSError, ImportError) as e:
+    # GTK or other dependencies missing
+    HTML = None
+    CSS = None
+    FontConfiguration = None
+    WEASYPRINT_AVAILABLE = False
+    print(f"WARNING: WeasyPrint could not be imported. PDF generation will not work. Error: {e}")
+
 import os
 import io
 import base64

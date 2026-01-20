@@ -1195,6 +1195,169 @@ def get_load_trend_optimized(start_date, end_date, mode, feeder_id=None):
         }
 
 
+
+def calculate_average_station_load_network(from_date, to_date):
+    """
+    Calculate average STATION load (Sum of all feeder loads) per hour across period.
+    
+    Formula: Average of (Sum of Feeder Loads per Hour)
+    """
+    today = timezone.now().date()
+    now = timezone.now()
+    
+    # Only consider ONBOARDED feeders
+    base_filter = {
+        'feeder__is_onboarded': True,
+        'date__range': (from_date, to_date)
+    }
+    
+    # Calculate Station Hourly Totals
+    station_hourly = HourlyLoad.objects.filter(
+        **base_filter
+    ).values('date', 'hour').annotate(
+        station_total=Sum('load_mw')
+    )
+    
+    # Calculate Average of these totals
+    result = station_hourly.aggregate(avg_station_load=Avg('station_total'))
+    
+    return round(float(result['avg_station_load'] or 0), 2)
+
+
+def get_station_load_trend(start_date, end_date, mode):
+    """
+    Get STATION TOTAL load trend.
+    For daily mode: returns Station Total (Sum of feeders) for each hour
+    For monthly mode: returns Average Station Load for each day
+    """
+    today = timezone.now().date()
+    now = timezone.now()
+    
+    # Only consider onboarded feeders
+    base_filter = {
+        'feeder__is_onboarded': True,
+        'date__range': (start_date, end_date)
+    }
+
+    if mode == "monthly":
+        # Calculate Hourly Station Totals first
+        station_hourly = HourlyLoad.objects.filter(
+            **base_filter
+        ).values('date', 'hour').annotate(
+            station_total=Sum('load_mw')
+        )
+        
+        # Now group by date to get Average Daily Station Load
+        # We can't do a second aggregation easily in Django ORM without subqueries or Python processing
+        # Using Python processing for simplicity as dataset is small (30 days x 24 hours)
+        
+        # Organize by date
+        daily_totals = {}
+        for item in station_hourly:
+            d = item['date']
+            load = float(item['station_total'] or 0)
+            if d not in daily_totals:
+                daily_totals[d] = []
+            daily_totals[d].append(load)
+            
+        # Calculate averages
+        final_daily_avgs = {}
+        for d, loads in daily_totals.items():
+            if loads:
+                final_daily_avgs[d] = round(sum(loads) / len(loads), 2)
+        
+        # Generate series
+        series = []
+        current_date = start_date
+        effective_end = min(end_date, today)
+        
+        while current_date <= effective_end:
+            series.append({
+                "day": current_date.day,
+                "value": final_daily_avgs.get(current_date, 0)
+            })
+            current_date += timedelta(days=1)
+            
+        return {
+            "unit": "MW",
+            "date": start_date.strftime("%Y-%m"),
+            "series": series
+        }
+
+    elif mode == "daily":
+        # Calculate Hourly Station Totals
+        base_filter['date'] = start_date
+        
+        station_hourly = HourlyLoad.objects.filter(
+            **base_filter
+        ).values('hour').annotate(
+            station_total=Sum('load_mw')
+        ).order_by('hour')
+        
+        loads_dict = {
+            entry["hour"]: round(float(entry["station_total"] or 0), 2)
+            for entry in station_hourly
+        }
+        
+        # Determine max hour
+        if start_date == today:
+            max_hour = now.hour
+        else:
+            max_hour = 23
+            
+        series = [
+            {
+                "hour": hour,
+                "value": loads_dict.get(hour, 0)
+            }
+            for hour in range(max_hour + 1)
+        ]
+        
+        return {
+            "unit": "MW",
+            "date": start_date.isoformat(),
+            "series": series
+        }
+
+    else: # Custom
+        # Similar to monthly, Average Daily Station Load
+        station_hourly = HourlyLoad.objects.filter(
+            **base_filter
+        ).values('date', 'hour').annotate(
+            station_total=Sum('load_mw')
+        )
+        
+        daily_totals = {}
+        for item in station_hourly:
+            d = item['date']
+            load = float(item['station_total'] or 0)
+            if d not in daily_totals:
+                daily_totals[d] = []
+            daily_totals[d].append(load)
+            
+        final_daily_avgs = {}
+        for d, loads in daily_totals.items():
+            if loads:
+                final_daily_avgs[d] = round(sum(loads) / len(loads), 2)
+                
+        series = []
+        current_date = start_date
+        effective_end = min(end_date, today)
+        
+        while current_date <= effective_end:
+            series.append({
+                "date": current_date.isoformat(),
+                "value": final_daily_avgs.get(current_date, 0)
+            })
+            current_date += timedelta(days=1)
+            
+        return {
+            "unit": "MW",
+            "date": f"{start_date.isoformat()} to {end_date.isoformat()}",
+            "series": series
+        }
+
+
 def get_metric_with_history(calc_fn, start_date, end_date, period_days):
     """Get metric with historical data for comparison"""
     previous_periods = get_previous_periods(start_date, end_date, period_days)
@@ -1291,9 +1454,17 @@ def technical_overview_view(request):
     if feeder_slug:
         load_now = calculate_average_load_feeder(feeder.id, start_date, end_date)
         load_prev = calculate_average_load_feeder(feeder.id, prev_start, prev_end)
+        
+        # For single feeder, Station Load is same as Feeder Load
+        station_load_now = load_now
+        station_load_prev = load_prev
     else:
         load_now = calculate_average_load_network(start_date, end_date)
         load_prev = calculate_average_load_network(prev_start, prev_end)
+        
+        # Calculate Station Load Average (Scalar)
+        station_load_now = calculate_average_station_load_network(start_date, end_date)
+        station_load_prev = calculate_average_station_load_network(prev_start, prev_end)
     
     # UPDATED: Interruption count - ONLY count those that OCCURRED within period
     if feeder_slug:
@@ -1430,6 +1601,13 @@ def technical_overview_view(request):
     # Load trend - OPTIMIZED with feeder filter (ONBOARDED only when network-wide)
     load_trend = get_load_trend_optimized(start_date, end_date, mode, feeder_id=feeder.id if feeder_slug else None)
     
+    # Station Load Trend & Metrics
+    if feeder_slug:
+        # For single feeder, station trend is same as load trend
+        station_load_trend = load_trend
+    else:
+        station_load_trend = get_station_load_trend(start_date, end_date, mode)
+    
     response_data = {
         "mode": mode,
         "period": {
@@ -1446,6 +1624,10 @@ def technical_overview_view(request):
                 "value": round(load_now, 2),
                 "delta": delta(load_now, load_prev)
             },
+            "average_station_load": {
+                "value": round(station_load_now, 2),
+                "delta": delta(station_load_now, station_load_prev)
+            },
             "interruptions": {
                 "value": interruptions_now,
                 "delta": delta(interruptions_now, interruptions_prev)
@@ -1459,7 +1641,8 @@ def technical_overview_view(request):
         },
         "technical_breakdown": breakdown,
         "interruption_sources": interruptions_data,
-        "load_trend": load_trend
+        "load_trend": load_trend,
+        "station_load_trend": station_load_trend
     }
     
     # Add feeder info to response if filtered
