@@ -1004,11 +1004,42 @@ class CLUBSubstationReportGenerator:
             peak_load=Max('load_mw')
         ).order_by('-peak_load')
         
+        # Calculate Station Total Load per Hour
+        # Group by date and hour, then sum load_mw across all feeders
+        station_hourly_loads = HourlyLoad.objects.filter(
+            feeder_id__in=self.feeder_ids,
+            date__range=(start_date, end_date)
+        ).values('date', 'hour').annotate(
+            total_station_load=Sum('load_mw')
+        ).order_by('date', 'hour')
+
+        # Calculate Average Station Load
+        # Average of the hourly station totals
+        station_load_stats = station_hourly_loads.aggregate(
+            avg_station_load=Avg('total_station_load'),
+            max_station_load=Max('total_station_load'),
+            min_station_load=Min('total_station_load')
+        )
+
         return {
             'average_load_mw': round(float(load_stats['avg_load'] or 0), 2),
             'peak_load_mw': round(float(load_stats['max_load'] or 0), 2),
             'minimum_load_mw': round(float(load_stats['min_load'] or 0), 2),
             'total_load_records': load_stats['total_records'],
+            
+            # New Station-Level Metrics
+            'average_station_load_mw': round(float(station_load_stats['avg_station_load'] or 0), 2),
+            'peak_station_load_mw': round(float(station_load_stats['max_station_load'] or 0), 2),
+            'min_station_load_mw': round(float(station_load_stats['min_station_load'] or 0), 2),
+            'station_hourly_loads': [
+                {
+                    'date': item['date'].isoformat(),
+                    'hour': item['hour'],
+                    'total_load_mw': round(float(item['total_station_load'] or 0), 2)
+                }
+                for item in station_hourly_loads
+            ],
+
             'peak_loads_by_feeder': [
                 {
                     'feeder': item['feeder__name'],
