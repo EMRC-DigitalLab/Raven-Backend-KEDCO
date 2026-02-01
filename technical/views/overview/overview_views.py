@@ -1064,7 +1064,116 @@ def get_interruption_breakdown_network(start_date, end_date, period_days, period
     }
 
 
-def get_load_trend_optimized(start_date, end_date, mode, feeder_id=None):
+def calculate_trend_analytics(series, mode, target_energy=None):
+    """
+    Calculate statistical analytics for load trend data to help spot discrepancies and anomalies.
+    
+    Args:
+        series: List of dicts with 'value' key (e.g., [{"hour": 0, "value": 12.5}, ...])
+        mode: Query mode ('daily', 'monthly', 'custom')
+        target_energy: Optional target energy offtake in MWh for comparison
+    
+    Returns:
+        Dictionary with analytics metrics including peak, average, min, variance, anomalies, and target comparison
+    """
+    import statistics
+    
+    if not series:
+        return {
+            "peak": 0,
+            "peak_time": None,
+            "average": 0,
+            "min": 0,
+            "min_time": None,
+            "std_deviation": 0,
+            "variance": 0,
+            "range": 0,
+            "anomaly_count": 0
+        }
+    
+    # Extract values and find peak/min
+    values = [item["value"] for item in series]
+    non_zero_values = [v for v in values if v > 0]
+    
+    # Basic statistics
+    peak = max(values)
+    min_val = min(values)
+    average = statistics.mean(values) if values else 0
+    
+    # Find peak and min times
+    peak_idx = values.index(peak)
+    min_idx = values.index(min_val)
+    
+    # Format time labels based on mode
+    if mode == "daily":
+        peak_time = f"{series[peak_idx].get('hour', peak_idx):02d}:00"
+        min_time = f"{series[min_idx].get('hour', min_idx):02d}:00"
+    elif mode == "monthly":
+        peak_time = f"Day {series[peak_idx].get('day', peak_idx + 1)}"
+        min_time = f"Day {series[min_idx].get('day', min_idx + 1)}"
+    else:  # custom
+        peak_time = series[peak_idx].get('date', f"Period {peak_idx + 1}")
+        min_time = series[min_idx].get('date', f"Period {min_idx + 1}")
+    
+    # Calculate variance and std deviation
+    variance = statistics.variance(values) if len(values) > 1 else 0
+    std_deviation = statistics.stdev(values) if len(values) > 1 else 0
+    
+    # Anomaly detection (values > 2 standard deviations from mean)
+    anomaly_threshold = average + (2 * std_deviation) if std_deviation > 0 else float('inf')
+    anomaly_count = sum(1 for v in values if v > anomaly_threshold and v > 0)
+    
+    # Add anomaly flags to series
+    for item in series:
+        if item["value"] > anomaly_threshold and item["value"] > 0:
+            item["is_anomaly"] = True
+    
+    analytics = {
+        "peak": round(peak, 2),
+        "peak_time": peak_time,
+        "average": round(average, 2),
+        "min": round(min_val, 2),
+        "min_time": min_time,
+        "std_deviation": round(std_deviation, 2),
+        "variance": round(variance, 2),
+        "range": round(peak - min_val, 2),
+        "anomaly_count": anomaly_count
+    }
+    
+    # Energy offtake target comparison (if provided)
+    if target_energy is not None and target_energy > 0:
+        # Calculate actual cumulative energy (sum of all load values)
+        actual_energy = sum(values)
+        
+        # Expected rate per time unit
+        expected_rate = target_energy / len(series) if series else 0
+        
+        # Variance percentage
+        variance_pct = ((actual_energy - target_energy) / target_energy * 100) if target_energy > 0 else 0
+        
+        # Projection based on current average
+        # If we're partway through the period, project what the final value will be
+        hours_remaining = len([v for v in values if v == 0])  # Rough estimate
+        projected_final = actual_energy + (average * hours_remaining) if hours_remaining > 0 else actual_energy
+        
+        # Check if on track (within ±5% tolerance)
+        tolerance = 5.0
+        on_track = abs(variance_pct) <= tolerance
+        
+        analytics["offtake_target"] = {
+            "target_energy": round(target_energy, 2),
+            "actual_energy": round(actual_energy, 2),
+            "expected_rate": round(expected_rate, 2),
+            "variance_pct": round(variance_pct, 2),
+            "projected_final": round(projected_final, 2),
+            "on_track": on_track,
+            "status": "On Track" if on_track else ("Over" if variance_pct > 0 else "Under")
+        }
+    
+    return analytics
+
+
+def get_load_trend_optimized(start_date, end_date, mode, feeder_id=None, target_energy=None):
     """
     Get load trend data optimized for the selected mode.
     For monthly mode: returns daily averages for each day of the month
@@ -1074,12 +1183,15 @@ def get_load_trend_optimized(start_date, end_date, mode, feeder_id=None):
     - Only considers ONBOARDED feeders (when not filtering by specific feeder)
     - Returns 0 for missing values up to current time
     - Does not return future time slots
+    - Includes analytics (peak, min, avg, variance, anomalies)
+    - Optional energy offtake target comparison
     
     Args:
         start_date: Start date
         end_date: End date
         mode: Mode (monthly, daily, custom, etc.)
         feeder_id: Optional feeder ID to filter by specific feeder
+        target_energy: Optional target energy offtake in MWh for comparison
     """
     today = timezone.now().date()
     now = timezone.now()
@@ -1118,10 +1230,14 @@ def get_load_trend_optimized(start_date, end_date, mode, feeder_id=None):
             })
             current_date += timedelta(days=1)
         
+        # Calculate analytics
+        analytics = calculate_trend_analytics(series, mode, target_energy)
+        
         return {
             "unit": "MW",
             "date": start_date.strftime("%Y-%m"),
-            "series": series
+            "series": series,
+            "analytics": analytics
         }
     
     elif mode == "daily":
@@ -1156,10 +1272,14 @@ def get_load_trend_optimized(start_date, end_date, mode, feeder_id=None):
             for hour in range(max_hour + 1)
         ]
         
+        # Calculate analytics
+        analytics = calculate_trend_analytics(series, mode, target_energy)
+        
         return {
             "unit": "MW",
             "date": start_date.isoformat(),
-            "series": series
+            "series": series,
+            "analytics": analytics
         }
     
     else:  # custom range
@@ -1188,10 +1308,14 @@ def get_load_trend_optimized(start_date, end_date, mode, feeder_id=None):
             })
             current_date += timedelta(days=1)
         
+        # Calculate analytics
+        analytics = calculate_trend_analytics(series, mode, target_energy)
+        
         return {
             "unit": "MW",
             "date": f"{start_date.isoformat()} to {end_date.isoformat()}",
-            "series": series
+            "series": series,
+            "analytics": analytics
         }
 
 
@@ -1278,10 +1402,14 @@ def get_station_load_trend(start_date, end_date, mode):
             })
             current_date += timedelta(days=1)
             
+        # Calculate analytics
+        analytics = calculate_trend_analytics(series, mode)
+        
         return {
             "unit": "MW",
             "date": start_date.strftime("%Y-%m"),
-            "series": series
+            "series": series,
+            "analytics": analytics
         }
 
     elif mode == "daily":
@@ -1313,10 +1441,14 @@ def get_station_load_trend(start_date, end_date, mode):
             for hour in range(max_hour + 1)
         ]
         
+        # Calculate analytics
+        analytics = calculate_trend_analytics(series, mode)
+        
         return {
             "unit": "MW",
             "date": start_date.isoformat(),
-            "series": series
+            "series": series,
+            "analytics": analytics
         }
 
     else: # Custom
@@ -1351,10 +1483,14 @@ def get_station_load_trend(start_date, end_date, mode):
             })
             current_date += timedelta(days=1)
             
+        # Calculate analytics
+        analytics = calculate_trend_analytics(series, mode)
+        
         return {
             "unit": "MW",
             "date": f"{start_date.isoformat()} to {end_date.isoformat()}",
-            "series": series
+            "series": series,
+            "analytics": analytics
         }
 
 
@@ -1426,6 +1562,14 @@ def technical_overview_view(request):
     else:
         # When not filtering by specific feeder, only consider ONBOARDED feeders
         feeder_filter = {'feeder__is_onboarded': True}
+    
+    # Parse optional target_energy parameter for offtake comparison
+    target_energy = request.GET.get("target_energy")
+    if target_energy:
+        try:
+            target_energy = float(target_energy)
+        except (ValueError, TypeError):
+            target_energy = None
     
     # Get previous period for delta calculations
     if period_days == 1:  # Daily
@@ -1599,7 +1743,7 @@ def technical_overview_view(request):
         ]
     
     # Load trend - OPTIMIZED with feeder filter (ONBOARDED only when network-wide)
-    load_trend = get_load_trend_optimized(start_date, end_date, mode, feeder_id=feeder.id if feeder_slug else None)
+    load_trend = get_load_trend_optimized(start_date, end_date, mode, feeder_id=feeder.id if feeder_slug else None, target_energy=target_energy)
     
     # Station Load Trend & Metrics
     if feeder_slug:
