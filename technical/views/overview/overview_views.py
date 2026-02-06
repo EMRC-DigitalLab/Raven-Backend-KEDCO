@@ -188,9 +188,14 @@ def calculate_energy_delivered_network(from_date, to_date):
     
     Returns:
         Total energy in MWh
+    Returns:
+        Total energy in MWh
     """
-    # Get IDs of onboarded feeders
-    onboarded_feeder_ids = list(Feeder.objects.filter(is_onboarded=True).values_list('id', flat=True))
+    # Get IDs of onboarded feeders (SEASONALITY AWARE)
+    onboarded_feeders = Feeder.objects.filter(is_onboarded=True).filter(
+        Q(onboarded_at__lte=to_date) | Q(onboarded_at__isnull=True)
+    )
+    onboarded_feeder_ids = list(onboarded_feeders.values_list('id', flat=True))
     
     if not onboarded_feeder_ids:
         return 0.0
@@ -262,28 +267,41 @@ def calculate_hours_of_supply_feeder(feeder_id, from_date, to_date):
 
 def calculate_hours_of_supply_network(from_date, to_date):
     """
-    Calculate average hours of supply per day across ALL ONBOARDED feeders.
+    Calculate average hours of supply per day across ONBOARDED feeders for the period.
     
-    For single-day queries (especially today): Returns total hours per feeder (not daily average)
-    For multi-day queries: Returns average hours per day per feeder
+    SEASONALITY FIX:
+    - Only include feeders that were onboarded ON or BEFORE the end date.
+    - This prevents historical averages (e.g., last Sept) from being diluted by 
+      feeders onboarded recently (e.g., today).
     
-    UPDATED Logic:
-    - Numerator: Sum of all hours supplied across all onboarded feeders with data
-    - Denominator: Total ONBOARDED feeders × Days (or just feeders for single day)
-    - This properly accounts for onboarded feeders with no data (they contribute 0)
+    Logic:
+    - Numerator: Sum of all hours supplied across valid feeders
+    - Denominator: Count of valid feeders × Days
     """
-    total_feeders = Feeder.objects.filter(is_onboarded=True).count()
+    # Filter feeders that were onboarded by the end of the period
+    # If onboarded_at is NULL, assumes it's an old feeder (include it)
+    # Also ensures we only look at currently 'is_onboarded=True' feeders to be safe, 
+    # or you might want to remove is_onboarded=True check if you want to include historically active ones.
+    # For now, we assume we only care about currently active ones that were active back then.
+    
+    # Needs Q object
+    
+    onboarded_feeders = Feeder.objects.filter(is_onboarded=True).filter(
+        Q(onboarded_at__lte=to_date) | Q(onboarded_at__isnull=True)
+    )
+    
+    total_feeders = onboarded_feeders.count()
     
     if total_feeders == 0:
         return 0.0
     
-    # Get IDs of onboarded feeders
-    onboarded_feeder_ids = list(Feeder.objects.filter(is_onboarded=True).values_list('id', flat=True))
+    # Get IDs of these valid feeders
+    onboarded_feeder_ids = list(onboarded_feeders.values_list('id', flat=True))
     
     if not onboarded_feeder_ids:
         return 0.0
     
-    # Get total hours supplied across ONBOARDED feeders only
+    # Get total hours supplied across these feeders only
     placeholders = ','.join(['%s'] * len(onboarded_feeder_ids))
     query = f"""
         SELECT 
@@ -1757,31 +1775,27 @@ def technical_overview_view(request):
     }
     
     # =====================================================================
-    # FIX: Ensure supply + interruption + turnaround = 24 hours
-    # Derive INTERRUPTION = 24 - supply - turnaround (turnaround is from data)
+    # FIX: Interruption Duration = 24 - Supply Hours
+    # (averaged across all onboarded feeders)
     # Apply to current + history values
     # =====================================================================
-    def derive_interruption(supply, turnaround):
-        """Derive interruption duration so supply + interruption + turnaround = 24"""
+    def derive_interruption(supply):
+        """Derive interruption duration = 24 - supply"""
         supply = min(max(supply, 0), 24)
-        turnaround = min(max(turnaround, 0), 24 - supply)
-        return round(max(24 - supply - turnaround, 0), 2)
+        return round(24 - supply, 2)
     
     # Fix current value
     supply_curr = response_data["supply_and_quality"]["supply_hours"]["current"]
-    turnaround_curr = response_data["supply_and_quality"]["turnaround_time"]["current"]
-    response_data["supply_and_quality"]["interruption_duration"]["current"] = derive_interruption(supply_curr, turnaround_curr)
+    response_data["supply_and_quality"]["interruption_duration"]["current"] = derive_interruption(supply_curr)
     
     # Fix history values
     supply_hist = response_data["supply_and_quality"]["supply_hours"].get("history", [])
-    turnaround_hist = response_data["supply_and_quality"]["turnaround_time"].get("history", [])
     interrupt_hist = response_data["supply_and_quality"]["interruption_duration"].get("history", [])
     
     for i in range(len(interrupt_hist)):
-        if i < len(supply_hist) and i < len(turnaround_hist):
+        if i < len(supply_hist):
             s = supply_hist[i].get("value", 0)
-            t = turnaround_hist[i].get("value", 0)
-            interrupt_hist[i]["value"] = derive_interruption(s, t)
+            interrupt_hist[i]["value"] = derive_interruption(s)
     
     # Add feeder info to response if filtered
     if feeder_slug:
