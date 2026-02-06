@@ -80,9 +80,17 @@ class TechnicalCalculator:
         
         if not hourly_loads.exists():
             return {
+                'avg_load': Decimal('0'),
                 'avg_peak_load': Decimal('0'),
                 'max_peak_load': Decimal('0')
             }
+        
+        # Calculate true average load across all hourly readings (for energy calculation)
+        # Only count hours where load > 0 (power was flowing)
+        positive_loads = hourly_loads.filter(load_mw__gt=0)
+        avg_load = positive_loads.aggregate(
+            avg=Avg('load_mw')
+        )['avg'] or Decimal('0')
         
         # Calculate daily peak loads first
         daily_peaks = hourly_loads.values('feeder', 'date').annotate(
@@ -100,6 +108,7 @@ class TechnicalCalculator:
         )['max'] or Decimal('0')
         
         return {
+            'avg_load': avg_load,  # True average (for energy calculation)
             'avg_peak_load': avg_peak,
             'max_peak_load': max_peak
         }
@@ -397,6 +406,17 @@ class TechnicalCalculator:
                 infrastructure_metrics
             )
             
+            # =====================================================================
+            # Energy Delivered: ALWAYS use calculated formula for accuracy
+            # Formula: Average Load × Total Supply Hours
+            # This ensures consistent, mathematically correct values
+            # =====================================================================
+            total_supply_hours = float(supply_metrics.get('total_supply_hours', 0))
+            avg_load = float(load_metrics.get('avg_load', 0))
+            
+            # Energy (MWh) = Average Power (MW) × Total Time (hours across month)
+            final_energy = Decimal(str(round(avg_load * total_supply_hours, 2)))
+            
             # Combine all metrics
             all_metrics = {
                 **energy_metrics,
@@ -405,6 +425,8 @@ class TechnicalCalculator:
                 **interruption_metrics['summary_breakdown'],
                 **infrastructure_metrics,
                 **reliability_metrics,
+                # Override energy with calculated/final value
+                'total_energy_delivered': final_energy,
                 'total_interruptions': interruption_metrics['total_interruptions'],
                 'avg_daily_interruptions': interruption_metrics['avg_daily_interruptions'],
                 'avg_interruption_duration': interruption_metrics['avg_interruption_duration'],
