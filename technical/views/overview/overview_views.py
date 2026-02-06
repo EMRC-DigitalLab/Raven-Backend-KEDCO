@@ -142,60 +142,49 @@ def get_previous_periods(start_date, end_date, period_days, count=4):
 
 def calculate_energy_delivered_feeder(feeder_id, from_date, to_date):
     """
-    Calculate total energy delivered for a single feeder using hybrid approach.
-    OPTIMIZED: Uses bulk queries instead of day-by-day loops.
+    Calculate total energy delivered for a single feeder.
     
-    Priority:
-    1. Use EnergyDelivered if available for a date
-    2. Fall back to HourlyLoad sum for dates without EnergyDelivered
+    CORRECT FORMULA: Feeder_Avg_Load × Feeder_Supply_Hours
+    
+    - avg_load = AVG(load_mw) where load_mw > 0
+    - supply_hours = COUNT(hours where load_mw > 0)
+    - energy = avg_load × supply_hours
     
     Returns:
         Total energy in MWh
     """
-    # Step 1: Get all EnergyDelivered records for this feeder in one query
-    energy_records = EnergyDelivered.objects.filter(
-        feeder_id=feeder_id,
-        date__range=(from_date, to_date)
-    ).values('date', 'energy_mwh')
+    query = """
+        SELECT 
+            COALESCE(
+                AVG(load_mw) * COUNT(*),
+                0
+            ) as feeder_energy
+        FROM technical_hourlyload
+        WHERE feeder_id = %s
+            AND date BETWEEN %s AND %s
+            AND load_mw > 0
+    """
     
-    # Create a dict of date -> energy for quick lookup
-    energy_dict = {record['date']: float(record['energy_mwh']) for record in energy_records}
-    
-    # Step 2: Identify missing dates
-    missing_dates = []
-    current_date = from_date
-    while current_date <= to_date:
-        if current_date not in energy_dict:
-            missing_dates.append(current_date)
-        current_date += timedelta(days=1)
-    
-    # Step 3: Get HourlyLoad sums for missing dates in one query
-    if missing_dates:
-        hourly_sums = HourlyLoad.objects.filter(
-            feeder_id=feeder_id,
-            date__in=missing_dates
-        ).values('date').annotate(
-            total=Sum('load_mw')
-        )
-        
-        # Add hourly sums to energy_dict
-        for record in hourly_sums:
-            energy_dict[record['date']] = float(record['total'] or 0)
-    
-    # Step 4: Sum all energy values
-    total_energy = sum(energy_dict.values())
+    with connection.cursor() as cursor:
+        cursor.execute(query, [feeder_id, from_date, to_date])
+        result = cursor.fetchone()
+        total_energy = float(result[0]) if result and result[0] else 0.0
     
     return round(total_energy, 2)
 
 
 def calculate_energy_delivered_network(from_date, to_date):
     """
-    Calculate total energy delivered across all ONBOARDED feeders using hybrid approach.
-    OPTIMIZED: Uses raw SQL for maximum performance.
+    Calculate total energy delivered across all ONBOARDED feeders.
     
-    Priority:
-    1. Use EnergyDelivered if available for a feeder-date combination
-    2. Fall back to HourlyLoad sum for feeder-dates without EnergyDelivered
+    CORRECT FORMULA: SUM over all feeders of (Feeder_Avg_Load × Feeder_Supply_Hours)
+    
+    For each feeder:
+      - Get average load (MW) = AVG(load_mw) where load_mw > 0
+      - Get supply hours = COUNT(hours where load_mw > 0)
+      - Feeder energy = avg_load × supply_hours
+    
+    Total network energy = SUM of all feeder energies
     
     Returns:
         Total energy in MWh
@@ -208,57 +197,26 @@ def calculate_energy_delivered_network(from_date, to_date):
     
     feeder_placeholders = ','.join(['%s'] * len(onboarded_feeder_ids))
     
-    # Use raw SQL for optimal performance
-    # This query does a LEFT JOIN to get EnergyDelivered, and falls back to HourlyLoad sum
+    # Per-feeder calculation: AVG(load_mw) × COUNT(hours with load > 0)
     query = f"""
-        WITH date_series AS (
-            SELECT generate_series(
-                %s::date,
-                %s::date,
-                '1 day'::interval
-            )::date AS date
-        ),
-        feeder_dates AS (
-            SELECT 
-                f.id as feeder_id,
-                ds.date
-            FROM (
-                SELECT unnest(ARRAY[{feeder_placeholders}]::uuid[]) as id
-            ) f
-            CROSS JOIN date_series ds
-        ),
-        energy_delivered_data AS (
-            SELECT 
-                fd.feeder_id,
-                fd.date,
-                ed.energy_mwh as delivered_energy
-            FROM feeder_dates fd
-            LEFT JOIN technical_energydelivered ed 
-                ON ed.feeder_id = fd.feeder_id 
-                AND ed.date = fd.date
-        ),
-        hourly_load_data AS (
+        SELECT 
+            COALESCE(
+                SUM(feeder_energy),
+                0
+            ) as total_energy
+        FROM (
             SELECT 
                 feeder_id,
-                date,
-                SUM(load_mw) as hourly_energy
+                AVG(load_mw) * COUNT(*) as feeder_energy
             FROM technical_hourlyload
             WHERE date BETWEEN %s AND %s
                 AND feeder_id IN ({feeder_placeholders})
-            GROUP BY feeder_id, date
-        )
-        SELECT 
-            COALESCE(
-                SUM(COALESCE(ed.delivered_energy, hl.hourly_energy, 0)),
-                0
-            ) as total_energy
-        FROM energy_delivered_data ed
-        LEFT JOIN hourly_load_data hl 
-            ON hl.feeder_id = ed.feeder_id 
-            AND hl.date = ed.date
+                AND load_mw > 0
+            GROUP BY feeder_id
+        ) feeder_energies
     """
     
-    params = [from_date, to_date] + onboarded_feeder_ids + [from_date, to_date] + onboarded_feeder_ids
+    params = [from_date, to_date] + onboarded_feeder_ids
     
     with connection.cursor() as cursor:
         cursor.execute(query, params)
@@ -1586,13 +1544,11 @@ def technical_overview_view(request):
         prev_end = prev_start + timedelta(days=period_days - 1)
     
     # Calculate highlight metrics - OPTIMIZED with feeder filter
-    # Energy delivered: Use hybrid approach (EnergyDelivered + HourlyLoad fallback)
-    if feeder_slug:
-        energy_now = calculate_energy_delivered_feeder(feeder.id, start_date, end_date)
-        energy_prev = calculate_energy_delivered_feeder(feeder.id, prev_start, prev_end)
-    else:
-        energy_now = calculate_energy_delivered_network(start_date, end_date)
-        energy_prev = calculate_energy_delivered_network(prev_start, prev_end)
+    # =====================================================================
+    # FIXED: Energy = Average Station Load (MW) × Supply Hours/Day × Days
+    # This formula is mathematically correct: Energy (MWh) = Power (MW) × Time (h)
+    # =====================================================================
+    # Note: We'll calculate energy AFTER we have station_load and supply_hours
     
     # Average load - network-wide or single feeder
     if feeder_slug:
@@ -1701,6 +1657,17 @@ def technical_overview_view(request):
             period_days
         )
     
+    # =====================================================================
+    # CALCULATE ENERGY: SUM of (Feeder_Avg_Load × Feeder_Supply_Hours)
+    # This is the mathematically correct per-feeder approach
+    # =====================================================================
+    if feeder_slug:
+        energy_now = calculate_energy_delivered_feeder(feeder.id, start_date, end_date)
+        energy_prev = calculate_energy_delivered_feeder(feeder.id, prev_start, prev_end)
+    else:
+        energy_now = calculate_energy_delivered_network(start_date, end_date)
+        energy_prev = calculate_energy_delivered_network(prev_start, prev_end)
+    
     # Technical breakdown
     if feeder_slug:
         # For single feeder
@@ -1788,6 +1755,17 @@ def technical_overview_view(request):
         "load_trend": load_trend,
         "station_load_trend": station_load_trend
     }
+    
+    # =====================================================================
+    # FIX: Ensure supply + interruption + turnaround = 24 hours
+    # Derive turnaround = 24 - supply - interruption
+    # =====================================================================
+    supply_val = min(max(response_data["supply_and_quality"]["supply_hours"]["current"], 0), 24)
+    interrupt_val = min(max(response_data["supply_and_quality"]["interruption_duration"]["current"], 0), 24 - supply_val)
+    derived_turnaround = max(24 - supply_val - interrupt_val, 0)
+    
+    # Update the turnaround_time with derived value
+    response_data["supply_and_quality"]["turnaround_time"]["current"] = round(derived_turnaround, 2)
     
     # Add feeder info to response if filtered
     if feeder_slug:

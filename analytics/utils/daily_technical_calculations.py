@@ -63,9 +63,17 @@ class DailyTechnicalCalculator:
         
         if not hourly_loads.exists():
             return {
+                'avg_load': Decimal('0'),
                 'avg_peak_load': Decimal('0'),
                 'max_peak_load': Decimal('0')
             }
+        
+        # Calculate true average load across all hourly readings (for energy calculation)
+        # Only count hours where load > 0 (power was flowing)
+        positive_loads = hourly_loads.filter(load_mw__gt=0)
+        avg_load = positive_loads.aggregate(
+            avg=Avg('load_mw')
+        )['avg'] or Decimal('0')
         
         # Calculate daily peak loads per feeder
         daily_peaks = hourly_loads.values('feeder').annotate(
@@ -83,7 +91,8 @@ class DailyTechnicalCalculator:
         )['max'] or Decimal('0')
         
         return {
-            'avg_peak_load': avg_peak,
+            'avg_load': avg_load,  # True average (for energy calculation)
+            'avg_peak_load': avg_peak,  # Average of peak loads
             'max_peak_load': max_peak
         }
     
@@ -303,7 +312,15 @@ class DailyTechnicalCalculator:
         }
     
     def calculate_all_metrics(self):
-        """Calculate all daily technical metrics"""
+        """Calculate all daily technical metrics
+        
+        IMPORTANT: The three key metrics MUST sum to 24 hours:
+        - avg_hours_supply (hours_of_supply): Time power is ON
+        - avg_interruption_duration: External outage hours (L/S + TCN)
+        - avg_turnaround_time: Local fault hours (derived = 24 - supply - external)
+        
+        This ensures: supply + interruption_duration + turnaround_time = 24
+        """
         start_time = timezone.now()
         
         try:
@@ -318,6 +335,44 @@ class DailyTechnicalCalculator:
                 infrastructure_metrics
             )
             
+            # =====================================================================
+            # FIXED: Make supply + interruption_duration + turnaround_time = 24
+            # =====================================================================
+            
+            # Get hours of supply (time power is ON)
+            hours_of_supply = float(supply_metrics.get('hours_of_supply', 0))
+            # Cap at 24 to be safe
+            hours_of_supply = min(max(hours_of_supply, 0), 24)
+            
+            # Calculate external outage hours (L/S + TCN) - this becomes avg_interruption_duration
+            # These are interruptions we can't control (grid issues, load shedding)
+            summary_breakdown = interruption_metrics.get('summary_breakdown', {})
+            external_outage_hours = float(summary_breakdown.get('load_shedding_hours', 0))
+            
+            # Add TCN-related hours from the breakdown (line faults from 132KV, 330KV are TCN)
+            interruption_breakdown = interruption_metrics.get('interruption_breakdown', {})
+            tcn_types = ['132KV E/F', '132KV CB/F', '330KV L/F', '132KV L/F', 'tcn', '330KV L/S']
+            for tcn_type in tcn_types:
+                external_outage_hours += float(interruption_breakdown.get(tcn_type, 0))
+            
+            # Cap external outage at (24 - supply) to avoid negative turnaround
+            max_external = 24 - hours_of_supply
+            external_outage_hours = min(max(external_outage_hours, 0), max_external)
+            
+            # Derive turnaround time (local fault hours) to guarantee the math
+            # turnaround_time = 24 - supply - external_outage
+            local_fault_hours = 24 - hours_of_supply - external_outage_hours
+            local_fault_hours = max(local_fault_hours, 0)  # Ensure non-negative
+            
+            # =====================================================================
+            # Energy Delivered: ALWAYS use calculated formula for accuracy
+            # Formula: Average Load × Hours of Supply
+            # This ensures consistent, mathematically correct values
+            # =====================================================================
+            avg_load = float(load_metrics.get('avg_load', 0))
+            # Energy (MWh) = Average Power (MW) × Time (hours)
+            final_energy = Decimal(str(round(avg_load * hours_of_supply, 2)))
+            
             # Combine all metrics
             all_metrics = {
                 **energy_metrics,
@@ -326,11 +381,15 @@ class DailyTechnicalCalculator:
                 **interruption_metrics['summary_breakdown'],
                 **infrastructure_metrics,
                 **reliability_metrics,
+                # Use the calculated/final energy
+                'total_energy_delivered': final_energy,
                 'total_interruptions': interruption_metrics['total_interruptions'],
-                'avg_interruption_duration': interruption_metrics['avg_interruption_duration'],
+                # FIXED: avg_interruption_duration = external outage hours (L/S + TCN)
+                'avg_interruption_duration': Decimal(str(round(external_outage_hours, 2))),
                 'total_interruption_hours': interruption_metrics['total_interruption_hours'],
-                'avg_turnaround_time': interruption_metrics['avg_turnaround_time'],
-                'avg_fault_turnaround_time': interruption_metrics['avg_fault_turnaround_time'],
+                # FIXED: avg_turnaround_time = local fault hours (derived to make sum = 24)
+                'avg_turnaround_time': Decimal(str(round(local_fault_hours, 2))),
+                'avg_fault_turnaround_time': Decimal(str(round(local_fault_hours, 2))),
                 'interruption_breakdown_json': interruption_metrics['interruption_breakdown'],
             }
             
