@@ -1758,14 +1758,30 @@ def technical_overview_view(request):
     
     # =====================================================================
     # FIX: Ensure supply + interruption + turnaround = 24 hours
-    # Derive turnaround = 24 - supply - interruption
+    # Derive INTERRUPTION = 24 - supply - turnaround (turnaround is from data)
+    # Apply to current + history values
     # =====================================================================
-    supply_val = min(max(response_data["supply_and_quality"]["supply_hours"]["current"], 0), 24)
-    interrupt_val = min(max(response_data["supply_and_quality"]["interruption_duration"]["current"], 0), 24 - supply_val)
-    derived_turnaround = max(24 - supply_val - interrupt_val, 0)
+    def derive_interruption(supply, turnaround):
+        """Derive interruption duration so supply + interruption + turnaround = 24"""
+        supply = min(max(supply, 0), 24)
+        turnaround = min(max(turnaround, 0), 24 - supply)
+        return round(max(24 - supply - turnaround, 0), 2)
     
-    # Update the turnaround_time with derived value
-    response_data["supply_and_quality"]["turnaround_time"]["current"] = round(derived_turnaround, 2)
+    # Fix current value
+    supply_curr = response_data["supply_and_quality"]["supply_hours"]["current"]
+    turnaround_curr = response_data["supply_and_quality"]["turnaround_time"]["current"]
+    response_data["supply_and_quality"]["interruption_duration"]["current"] = derive_interruption(supply_curr, turnaround_curr)
+    
+    # Fix history values
+    supply_hist = response_data["supply_and_quality"]["supply_hours"].get("history", [])
+    turnaround_hist = response_data["supply_and_quality"]["turnaround_time"].get("history", [])
+    interrupt_hist = response_data["supply_and_quality"]["interruption_duration"].get("history", [])
+    
+    for i in range(len(interrupt_hist)):
+        if i < len(supply_hist) and i < len(turnaround_hist):
+            s = supply_hist[i].get("value", 0)
+            t = turnaround_hist[i].get("value", 0)
+            interrupt_hist[i]["value"] = derive_interruption(s, t)
     
     # Add feeder info to response if filtered
     if feeder_slug:
