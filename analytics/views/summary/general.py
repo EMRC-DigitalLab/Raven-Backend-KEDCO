@@ -42,15 +42,20 @@ class OptimizedOverviewAPIView(APIView):
         # Determine months to fetch
         months = self._get_months_list(target, from_date, to_date)
         
+        # Get feeder type (default to 11kv)
+        feeder_type = request.GET.get("feeder_type", "11kv")
+        if feeder_type not in ["11kv", "33kv"]:
+            feeder_type = "11kv"
+        
         # Try to get cached response first
-        cache_key = self._get_cache_key(months)
+        cache_key = self._get_cache_key(months, feeder_type)
         cached_response = cache.get(cache_key)
         # if cached_response:
         #     logger.debug(f"Returning cached overview data for {len(months)} months")
         #     return Response(cached_response)
         
         # Fetch data using summary models
-        overview_data = self._fetch_overview_data(months)
+        overview_data = self._fetch_overview_data(months, feeder_type)
         
         # Calculate deltas and format response
         response_data = self._format_response_data(overview_data)
@@ -79,14 +84,15 @@ class OptimizedOverviewAPIView(APIView):
             ]
             return list(reversed(months))
     
-    def _fetch_overview_data(self, months):
+    def _fetch_overview_data(self, months, feeder_type):
         """Fetch overview data using summary models with fallback"""
         overview_data = []
         missing_months = []
         
         # Bulk fetch all available summaries
         summaries = MonthlyOverviewSummary.objects.filter(
-            month__in=months
+            month__in=months,
+            feeder_type=feeder_type
         ).order_by('month')
         
         # Create lookup dict for fast access
@@ -104,7 +110,7 @@ class OptimizedOverviewAPIView(APIView):
         
         # Queue missing months for background calculation
         if missing_months:
-            self._queue_missing_summaries(missing_months)
+            self._queue_missing_summaries(missing_months, feeder_type)
         
         return overview_data
     
@@ -152,12 +158,13 @@ class OptimizedOverviewAPIView(APIView):
             "_summary_missing": True,
         }
     
-    def _queue_missing_summaries(self, missing_months):
+    def _queue_missing_summaries(self, missing_months, feeder_type):
         """Queue missing summaries for background calculation"""
         for month in missing_months:
             try:
                 update_monthly_overview_summary.delay(
                     month.strftime('%Y-%m-%d'),
+                    kwargs={'feeder_type': feeder_type},
                     priority='api_request'
                 )
                 logger.info(f"Queued summary calculation for missing month: {month}")
@@ -204,10 +211,10 @@ class OptimizedOverviewAPIView(APIView):
             return round(((current - previous) / previous) * 100, 2)
         return None
     
-    def _get_cache_key(self, months):
+    def _get_cache_key(self, months, feeder_type):
         """Generate cache key for the request"""
         month_str = "_".join(m.strftime("%Y%m") for m in months)
-        return f"overview_api_{month_str}"
+        return f"overview_api_{feeder_type}_{month_str}"
     
     def _get_cache_timeout(self, months):
         """Determine cache timeout based on data freshness"""

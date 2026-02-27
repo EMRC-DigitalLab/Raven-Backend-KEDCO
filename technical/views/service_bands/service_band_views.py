@@ -9,6 +9,7 @@ from django.utils import timezone
 import logging
 from common.models import State, Band, Feeder
 from technical.models import HourlyLoad, FeederInterruption
+from technical.utils.energy_utils import calculate_energy_delivered
 from technical.constants import TURNAROUND_EXCLUSIONS
 
 logger = logging.getLogger(__name__)
@@ -303,23 +304,25 @@ def calculate_band_customer_count(feeder_ids, from_date):
     return 0
 
 
-def calculate_band_metrics(band, from_date, to_date, state_filter=None):
+def calculate_band_metrics(band, from_date, to_date, state_filter=None, voltage_level=None):
     """
     Calculate all metrics for a single band using direct SQL queries.
     No caching - always calculates fresh data.
-    
-    UPDATED: 
+
+    UPDATED:
     - Only considers ONBOARDED feeders for all calculations
     - Uses actual elapsed time for current periods (fractional days)
     - Uses timezone-aware datetime ranges for consistency
     """
-    # Get ONBOARDED feeders for this band with optional state filtering
+    # Get ONBOARDED feeders for this band with optional state and voltage filtering
     feeders_query = Feeder.objects.filter(
         band=band,
         is_onboarded=True
     )
     if state_filter:
         feeders_query = feeders_query.filter(business_district__state=state_filter)
+    if voltage_level:
+        feeders_query = feeders_query.filter(voltage_level=voltage_level)
     
     feeder_ids = list(feeders_query.values_list('id', flat=True))
     feeder_count = len(feeder_ids)
@@ -351,18 +354,29 @@ def calculate_band_metrics(band, from_date, to_date, state_filter=None):
     
     # 4. Peak load (ONBOARDED feeders only)
     avg_peak_load = calculate_band_peak_load_sql(feeder_ids, from_date, to_date)
-    
+
     # 5. Customer count
     customer_count = calculate_band_customer_count(feeder_ids, from_date)
-    
+
+    # 6. Energy delivered (smart: meter primary, system fallback per feeder)
+    energy_result = calculate_energy_delivered(feeder_ids, from_date, to_date)
+
+    avg_supply_capped = min(float(avg_supply), 24.0)
+    duration_of_interruption = round(24.0 - avg_supply_capped, 2)  # always sums to 24
+
     return {
-        "average_duration_of_supply": float(avg_supply),
-        "duration_of_interruption": float(avg_duration),
+        "average_duration_of_supply": round(avg_supply_capped, 2),
+        "duration_of_interruption": duration_of_interruption,
         "turnaround_time": float(turnaround_time),
         "feeder_tripping_count": int(local_fault_count),  # FTC = local faults only
         "number_of_feeders": int(feeder_count),
         "customer_count": int(customer_count),
-        "average_peak_load": float(avg_peak_load)
+        "average_peak_load": float(avg_peak_load),
+        "energy_delivered": energy_result['total_mwh'],
+        "energy_source_breakdown": {
+            "meter_feeders": energy_result['meter_feeders'],
+            "system_feeders": energy_result['system_feeders'],
+        },
     }
 
 
@@ -489,15 +503,19 @@ def technical_service_band_summary(request):
         except ValueError as e:
             return Response({"error": str(e)}, status=400)
     
+    # Parse voltage level filter
+    feeder_type_param = request.GET.get("feeder_type", "")
+    voltage_level = feeder_type_param if feeder_type_param in ("11kv", "33kv") else None
+
     # Get all service bands
     bands = Band.objects.all().order_by('name')
-    
+
     band_data = []
-    
+
     for band in bands:
         try:
             # Calculate metrics directly (no caching) - ONBOARDED feeders only
-            band_metrics = calculate_band_metrics(band, from_date, to_date, state_filter)
+            band_metrics = calculate_band_metrics(band, from_date, to_date, state_filter, voltage_level=voltage_level)
             
             band_data.append({
                 "band": band.name,

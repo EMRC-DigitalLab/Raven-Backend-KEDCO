@@ -161,6 +161,27 @@ Each model uses a UUID as the primary key.
 
 ---
 
+---
+
+## Analytics & Summary Endpoints
+
+### 1. **Monthly Overview Summary**
+- **Endpoint:** `/api/analytics/summary/overview/`
+- **Description:** Pre-calculated combined metrics for the main dashboard.
+- **Parameters:** `month`, `year`, `feeder_type` (`11kv`|`33kv`)
+
+### 2. **Monthly Technical Summary**
+- **Endpoint:** `/api/analytics/summary/technical/overview/`
+- **Description:** Detailed technical metrics with geographic filtering.
+- **Parameters:** `feeder_type`, `state`, `district`, `feeder`, `mode`
+
+### 3. **Daily Technical Summary**
+- **Endpoint:** `/api/analytics/summary/technical/daily/`
+- **Description:** Daily-level time-series technical metrics.
+- **Parameters:** `from_date`, `to_date`, `feeder_type`
+
+---
+
 ## Notes
 
 - All models use a UUID primary key by default (`UUIDModel`)

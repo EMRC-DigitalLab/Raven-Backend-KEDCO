@@ -1,5 +1,5 @@
 # reports/views.py
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework import status
@@ -21,9 +21,8 @@ from .serializers import (
     ReportSectionSerializer,
     GeneratedReportSerializer,
     ReportGenerateRequestSerializer,
-    AvailableSectionSerializer,
 )
-from .services import ReportDataService, get_available_sections, SECTION_DEFINITIONS
+from .services import ReportDataService, get_available_sections
 from .pdf_generator import PDFGenerator
 
 from common.models import State, BusinessDistrict, InjectionSubstation, Feeder, Band
@@ -90,7 +89,7 @@ class ReportTemplateDetailView(RetrieveUpdateDestroyAPIView):
 # =============================================================================
 
 @api_view(['GET'])
-def available_sections(request):
+def available_sections(_request):
     """
     Get list of available section types with their configurations.
     """
@@ -177,7 +176,7 @@ def reorder_sections(request, template_id):
 # =============================================================================
 
 @api_view(['GET'])
-def filter_options(request):
+def filter_options(_request):
     """
     Get available filter options (states, districts, substations, bands, feeders).
     """
@@ -190,16 +189,23 @@ def filter_options(request):
     feeders = Feeder.objects.all().select_related(
         'band', 'substation', 'business_district'
     ).values(
-        'id', 'name', 'band__name', 'substation__name', 
-        'business_district__name', 'substation_id', 'business_district_id', 'band_id'
+        'id', 'name', 'band__name', 'substation__name',
+        'business_district__name', 'substation_id', 'business_district_id', 'band_id',
+        'voltage_level',
     ).order_by('name')
-    
+
+    voltage_levels = [
+        {'id': '11kv', 'name': '11kV Feeders'},
+        {'id': '33kv', 'name': '33kV Feeders'},
+    ]
+
     return Response({
         "states": list(states),
         "districts": list(districts),
         "substations": list(substations),
         "bands": list(bands),
         "feeders": list(feeders),
+        "voltage_levels": voltage_levels,
     })
 
 

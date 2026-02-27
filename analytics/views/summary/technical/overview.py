@@ -229,8 +229,13 @@ class OptimizedTechnicalOverviewAPIView(APIView):
         filter_params = {
             'state': None,
             'business_district': None,
-            'feeder': None
+            'feeder': None,
+            'feeder_type': request.GET.get('feeder_type', '11kv')
         }
+        
+        # Ensure feeder_type is valid
+        if filter_params['feeder_type'] not in ['11kv', '33kv']:
+            filter_params['feeder_type'] = '11kv'
         
         # Parse state filter
         state_name = request.GET.get('state')
@@ -297,7 +302,7 @@ class OptimizedTechnicalOverviewAPIView(APIView):
         else:
             filter_summary.append("National")
             
-        logger.info(f"Applied filters: {', '.join(filter_summary)}")
+        logger.info(f"Applied filters: {', '.join(filter_summary)} ({filter_params['feeder_type']})")
         
         return filter_params
     
@@ -443,6 +448,8 @@ class OptimizedTechnicalOverviewAPIView(APIView):
         base_filters = {'month__in': periods}
         
         # Determine aggregation level based on filter params
+        base_filters['feeder_type'] = filter_params['feeder_type']
+        
         if filter_params['feeder']:
             # Single feeder - get exact match
             base_filters['feeder'] = filter_params['feeder']
@@ -612,6 +619,7 @@ class OptimizedTechnicalOverviewAPIView(APIView):
             'feeder__isnull': False,
             'state__isnull': True,
             'business_district__isnull': True,
+            'feeder_type': filter_params['feeder_type'], # Add feeder_type filter
         }
         
         # Apply geographic filters
@@ -736,6 +744,7 @@ class OptimizedTechnicalOverviewAPIView(APIView):
             'feeder__isnull': False,  # Only feeder-level summaries
             'state__isnull': True,
             'business_district__isnull': True,
+            'feeder_type': filter_params['feeder_type'], # Add feeder_type filter
         }
         
         # Apply geographic filters to the feeder relationship
@@ -864,7 +873,10 @@ class OptimizedTechnicalOverviewAPIView(APIView):
         
         # Build query filters similar to monthly
         base_filters = {'date__in': all_dates}
-        
+
+        # Apply feeder_type filter (voltage level) — same as monthly mode
+        base_filters['feeder_type'] = filter_params['feeder_type']
+
         # Apply same aggregation logic as monthly
         if filter_params['feeder']:
             base_filters['feeder'] = filter_params['feeder']
@@ -957,6 +969,7 @@ class OptimizedTechnicalOverviewAPIView(APIView):
             'feeder__isnull': False,
             'state__isnull': True,
             'business_district__isnull': True,
+            'feeder_type': filter_params['feeder_type'],
         }
         
         # Apply geographic filters
@@ -1308,6 +1321,7 @@ class OptimizedTechnicalOverviewAPIView(APIView):
             # Fallback
             return {"series": [], "date": None, "unit": "MW"}
 
+
     def _get_daily_load_trend(self, trend_date, filter_params):
         """Get hourly load trend for a specific date"""
         # Build feeder filter
@@ -1319,6 +1333,10 @@ class OptimizedTechnicalOverviewAPIView(APIView):
         elif filter_params['state']:
             feeder_filter['feeder__business_district__state'] = filter_params['state']
         
+        # Add feeder_type filter
+        if filter_params.get('feeder_type'):
+            feeder_filter['feeder__voltage_level'] = filter_params['feeder_type']
+
         # Get hourly data for the specified date
         hourly_data = HourlyLoad.objects.filter(
             date=trend_date,
@@ -1357,6 +1375,10 @@ class OptimizedTechnicalOverviewAPIView(APIView):
         elif filter_params['state']:
             feeder_filter['feeder__business_district__state'] = filter_params['state']
         
+        # Add feeder_type filter
+        if filter_params.get('feeder_type'):
+            feeder_filter['feeder__voltage_level'] = filter_params['feeder_type']
+
         # Calculate the date range for the month
         days_in_month = monthrange(target_month.year, target_month.month)[1]
         month_start = target_month
@@ -1400,6 +1422,10 @@ class OptimizedTechnicalOverviewAPIView(APIView):
         elif filter_params['state']:
             feeder_filter['feeder__business_district__state'] = filter_params['state']
         
+        # Add feeder_type filter
+        if filter_params.get('feeder_type'):
+            feeder_filter['feeder__voltage_level'] = filter_params['feeder_type']
+
         # Calculate the date range for the year
         year_start = target_year.replace(month=1, day=1)
         year_end = target_year.replace(month=12, day=31)
@@ -1603,7 +1629,13 @@ class OptimizedTechnicalOverviewAPIView(APIView):
             return target_date >= today
     
     def _get_cache_key(self, mode, date_info, filter_params):
-        """Generate cache key for the request - FIXED to handle all modes"""
+        """Generate a unique cache key for the technical data request"""
+        # Create a string representation of the filters
+        filter_str = f"s:{filter_params['state'].id if filter_params['state'] else 'N'}_"
+        filter_str += f"d:{filter_params['business_district'].id if filter_params['business_district'] else 'N'}_"
+        filter_str += f"f:{filter_params['feeder'].id if filter_params['feeder'] else 'N'}_"
+        filter_str += f"vt:{filter_params['feeder_type']}"
+        
         if mode == 'monthly':
             date_str = "_".join(m.strftime("%Y%m") for m in date_info['periods'])
         elif mode == 'yearly':
@@ -1618,14 +1650,6 @@ class OptimizedTechnicalOverviewAPIView(APIView):
                 # Fallback: use target_date if available
                 target_date = date_info.get('target_date', date.today())
                 date_str = f"{target_date}_{target_date}"
-        
-        filter_str = ""
-        if filter_params['feeder']:
-            filter_str = f"_f_{filter_params['feeder'].id}"
-        elif filter_params['business_district']:
-            filter_str = f"_d_{filter_params['business_district'].id}"
-        elif filter_params['state']:
-            filter_str = f"_s_{filter_params['state'].id}"
         
         # NOTE: We're not including load trend date in cache key 
         # because we handle that separately in the main get() method
@@ -1754,6 +1778,7 @@ class TechnicalHealthAPIView(APIView):
                 'state': filter_params['state'].name if filter_params['state'] else None,
                 'business_district': filter_params['business_district'].name if filter_params['business_district'] else None,
                 'feeder': filter_params['feeder'].slug if filter_params['feeder'] else None,
+                'feeder_type': filter_params['feeder_type'] if filter_params.get('feeder_type') else None,
             },
             'monthly_summaries': {
                 'total_summaries': total_monthly,

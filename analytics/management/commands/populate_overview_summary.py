@@ -100,9 +100,15 @@ class Command(BaseCommand):
         
         # Process months in batches
         batch_size = options['batch_size']
+        voltages = ['11kv', '33kv']
+
         for i in range(0, len(months_to_process), batch_size):
             batch = months_to_process[i:i + batch_size]
-            self.process_batch(batch, options)
+            for voltage in voltages:
+                if self.verbosity >= 1:
+                    self.stdout.write(f'Processing batch: {batch[0]} to {batch[-1]} ({voltage})')
+                for month in batch:
+                    self.process_single_month(month, voltage, options)
         
         if self.verbosity >= 1:
             self.stdout.write(
@@ -203,28 +209,22 @@ class Command(BaseCommand):
             
             self.stdout.write(f"  {month} - {action} (last: {last_calc})")
 
-    def process_batch(self, months, options):
-        """Process a batch of months"""
-        if self.verbosity >= 1:
-            self.stdout.write(f'Processing batch: {months[0]} to {months[-1]}')
-        
-        for month in months:
-            self.process_single_month(month, options)
+    # Removed process_batch as its logic is now inline in handle to support voltage iteration
 
-    def process_single_month(self, month_date, options):
+    def process_single_month(self, month_date, feeder_type, options):
         """Process a single month"""
         start_time = time.time()
         
         if self.verbosity >= 2:
-            self.stdout.write(f'Processing {month_date}...', ending='')
+            self.stdout.write(f'Processing {month_date} ({feeder_type})...', ending='')
         
         try:
             with transaction.atomic():
                 # Calculate all metrics
-                metrics = self.calculate_month_metrics(month_date)
+                metrics = self.calculate_month_metrics(month_date, feeder_type)
                 
                 # Calculate source data hash
-                source_hash = self.calculate_source_data_hash(month_date)
+                source_hash = self.calculate_source_data_hash(month_date, feeder_type)
                 
                 # Calculate processing duration
                 duration = timedelta(seconds=time.time() - start_time)
@@ -232,6 +232,7 @@ class Command(BaseCommand):
                 # Create or update summary
                 summary, created = MonthlyOverviewSummary.objects.update_or_create(
                     month=month_date,
+                    feeder_type=feeder_type,
                     defaults={
                         **metrics,
                         'source_data_hash': source_hash,
@@ -246,7 +247,7 @@ class Command(BaseCommand):
                 if self.verbosity >= 2:
                     self.stdout.write(f' ✅ {action} ({duration_ms}ms)')
                 elif self.verbosity >= 1:
-                    self.stdout.write(f'{month_date} - {action}')
+                    self.stdout.write(f'{month_date} ({feeder_type}) - {action}')
         
         except Exception as e:
             self.stdout.write(
@@ -256,9 +257,10 @@ class Command(BaseCommand):
                 import traceback
                 self.stdout.write(traceback.format_exc())
 
-    def calculate_month_metrics(self, month_date):
+    def calculate_month_metrics(self, month_date, feeder_type):
         """Calculate all metrics for a given month"""
-        # Commercial data
+        # Commercial data - currently not separated by voltage in source models, 
+        # so we'll use the same aggregate for both for now, or filter if we can.
         comm_data = MonthlyCommercialSummary.objects.filter(month=month_date).aggregate(
             revenue_billed=Sum("revenue_billed"),
             revenue_collected=Sum("revenue_collected"),
@@ -266,17 +268,15 @@ class Command(BaseCommand):
             customers_responded=Sum("customers_responded"),
         )
         
-        # Energy data
-        energy_delivered = EnergyDelivered.objects.filter(
-            date__year=month_date.year,
-            date__month=month_date.month
-        ).aggregate(total=Sum("energy_mwh"))["total"] or Decimal("0")
+        # Technical metrics - Use TechnicalCalculator for consistency and Reading-Priority logic
+        from analytics.utils.technical_calculations import TechnicalCalculator
+        calc = TechnicalCalculator(
+            month_date=month_date,
+            feeder_type=feeder_type
+        )
+        tech_metrics = calc.calculate_all_metrics()
         
-        energy_billed = MonthlyEnergyBilled.objects.filter(
-            month=month_date
-        ).aggregate(total=Sum("energy_mwh"))["total"] or Decimal("0")
-        
-        # Financial data
+        # Financial data - OPEX/Salaries are company-wide.
         opex_costs = Opex.objects.filter(
             date__year=month_date.year,
             date__month=month_date.month
@@ -299,21 +299,25 @@ class Command(BaseCommand):
             month__month=month_date.month
         ).aggregate(total=Sum("amount"))["total"] or Decimal("0")
         
-        # Technical metrics
-        avg_hours_supply = self.calculate_avg_hours_supply(month_date)
-        avg_interruption_duration, avg_turnaround_time = self.calculate_interruption_metrics(month_date)
-        
         # Extract values with defaults
         revenue_billed = comm_data['revenue_billed'] or Decimal("0")
         revenue_collected = comm_data['revenue_collected'] or Decimal("0")
-        customers_billed = comm_data['customers_billed'] or 0
-        customers_responded = comm_data['customers_responded'] or 0
+        energy_delivered = tech_metrics['total_energy_delivered']
+        energy_billed = MonthlyEnergyBilled.objects.filter(
+            month=month_date,
+            feeder__voltage_level=feeder_type,
+            feeder__is_onboarded=True,
+            feeder__status='active'
+        ).aggregate(total=Sum("energy_mwh"))["total"] or Decimal("0")
         
         # Calculate efficiency metrics
         billing_eff = (energy_billed / energy_delivered * 100) if energy_delivered > 0 else Decimal("0")
         collection_eff = (revenue_collected / revenue_billed * 100) if revenue_billed > 0 else Decimal("0")
         atc_losses = Decimal("100") - (billing_eff * collection_eff / 100) if billing_eff and collection_eff else Decimal("100")
         energy_collected = energy_billed * (collection_eff / 100) if energy_delivered > 0 else Decimal("0")
+        
+        customers_billed = comm_data['customers_billed'] or 0
+        customers_responded = comm_data['customers_responded'] or 0
         customer_response_rate = (customers_responded / customers_billed * 100) if customers_billed > 0 else Decimal("0")
         
         total_cost = opex_costs + salary_costs + nbet_costs + mo_costs
@@ -324,11 +328,12 @@ class Command(BaseCommand):
             'customers_billed': customers_billed,
             'customers_responded': customers_responded,
             'energy_delivered': energy_delivered,
+            'energy_source': tech_metrics.get('energy_source', 'system'),
             'energy_billed': energy_billed,
             'energy_collected': energy_collected,
-            'avg_hours_supply': avg_hours_supply,
-            'avg_interruption_duration': avg_interruption_duration,
-            'avg_turnaround_time': avg_turnaround_time,
+            'avg_hours_supply': tech_metrics['avg_hours_of_supply'],
+            'avg_interruption_duration': tech_metrics['avg_interruption_duration'],
+            'avg_turnaround_time': tech_metrics['avg_turnaround_time'],
             'total_cost': total_cost,
             'total_opex': opex_costs,
             'total_salaries': salary_costs,
@@ -340,62 +345,21 @@ class Command(BaseCommand):
             'customer_response_rate': customer_response_rate,
         }
 
-    def calculate_avg_hours_supply(self, month_date):
-        """Calculate average hours of supply for the month"""
-        hourly_loads = HourlyLoad.objects.filter(
-            date__year=month_date.year,
-            date__month=month_date.month,
-            load_mw__gt=0
-        ).values('feeder', 'date').annotate(
-            daily_hours=Count('hour')
-        )
-        
-        if hourly_loads.exists():
-            return hourly_loads.aggregate(avg=Avg('daily_hours'))["avg"] or Decimal("0")
-        return Decimal("0")
 
-    def calculate_interruption_metrics(self, month_date):
-        """Calculate interruption and turnaround metrics INCLUDING UNRESOLVED"""
-        from technical.models import FeederInterruption, calculate_interruption_metrics
-        from datetime import datetime
-        import calendar
-    
-        # Get interruptions for the month
-        if month_date.month == 12:
-            end_date = month_date.replace(year=month_date.year + 1, month=1, day=1) - timedelta(days=1)
-        else:
-            end_date = month_date.replace(month=month_date.month + 1, day=1) - timedelta(days=1)
-    
-        interruptions = FeederInterruption.objects.filter(
-            occurred_at__year=month_date.year,
-            occurred_at__month=month_date.month
-        )
-    
-        if not interruptions.exists():
-            return Decimal("0"), Decimal("0")
-    
-        # Calculate end of month for reference time
-        days_in_month = calendar.monthrange(month_date.year, month_date.month)[1]
-        end_of_month = datetime(month_date.year, month_date.month, days_in_month, 23, 59, 59)
-        end_of_month = timezone.make_aware(end_of_month) if timezone.is_naive(end_of_month) else end_of_month
-    
-        # Use utility function (includes unresolved interruptions)
-        metrics = calculate_interruption_metrics(interruptions, reference_time=end_of_month)
-    
-        avg_duration = Decimal(str(metrics['avg_duration_hours']))
-        avg_turnaround = avg_duration  # Same for overview
-    
-        return avg_duration, avg_turnaround
-
-    def calculate_source_data_hash(self, month_date):
+    def calculate_source_data_hash(self, month_date, feeder_type):
         """Calculate hash of source data to detect changes"""
         # Create a string representation of key source data
-        source_data = f"{month_date}"
+        source_data = f"{month_date}_{feeder_type}"
         
         # Add counts and sums from key tables
         comm_count = MonthlyCommercialSummary.objects.filter(month=month_date).count()
         energy_count = EnergyDelivered.objects.filter(
-            date__year=month_date.year, date__month=month_date.month
+            date__year=month_date.year, 
+            date__month=month_date.month,
+            feeder__voltage_level=feeder_type,
+            feeder__is_onboarded=True,
+            feeder__status='active',
+            energy_mwh__lt=1000 # Only count valid readings
         ).count()
         opex_count = Opex.objects.filter(
             date__year=month_date.year, date__month=month_date.month
