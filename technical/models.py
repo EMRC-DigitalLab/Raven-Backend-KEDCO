@@ -212,71 +212,6 @@ class FeederInterruption(UUIDModel, models.Model):
             models.Index(fields=['feeder', 'occurred_at']),
         ]
 
-    # @property
-    # def duration_hours(self):
-    #     """Get duration in hours, including unresolved interruptions"""
-    #     if self.restored_at and self.occurred_at:
-    #         # Make both naive for calculation to avoid timezone issues
-    #         occurred = self.occurred_at
-    #         restored = self.restored_at
-            
-    #         # Convert to naive if aware
-    #         if occurred.tzinfo is not None:
-    #             occurred = occurred.replace(tzinfo=None)
-    #         if restored.tzinfo is not None:
-    #             restored = restored.replace(tzinfo=None)
-            
-    #         return (restored - occurred).total_seconds() / 3600
-    #     elif self.occurred_at:
-    #         # For unresolved interruptions, calculate duration from occurrence to now
-    #         occurred = self.occurred_at
-    #         now = timezone.now()
-            
-    #         # Convert to naive if aware
-    #         if occurred.tzinfo is not None:
-    #             occurred = occurred.replace(tzinfo=None)
-    #         if now.tzinfo is not None:
-    #             now = now.replace(tzinfo=None)
-            
-    #         return (now - occurred).total_seconds() / 3600
-    #     return 0
-    
-    # @property
-    # def is_resolved(self):
-    #     """Check if the interruption has been resolved"""
-    #     return self.restored_at is not None
-    
-    # @property
-    # def is_load_shedding(self):
-    #     """Check if this is a load shedding interruption"""
-    #     return self.interruption_type and 'L/S' in self.interruption_type
-    
-    # def get_duration_hours_at_time(self, reference_time=None):
-    #     """Get duration in hours at a specific reference time
-        
-    #     Args:
-    #         reference_time: datetime to calculate duration to (defaults to now)
-            
-    #     Returns:
-    #         float: Duration in hours
-    #     """
-    #     if reference_time is None:
-    #         reference_time = timezone.now()
-        
-    #     if self.restored_at and self.restored_at <= reference_time:
-    #         # Interruption was resolved before reference time
-    #         return (self.restored_at - self.occurred_at).total_seconds() / 3600
-    #     elif self.occurred_at <= reference_time:
-    #         # Interruption was ongoing at reference time
-    #         return (reference_time - self.occurred_at).total_seconds() / 3600
-    #     else:
-    #         # Interruption hadn't started yet at reference time
-    #         return 0
-    
-    # def __str__(self):
-    #     status = "Resolved" if self.is_resolved else "Ongoing"
-    #     return f"{self.feeder.name} - {self.interruption_type} - {status}"
-
     @property
     def duration_hours(self):
         """Get duration in hours, including unresolved interruptions"""
@@ -293,7 +228,36 @@ class FeederInterruption(UUIDModel, models.Model):
             
             return (now - occurred).total_seconds() / 3600
 
-        return 0
+    @property
+    def is_resolved(self):
+        """Check if the interruption has been resolved"""
+        return self.restored_at is not None
+    
+    @property
+    def is_load_shedding(self):
+        """Check if this is a load shedding interruption"""
+        return self.interruption_type and 'L/S' in self.interruption_type
+
+    def get_duration_hours_at_time(self, reference_time=None):
+        """Get duration in hours at a specific reference time"""
+        if reference_time is None:
+            reference_time = timezone.now()
+        
+        # Ensure consistency in timezone awareness
+        ref = reference_time
+        occ = self.occurred_at
+        res = self.restored_at
+
+        if timezone.is_aware(ref): ref = timezone.make_naive(ref)
+        if timezone.is_aware(occ): occ = timezone.make_naive(occ)
+        if res and timezone.is_aware(res): res = timezone.make_naive(res)
+
+        if res and res <= ref:
+            return (res - occ).total_seconds() / 3600
+        elif occ <= ref:
+            return (ref - occ).total_seconds() / 3600
+        else:
+            return 0
 
 
 # Utility function for duration calculations

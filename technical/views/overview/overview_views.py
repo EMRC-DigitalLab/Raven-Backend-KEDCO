@@ -56,7 +56,12 @@ def parse_date_range(request):
     elif mode == "daily":
         from_date_str = request.GET.get("from_date")
         if from_date_str:
-            from_date = parse_datetime(from_date_str).date()
+            # Handle both 'YYYY-MM-DD' and 'YYYY-MM-DDTHH:MM:SS' formats
+            try:
+                parsed = parse_datetime(from_date_str)
+                from_date = parsed.date() if parsed else datetime.strptime(from_date_str[:10], '%Y-%m-%d').date()
+            except (ValueError, AttributeError):
+                from_date = datetime.now().date()
         else:
             from_date = datetime.now().date()
         
@@ -143,92 +148,35 @@ def get_previous_periods(start_date, end_date, period_days, count=4):
 def calculate_energy_delivered_feeder(feeder_id, from_date, to_date):
     """
     Calculate total energy delivered for a single feeder.
-    
-    CORRECT FORMULA: Feeder_Avg_Load × Feeder_Supply_Hours
-    
-    - avg_load = AVG(load_mw) where load_mw > 0
-    - supply_hours = COUNT(hours where load_mw > 0)
-    - energy = avg_load × supply_hours
-    
-    Returns:
-        Total energy in MWh
+    Uses smart meter-primary / system-fallback logic.
+    Returns full result dict: {total_mwh, meter_feeders, system_feeders}.
     """
-    query = """
-        SELECT 
-            COALESCE(
-                AVG(load_mw) * COUNT(*),
-                0
-            ) as feeder_energy
-        FROM technical_hourlyload
-        WHERE feeder_id = %s
-            AND date BETWEEN %s AND %s
-            AND load_mw > 0
-    """
-    
-    with connection.cursor() as cursor:
-        cursor.execute(query, [feeder_id, from_date, to_date])
-        result = cursor.fetchone()
-        total_energy = float(result[0]) if result and result[0] else 0.0
-    
-    return round(total_energy, 2)
+    from technical.utils.energy_utils import calculate_energy_delivered
+    return calculate_energy_delivered([feeder_id], from_date, to_date)
 
 
-def calculate_energy_delivered_network(from_date, to_date):
+def calculate_energy_delivered_network(from_date, to_date, voltage_level=None):
     """
     Calculate total energy delivered across all ONBOARDED feeders.
-    
-    CORRECT FORMULA: SUM over all feeders of (Feeder_Avg_Load × Feeder_Supply_Hours)
-    
-    For each feeder:
-      - Get average load (MW) = AVG(load_mw) where load_mw > 0
-      - Get supply hours = COUNT(hours where load_mw > 0)
-      - Feeder energy = avg_load × supply_hours
-    
-    Total network energy = SUM of all feeder energies
-    
-    Returns:
-        Total energy in MWh
-    Returns:
-        Total energy in MWh
+    Optionally filtered by voltage_level ('11kv' or '33kv').
+    Uses smart meter-primary / system-fallback logic per feeder.
+    Returns full result dict: {total_mwh, meter_feeders, system_feeders}.
     """
+    from technical.utils.energy_utils import calculate_energy_delivered
+
     # Get IDs of onboarded feeders (SEASONALITY AWARE)
     onboarded_feeders = Feeder.objects.filter(is_onboarded=True).filter(
         Q(onboarded_at__lte=to_date) | Q(onboarded_at__isnull=True)
     )
+    if voltage_level:
+        onboarded_feeders = onboarded_feeders.filter(voltage_level=voltage_level)
     onboarded_feeder_ids = list(onboarded_feeders.values_list('id', flat=True))
-    
+
     if not onboarded_feeder_ids:
-        return 0.0
-    
-    feeder_placeholders = ','.join(['%s'] * len(onboarded_feeder_ids))
-    
-    # Per-feeder calculation: AVG(load_mw) × COUNT(hours with load > 0)
-    query = f"""
-        SELECT 
-            COALESCE(
-                SUM(feeder_energy),
-                0
-            ) as total_energy
-        FROM (
-            SELECT 
-                feeder_id,
-                AVG(load_mw) * COUNT(*) as feeder_energy
-            FROM technical_hourlyload
-            WHERE date BETWEEN %s AND %s
-                AND feeder_id IN ({feeder_placeholders})
-                AND load_mw > 0
-            GROUP BY feeder_id
-        ) feeder_energies
-    """
-    
-    params = [from_date, to_date] + onboarded_feeder_ids
-    
-    with connection.cursor() as cursor:
-        cursor.execute(query, params)
-        result = cursor.fetchone()
-        total_energy = float(result[0]) if result and result[0] else 0.0
-    
-    return round(total_energy, 2)
+        return {'total_mwh': 0.0, 'meter_feeders': 0, 'system_feeders': 0}
+
+    return calculate_energy_delivered(onboarded_feeder_ids, from_date, to_date)
+
 
 
 def calculate_hours_of_supply_feeder(feeder_id, from_date, to_date):
@@ -265,30 +213,16 @@ def calculate_hours_of_supply_feeder(feeder_id, from_date, to_date):
     return round(min(avg_hours, 24.0), 2)
 
 
-def calculate_hours_of_supply_network(from_date, to_date):
+def calculate_hours_of_supply_network(from_date, to_date, voltage_level=None):
     """
     Calculate average hours of supply per day across ONBOARDED feeders for the period.
-    
-    SEASONALITY FIX:
-    - Only include feeders that were onboarded ON or BEFORE the end date.
-    - This prevents historical averages (e.g., last Sept) from being diluted by 
-      feeders onboarded recently (e.g., today).
-    
-    Logic:
-    - Numerator: Sum of all hours supplied across valid feeders
-    - Denominator: Count of valid feeders × Days
+    Optionally filtered by voltage_level ('11kv' or '33kv').
     """
-    # Filter feeders that were onboarded by the end of the period
-    # If onboarded_at is NULL, assumes it's an old feeder (include it)
-    # Also ensures we only look at currently 'is_onboarded=True' feeders to be safe, 
-    # or you might want to remove is_onboarded=True check if you want to include historically active ones.
-    # For now, we assume we only care about currently active ones that were active back then.
-    
-    # Needs Q object
-    
     onboarded_feeders = Feeder.objects.filter(is_onboarded=True).filter(
         Q(onboarded_at__lte=to_date) | Q(onboarded_at__isnull=True)
     )
+    if voltage_level:
+        onboarded_feeders = onboarded_feeders.filter(voltage_level=voltage_level)
     
     total_feeders = onboarded_feeders.count()
     
@@ -332,48 +266,39 @@ def calculate_hours_of_supply_network(from_date, to_date):
     return round(min(avg_hours, 24.0), 2)
 
 
-def calculate_average_load_network(from_date, to_date):
+def calculate_average_load_network(from_date, to_date, voltage_level=None):
     """
     Calculate average load per feeder per hour across ONBOARDED feeders only.
-    
-    For single-day queries: Uses actual elapsed hours
-    For multi-day queries: Uses total hours in period
-    
-    Formula: Total Load / (Total ONBOARDED Feeders × Total Hours in Period)
-    Uses actual elapsed hours for current periods.
+    Optionally filtered by voltage_level ('11kv' or '33kv').
     """
     today = timezone.now().date()
     now = timezone.now()
     
     # Calculate period hours
     if to_date == today:
-        # For current day, calculate actual elapsed hours
         full_days = (to_date - from_date).days
         current_hour = now.hour
         current_minute = now.minute
-        
-        # Include minutes for precision
         hours_elapsed = current_hour + (current_minute / 60.0)
         period_hours = (full_days * 24) + hours_elapsed
-        
-        # ✅ CRITICAL: Ensure minimum period to avoid division by zero
         if period_hours == 0:
-            period_hours = 1  # 1 hour minimum
+            period_hours = 1
     else:
-        # For past periods, use full hours
         period_days = (to_date - from_date).days + 1
         period_hours = period_days * 24
     
-    total_feeders = Feeder.objects.filter(is_onboarded=True).count()
+    feeder_qs = Feeder.objects.filter(is_onboarded=True)
+    if voltage_level:
+        feeder_qs = feeder_qs.filter(voltage_level=voltage_level)
+    total_feeders = feeder_qs.count()
     
     if total_feeders == 0:
         return 0.0
     
-    # Sum all load_mw values for ONBOARDED feeders only
-    result = HourlyLoad.objects.filter(
-        date__range=(from_date, to_date),
-        feeder__is_onboarded=True
-    ).aggregate(total_load=Sum('load_mw'))
+    load_filter = {'date__range': (from_date, to_date), 'feeder__is_onboarded': True}
+    if voltage_level:
+        load_filter['feeder__voltage_level'] = voltage_level
+    result = HourlyLoad.objects.filter(**load_filter).aggregate(total_load=Sum('load_mw'))
     
     total_load = float(result['total_load'] or 0)
     
@@ -519,31 +444,17 @@ def calculate_interruption_duration_feeder(feeder_id, from_date, to_date, exclud
     return round(avg_hours, 2)
 
 
-def calculate_interruption_duration_network(from_date, to_date, exclude_types=None):
+def calculate_interruption_duration_network(from_date, to_date, exclude_types=None, voltage_level=None):
     """
     Calculate average interruption duration per day across ALL ONBOARDED feeders.
-    
-    For single-day queries (especially today): Returns total hours per feeder (not daily average)
-    For multi-day queries: Returns average hours per day per feeder
-    
-    UPDATED Logic:
-    - Includes ALL interruptions active during the period (not just those that started in the period)
-    - Calculates only the hours that fall within the filtered period boundaries
-    - Numerator: Sum of all interruption hours across all ONBOARDED feeders with interruptions
-    - Denominator: Total ONBOARDED feeders × Days (or just feeders for single day)
-    - This properly accounts for onboarded feeders with no interruptions (they contribute 0)
-    
-    NOTE: For feeders with multiple overlapping interruptions, we cap each feeder's
-    daily interruption at 24 hours to avoid double-counting.
+    Optionally filtered by voltage_level ('11kv' or '33kv').
     """
-    # ✅ FIXED: Check for future dates
     now = timezone.now()
     today = now.date()
     
     if from_date > today:
         return 0.0
     
-    # Determine if single-day or multi-day query
     is_single_day = (from_date == to_date)
     
     if is_single_day:
@@ -552,13 +463,15 @@ def calculate_interruption_duration_network(from_date, to_date, exclude_types=No
         period_days = (to_date - from_date).days + 1
         max_hours_per_feeder = 24.0 * period_days
     
-    total_feeders = Feeder.objects.filter(is_onboarded=True).count()
+    feeder_qs = Feeder.objects.filter(is_onboarded=True)
+    if voltage_level:
+        feeder_qs = feeder_qs.filter(voltage_level=voltage_level)
+    total_feeders = feeder_qs.count()
     
     if total_feeders == 0:
         return 0.0
     
-    # Get IDs of onboarded feeders
-    onboarded_feeder_ids = list(Feeder.objects.filter(is_onboarded=True).values_list('id', flat=True))
+    onboarded_feeder_ids = list(feeder_qs.values_list('id', flat=True))
     
     if not onboarded_feeder_ids:
         return 0.0
@@ -639,33 +552,21 @@ def calculate_interruption_duration_network(from_date, to_date, exclude_types=No
     return round(avg_hours_per_day, 2)
 
 
-def calculate_average_interruption_duration_network(from_date, to_date):
+def calculate_average_interruption_duration_network(from_date, to_date, voltage_level=None):
     """
     Calculate average duration per interruption for ONBOARDED feeders.
-    
-    INCLUDES:
-    1. Interruptions that OCCURRED within the period (resolved or ongoing)
-    2. Interruptions that started BEFORE the period but are still ongoing (not resolved)
-    
-    CORRECTED: Only counts the hours that fall WITHIN the filtered period.
-    - If interruption started before period: counts from period start
-    - If interruption ongoing: counts to NOW (if today) or end of period
-    - If interruption ended after period: counts to period end
-    
-    Formula: SUM(clipped interruption durations) / COUNT(interruptions)
-    Result: Average hours per interruption event (not per day)
-    
-    For ongoing interruptions, uses NOW as the end time.
+    Optionally filtered by voltage_level ('11kv' or '33kv').
     """
     now = timezone.now()
     today = now.date()
     
-    # ✨ CRITICAL: If querying future dates, return 0 (no data available yet)
     if from_date > today:
         return 0.0
     
-    # Get IDs of onboarded feeders
-    onboarded_feeder_ids = list(Feeder.objects.filter(is_onboarded=True).values_list('id', flat=True))
+    feeder_qs = Feeder.objects.filter(is_onboarded=True)
+    if voltage_level:
+        feeder_qs = feeder_qs.filter(voltage_level=voltage_level)
+    onboarded_feeder_ids = list(feeder_qs.values_list('id', flat=True))
     
     if not onboarded_feeder_ids:
         return 0.0
@@ -780,19 +681,15 @@ def calculate_average_interruption_duration_feeder(feeder_id, from_date, to_date
     return round(avg_duration, 2)
 
 
-def get_ongoing_interruptions_info_network(from_date):
+def get_ongoing_interruptions_info_network(from_date, voltage_level=None):
     """
     Get information about ongoing interruptions for ONBOARDED feeders.
-    
-    ONLY includes interruptions that:
-    - Started BEFORE the period (occurred_at < from_date)
-    - Are still ongoing (restored_at IS NULL)
-    
-    Returns:
-        dict with count, avg_age_hours, oldest_hours
+    Optionally filtered by voltage_level ('11kv' or '33kv').
     """
-    # Get IDs of onboarded feeders
-    onboarded_feeder_ids = list(Feeder.objects.filter(is_onboarded=True).values_list('id', flat=True))
+    feeder_qs = Feeder.objects.filter(is_onboarded=True)
+    if voltage_level:
+        feeder_qs = feeder_qs.filter(voltage_level=voltage_level)
+    onboarded_feeder_ids = list(feeder_qs.values_list('id', flat=True))
     
     if not onboarded_feeder_ids:
         return {
@@ -955,19 +852,11 @@ def get_interruption_breakdown_feeder(feeder_id, start_date, end_date, period_da
     }
 
 
-def get_interruption_breakdown_network(start_date, end_date, period_days, period_offset=0):
+def get_interruption_breakdown_network(start_date, end_date, period_days, period_offset=0, voltage_level=None):
     """
     Get interruption COUNT breakdown across ALL ONBOARDED feeders.
-    
-    UPDATED Logic:
-    - Counts ONLY interruptions that occurred within the period
-    - Does NOT include interruptions that started before (even if still ongoing)
-    - Only considers interruptions from ONBOARDED feeders
-    - Uses timezone-aware datetime ranges for consistency
-    
-    Returns count of interruptions by type across all onboarded feeders in the period.
+    Optionally filtered by voltage_level ('11kv' or '33kv').
     """
-    # Calculate target period
     if period_days == 1:
         target_start = start_date - timedelta(days=period_offset)
         target_end = target_start
@@ -985,8 +874,10 @@ def get_interruption_breakdown_network(start_date, end_date, period_days, period
         target_end = target_start + timedelta(days=period_days - 1)
         label = f"Cycle {period_offset + 1}"
     
-    # Get IDs of onboarded feeders
-    onboarded_feeder_ids = list(Feeder.objects.filter(is_onboarded=True).values_list('id', flat=True))
+    feeder_qs = Feeder.objects.filter(is_onboarded=True)
+    if voltage_level:
+        feeder_qs = feeder_qs.filter(voltage_level=voltage_level)
+    onboarded_feeder_ids = list(feeder_qs.values_list('id', flat=True))
     
     if not onboarded_feeder_ids:
         return {
@@ -1005,32 +896,21 @@ def get_interruption_breakdown_network(start_date, end_date, period_days, period
     )
     
     # Count interruptions that OCCURRED within the period only, for ONBOARDED feeders
-    feeder_placeholders = ','.join(['%s'] * len(onboarded_feeder_ids))
-    query = f"""
-        SELECT 
-            COALESCE(interruption_type, 'Unknown') as itype,
-            COUNT(*) as count
-        FROM technical_feederinterruption
-        WHERE occurred_at >= %s
-            AND occurred_at <= %s
-            AND feeder_id IN ({feeder_placeholders})
-        GROUP BY interruption_type
-    """
-    
-    params = [start_datetime, end_datetime] + onboarded_feeder_ids
-    
-    with connection.cursor() as cursor:
-        cursor.execute(query, params)
-        results = cursor.fetchall()
-    
-    # Process results
+    # Use ORM with feeder__voltage_level join (consistent with feeder_count filtering)
+    qs = FeederInterruption.objects.filter(
+        occurred_at__gte=start_datetime,
+        occurred_at__lte=end_datetime,
+        feeder__is_onboarded=True,
+    )
+    if voltage_level:
+        qs = qs.filter(feeder__voltage_level=voltage_level)
+
     type_counts = {}
     total_count = 0
-    
-    for itype, count in results:
-        count_val = int(count) if count else 0
-        type_counts[itype or 'Unknown'] = count_val
-        total_count += count_val
+    for row in qs.values('interruption_type').annotate(count=Count('id')):
+        itype = row['interruption_type'] or 'Unknown'
+        type_counts[itype] = row['count']
+        total_count += row['count']
     
     return {
         "month": label,
@@ -1149,7 +1029,7 @@ def calculate_trend_analytics(series, mode, target_energy=None):
     return analytics
 
 
-def get_load_trend_optimized(start_date, end_date, mode, feeder_id=None, target_energy=None):
+def get_load_trend_optimized(start_date, end_date, mode, feeder_id=None, target_energy=None, voltage_level=None):
     """
     Get load trend data optimized for the selected mode.
     For monthly mode: returns daily averages for each day of the month
@@ -1157,6 +1037,7 @@ def get_load_trend_optimized(start_date, end_date, mode, feeder_id=None, target_
     
     UPDATED: 
     - Only considers ONBOARDED feeders (when not filtering by specific feeder)
+    - Optionally filtered by voltage_level ('11kv' or '33kv')
     - Returns 0 for missing values up to current time
     - Does not return future time slots
     - Includes analytics (peak, min, avg, variance, anomalies)
@@ -1168,6 +1049,7 @@ def get_load_trend_optimized(start_date, end_date, mode, feeder_id=None, target_
         mode: Mode (monthly, daily, custom, etc.)
         feeder_id: Optional feeder ID to filter by specific feeder
         target_energy: Optional target energy offtake in MWh for comparison
+        voltage_level: Optional '11kv' or '33kv' to narrow to a voltage tier
     """
     today = timezone.now().date()
     now = timezone.now()
@@ -1179,6 +1061,8 @@ def get_load_trend_optimized(start_date, end_date, mode, feeder_id=None, target_
     else:
         # Only consider onboarded feeders
         base_filter['feeder__is_onboarded'] = True
+        if voltage_level:
+            base_filter['feeder__voltage_level'] = voltage_level
     
     if mode == "monthly":
         # Get average load for each day of the month
@@ -1296,9 +1180,10 @@ def get_load_trend_optimized(start_date, end_date, mode, feeder_id=None, target_
 
 
 
-def calculate_average_station_load_network(from_date, to_date):
+def calculate_average_station_load_network(from_date, to_date, voltage_level=None):
     """
     Calculate average STATION load (Sum of all feeder loads) per hour across period.
+    Optionally filtered by voltage_level ('11kv' or '33kv').
     
     Formula: Average of (Sum of Feeder Loads per Hour)
     """
@@ -1310,6 +1195,8 @@ def calculate_average_station_load_network(from_date, to_date):
         'feeder__is_onboarded': True,
         'date__range': (from_date, to_date)
     }
+    if voltage_level:
+        base_filter['feeder__voltage_level'] = voltage_level
     
     # Calculate Station Hourly Totals
     station_hourly = HourlyLoad.objects.filter(
@@ -1324,11 +1211,12 @@ def calculate_average_station_load_network(from_date, to_date):
     return round(float(result['avg_station_load'] or 0), 2)
 
 
-def get_station_load_trend(start_date, end_date, mode):
+def get_station_load_trend(start_date, end_date, mode, voltage_level=None):
     """
     Get STATION TOTAL load trend.
     For daily mode: returns Station Total (Sum of feeders) for each hour
     For monthly mode: returns Average Station Load for each day
+    Optionally filtered by voltage_level ('11kv' or '33kv').
     """
     today = timezone.now().date()
     now = timezone.now()
@@ -1338,6 +1226,8 @@ def get_station_load_trend(start_date, end_date, mode):
         'feeder__is_onboarded': True,
         'date__range': (start_date, end_date)
     }
+    if voltage_level:
+        base_filter['feeder__voltage_level'] = voltage_level
 
     if mode == "monthly":
         # Calculate Hourly Station Totals first
@@ -1518,6 +1408,10 @@ def technical_overview_view(request):
     period_days = date_info["period_days"]
     mode = date_info["mode"]
     
+    # ✅ Parse voltage level filter (feeder_type)
+    feeder_type = request.GET.get("feeder_type", "")
+    voltage_level = feeder_type if feeder_type in ("11kv", "33kv") else None
+    
     # Parse feeder filter (optional)
     feeder_slug = request.GET.get("feeder")
     feeder_filter = {}
@@ -1529,7 +1423,6 @@ def technical_overview_view(request):
             feeder = Feeder.objects.get(slug=feeder_slug)
             feeder_filter = {'feeder': feeder}
             feeder_name = feeder.name
-            print(f"DEBUG: Filtering by feeder: {feeder_name} ({feeder_slug})")
         except Feeder.DoesNotExist:
             return Response(
                 {"error": f"Feeder with slug '{feeder_slug}' not found"},
@@ -1538,6 +1431,8 @@ def technical_overview_view(request):
     else:
         # When not filtering by specific feeder, only consider ONBOARDED feeders
         feeder_filter = {'feeder__is_onboarded': True}
+        if voltage_level:
+            feeder_filter['feeder__voltage_level'] = voltage_level
     
     # Parse optional target_energy parameter for offtake comparison
     target_energy = request.GET.get("target_energy")
@@ -1572,40 +1467,32 @@ def technical_overview_view(request):
     if feeder_slug:
         load_now = calculate_average_load_feeder(feeder.id, start_date, end_date)
         load_prev = calculate_average_load_feeder(feeder.id, prev_start, prev_end)
-        
-        # For single feeder, Station Load is same as Feeder Load
         station_load_now = load_now
         station_load_prev = load_prev
     else:
-        load_now = calculate_average_load_network(start_date, end_date)
-        load_prev = calculate_average_load_network(prev_start, prev_end)
-        
-        # Calculate Station Load Average (Scalar)
-        station_load_now = calculate_average_station_load_network(start_date, end_date)
-        station_load_prev = calculate_average_station_load_network(prev_start, prev_end)
+        load_now = calculate_average_load_network(start_date, end_date, voltage_level=voltage_level)
+        load_prev = calculate_average_load_network(prev_start, prev_end, voltage_level=voltage_level)
+        station_load_now = calculate_average_station_load_network(start_date, end_date, voltage_level=voltage_level)
+        station_load_prev = calculate_average_station_load_network(prev_start, prev_end, voltage_level=voltage_level)
     
-    # UPDATED: Interruption count - ONLY count those that OCCURRED within period
+    # Interruption count - only those that OCCURRED within period
     if feeder_slug:
         interruptions_now = FeederInterruption.objects.filter(
             occurred_at__date__range=(start_date, end_date),
             feeder=feeder
         ).count()
-        
         interruptions_prev = FeederInterruption.objects.filter(
             occurred_at__date__range=(prev_start, prev_end),
             feeder=feeder
         ).count()
     else:
-        # Only count interruptions from ONBOARDED feeders
-        interruptions_now = FeederInterruption.objects.filter(
-            occurred_at__date__range=(start_date, end_date),
-            feeder__is_onboarded=True
-        ).count()
-        
-        interruptions_prev = FeederInterruption.objects.filter(
-            occurred_at__date__range=(prev_start, prev_end),
-            feeder__is_onboarded=True
-        ).count()
+        int_filter_now = {'occurred_at__date__range': (start_date, end_date), 'feeder__is_onboarded': True}
+        int_filter_prev = {'occurred_at__date__range': (prev_start, prev_end), 'feeder__is_onboarded': True}
+        if voltage_level:
+            int_filter_now['feeder__voltage_level'] = voltage_level
+            int_filter_prev['feeder__voltage_level'] = voltage_level
+        interruptions_now = FeederInterruption.objects.filter(**int_filter_now).count()
+        interruptions_prev = FeederInterruption.objects.filter(**int_filter_prev).count()
     
     # Calculate supply and quality metrics with history and feeder filter
     if feeder_slug:
@@ -1642,59 +1529,47 @@ def technical_overview_view(request):
             period_days
         )
     else:
-        # For all ONBOARDED feeders, use network-wide calculation
+        # For all ONBOARDED feeders, use network-wide calculation (voltage-filtered)
         supply_hours = get_metric_with_history(
-            calculate_hours_of_supply_network, 
+            lambda s, e: calculate_hours_of_supply_network(s, e, voltage_level=voltage_level),
             start_date, 
             end_date, 
             period_days
         )
         
-        # Interruption duration (includes all types) - NETWORK-WIDE (ONBOARDED only)
         interruption_duration = get_metric_with_history(
-            lambda s, e: calculate_interruption_duration_network(s, e),
-            start_date,
-            end_date,
-            period_days
+            lambda s, e: calculate_interruption_duration_network(s, e, voltage_level=voltage_level),
+            start_date, end_date, period_days
         )
         
-        # Turnaround time (excludes L/S and TCN types) - NETWORK-WIDE (ONBOARDED only)
         turnaround_time = get_metric_with_history(
-            lambda s, e: calculate_interruption_duration_network(s, e, exclude_types=TURNAROUND_EXCLUSIONS),
-            start_date,
-            end_date,
-            period_days
+            lambda s, e: calculate_interruption_duration_network(s, e, exclude_types=TURNAROUND_EXCLUSIONS, voltage_level=voltage_level),
+            start_date, end_date, period_days
         )
         
-        # Average interruption duration (hours per interruption event)
-        # Includes interruptions that started in period AND ongoing ones from before
         avg_int_duration = get_metric_with_history(
-            lambda s, e: calculate_average_interruption_duration_network(s, e),
-            start_date,
-            end_date,
-            period_days
+            lambda s, e: calculate_average_interruption_duration_network(s, e, voltage_level=voltage_level),
+            start_date, end_date, period_days
         )
     
-    # =====================================================================
-    # CALCULATE ENERGY: SUM of (Feeder_Avg_Load × Feeder_Supply_Hours)
-    # This is the mathematically correct per-feeder approach
-    # =====================================================================
     if feeder_slug:
-        energy_now = calculate_energy_delivered_feeder(feeder.id, start_date, end_date)
-        energy_prev = calculate_energy_delivered_feeder(feeder.id, prev_start, prev_end)
+        energy_now_result = calculate_energy_delivered_feeder(feeder.id, start_date, end_date)
+        energy_prev_result = calculate_energy_delivered_feeder(feeder.id, prev_start, prev_end)
     else:
-        energy_now = calculate_energy_delivered_network(start_date, end_date)
-        energy_prev = calculate_energy_delivered_network(prev_start, prev_end)
+        energy_now_result = calculate_energy_delivered_network(start_date, end_date, voltage_level=voltage_level)
+        energy_prev_result = calculate_energy_delivered_network(prev_start, prev_end, voltage_level=voltage_level)
+    energy_now = energy_now_result['total_mwh']
+    energy_prev = energy_prev_result['total_mwh']
     
-    # Technical breakdown
     if feeder_slug:
-        # For single feeder
         feeders_now = 1
         feeders_prev = 1
     else:
-        # For all ONBOARDED feeders
-        feeders_now = Feeder.objects.filter(is_onboarded=True).count()
-        feeders_prev = feeders_now  # You may want to track this historically
+        feeder_count_qs = Feeder.objects.filter(is_onboarded=True)
+        if voltage_level:
+            feeder_count_qs = feeder_count_qs.filter(voltage_level=voltage_level)
+        feeders_now = feeder_count_qs.count()
+        feeders_prev = feeders_now
     
     breakdown = {
         "feeder_count": {
@@ -1723,19 +1598,24 @@ def technical_overview_view(request):
         ]
     else:
         interruptions_data = [
-            get_interruption_breakdown_network(start_date, end_date, period_days, i) 
+            get_interruption_breakdown_network(start_date, end_date, period_days, i, voltage_level=voltage_level) 
             for i in range(4)
         ]
     
     # Load trend - OPTIMIZED with feeder filter (ONBOARDED only when network-wide)
-    load_trend = get_load_trend_optimized(start_date, end_date, mode, feeder_id=feeder.id if feeder_slug else None, target_energy=target_energy)
+    load_trend = get_load_trend_optimized(
+        start_date, end_date, mode,
+        feeder_id=feeder.id if feeder_slug else None,
+        target_energy=target_energy,
+        voltage_level=None if feeder_slug else voltage_level
+    )
     
     # Station Load Trend & Metrics
     if feeder_slug:
         # For single feeder, station trend is same as load trend
         station_load_trend = load_trend
     else:
-        station_load_trend = get_station_load_trend(start_date, end_date, mode)
+        station_load_trend = get_station_load_trend(start_date, end_date, mode, voltage_level=voltage_level)
     
     response_data = {
         "mode": mode,
@@ -1747,7 +1627,10 @@ def technical_overview_view(request):
         "highlight_metrics": {
             "energy_delivered": {
                 "value": round(energy_now, 2),
-                "delta": delta(energy_now, energy_prev)
+                "delta": delta(energy_now, energy_prev),
+                "data_source": "meter" if energy_now_result['meter_feeders'] >= energy_now_result['system_feeders'] else "system",
+                "meter_feeders": energy_now_result['meter_feeders'],
+                "system_feeders": energy_now_result['system_feeders'],
             },
             "average_load": {
                 "value": round(load_now, 2),

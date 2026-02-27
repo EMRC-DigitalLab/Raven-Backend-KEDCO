@@ -12,9 +12,15 @@ class MonthlyOverviewSummary(UUIDModel, models.Model):
     dramatically improving response times from seconds to milliseconds.
     """
     month = models.DateField(
-        unique=True,
         db_index=True,
         help_text="First day of the month (e.g., 2025-01-01)"
+    )
+    
+    feeder_type = models.CharField(
+        max_length=10,
+        choices=[('11kv', '11kV'), ('33kv', '33kV')],
+        default='11kv',
+        help_text="Voltage level of the feeders included in this summary"
     )
     
     # === COMMERCIAL METRICS ===
@@ -45,6 +51,15 @@ class MonthlyOverviewSummary(UUIDModel, models.Model):
         decimal_places=2, 
         default=0,
         help_text="Total energy delivered in MWh"
+    )
+    energy_source = models.CharField(
+        max_length=20,
+        choices=[
+            ('meter_reading', 'Meter Reading'),
+            ('system', 'System Fallback'),
+        ],
+        default='system',
+        help_text="Source of the energy_delivered value"
     )
     energy_billed = models.DecimalField(
         max_digits=12, 
@@ -167,9 +182,11 @@ class MonthlyOverviewSummary(UUIDModel, models.Model):
         ordering = ['-month']
         verbose_name = "Monthly Overview Summary"
         verbose_name_plural = "Monthly Overview Summaries"
+        unique_together = [('month', 'feeder_type')]
         indexes = [
             models.Index(fields=['month']),
             models.Index(fields=['-month']),
+            models.Index(fields=['feeder_type']),
             models.Index(fields=['calculated_at']),
             models.Index(fields=['has_complete_data', 'month']),
         ]
@@ -249,12 +266,28 @@ class MonthlyTechnicalSummary(UUIDModel, models.Model):
         help_text="Specific feeder filter (null = all feeders)"
     )
     
+    feeder_type = models.CharField(
+        max_length=10,
+        choices=[('11kv', '11kV'), ('33kv', '33kv')],
+        default='11kv',
+        help_text="Voltage level of the feeders included in this summary"
+    )
+    
     # === ENERGY METRICS ===
     total_energy_delivered = models.DecimalField(
         max_digits=15,
         decimal_places=4,
         default=0,
         help_text="Total energy delivered in MWh"
+    )
+    energy_source = models.CharField(
+        max_length=20,
+        choices=[
+            ('meter_reading', 'Meter Reading'),
+            ('system', 'System Fallback'),
+        ],
+        default='system',
+        help_text="Source of the energy_delivered value"
     )
     
     # === LOAD METRICS ===
@@ -374,12 +407,13 @@ class MonthlyTechnicalSummary(UUIDModel, models.Model):
         
         # Ensure uniqueness across filtering dimensions
         unique_together = [
-            ('month', 'state', 'business_district', 'feeder')
+            ('month', 'state', 'business_district', 'feeder', 'feeder_type')
         ]
         
         indexes = [
             models.Index(fields=['month']),
             models.Index(fields=['-month']),
+            models.Index(fields=['feeder_type']),
             models.Index(fields=['month', 'state']),
             models.Index(fields=['month', 'business_district']),
             models.Index(fields=['month', 'feeder']),
@@ -485,6 +519,13 @@ class DailyTechnicalSummary(UUIDModel, models.Model):
         null=True, 
         blank=True,
         help_text="Specific feeder filter (null = all feeders)"
+    )
+    
+    feeder_type = models.CharField(
+        max_length=10,
+        choices=[('11kv', '11kV'), ('33kv', '33kv')],
+        default='11kv',
+        help_text="Voltage level of the feeders included in this summary"
     )
     
     # === ENERGY METRICS ===
@@ -607,12 +648,13 @@ class DailyTechnicalSummary(UUIDModel, models.Model):
         
         # Ensure uniqueness across filtering dimensions
         unique_together = [
-            ('date', 'state', 'business_district', 'feeder')
+            ('date', 'state', 'business_district', 'feeder', 'feeder_type')
         ]
         
         indexes = [
             models.Index(fields=['date']),
             models.Index(fields=['-date']),
+            models.Index(fields=['feeder_type']),
             models.Index(fields=['date', 'state']),
             models.Index(fields=['date', 'business_district']),
             models.Index(fields=['date', 'feeder']),

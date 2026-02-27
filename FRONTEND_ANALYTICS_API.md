@@ -19,8 +19,20 @@ The `/api/technical/overview/` endpoint now returns **analytics** for load trend
 | `to_date` | string | ⚠️ Conditional | End date (required for custom mode) | `"2026-02-15"` |
 | `year` | number | ⚠️ Conditional | Year (required for monthly mode) | `2026` |
 | `month` | number | ⚠️ Conditional | Month (required for monthly mode) | `1` |
+| `feeder_type` | string | ❌ Optional | Voltage level (`"11kv"` or `"33kv"`) | `"11kv"` |
 | `feeder` | string | ❌ Optional | Feeder slug for single feeder view | `"gadau-11kv"` |
 | `target_energy` | number | ❌ Optional | **NEW!** Target energy in MWh | `10.5` |
+
+---
+
+## ⚡ Global Filter: Voltage Separation
+The analytics system now separates **11kV (Distribution)** and **33kV (Primary)** networks.
+
+- **11kV**: Energy distributed to end-customers. Average readings are ~14-16 MWh.
+- **33kV**: Energy injected into the network. Average readings are ~50-100 MWh.
+
+> [!IMPORTANT]
+> The hierarchy MUST be maintained: **33kV (Upstream) > 11kV (Downstream)**. The `feeder_type` parameter ensures you are comparing apples to apples.
 
 ---
 
@@ -43,6 +55,10 @@ interface LoadTrendResponse {
     analytics: TrendAnalytics;  // ✨ NEW!
   };
   // ... other fields (energy_delivered, hours_of_supply, etc.)
+  
+  // ✨ NEW! Energy Fidelity Metals
+  energy_source: "meter_reading" | "system";  // Whether data is verified or fallback
+  reading_estimate_variance: number;         // Delta between reading and system estimate
 }
 
 interface DataPoint {
@@ -377,13 +393,13 @@ function LoadTrendChart({ series }: { series: DataPoint[] }) {
 
 ## ⚡ Quick Start Checklist
 
-- [ ] Update TypeScript interfaces with new `analytics` field
-- [ ] Add optional `target_energy` parameter to API calls
-- [ ] Display analytics summary (peak, average, min)
-- [ ] Highlight anomalous data points in charts
-- [ ] Show target comparison UI when `offtake_target` exists
-- [ ] Add variance indicator (show std deviation/range)
-- [ ] Consider adding tooltips for time-based peaks/mins
+- [ ] Add a **Voltage Level** toggle (11kV / 33kV) to the main dashboard filters.
+- [ ] Update API calls to append `?feeder_type=11kv` or `?feeder_type=33kv`.
+- [ ] Update TypeScript interfaces with new `energy_source` and `analytics` fields.
+- [ ] Add an icon/badge to Energy Delivered values based on `energy_source` (Verified vs Estimated).
+- [ ] Label 33kV data as "Network Injection" and 11kV as "Customer Distribution" in the UI.
+- [ ] Display analytics summary (peak, average, min) using the new `analytics` object.
+- [ ] Highlight anomalous data points in charts using the `is_anomaly` flag.
 
 ---
 
@@ -400,6 +416,8 @@ function LoadTrendChart({ series }: { series: DataPoint[] }) {
 | `range` | Peak - Min | Total variation span |
 | `anomaly_count` | Outlier count | Data quality, unusual events |
 | `is_anomaly` | Point-level flag | Visual highlighting in charts |
+| `energy_source` | `"meter_reading"` or `"system"` | Data quality indication (Verified vs Estimated) |
+| `reading_estimate_variance` | Meter diff - System estimate | Transparency on data correction magnitude |
 | `offtake_target` | Target comparison | Performance tracking, goal monitoring |
 
 ---

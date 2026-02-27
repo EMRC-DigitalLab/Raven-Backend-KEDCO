@@ -235,41 +235,50 @@ class Command(BaseCommand):
         """Generate all possible filter combinations - OPTIMIZED"""
         configs = []
 
-        # National level
-        configs.append({
-            'state': None,
-            'business_district': None,
-            'feeder': None
-        })
+        # Voltages to process for aggregate levels
+        voltages = ['11kv', '33kv']
 
-        # Pre-fetch all relationships in single queries
+        for voltage in voltages:
+            # National level
+            configs.append({
+                'state': None,
+                'business_district': None,
+                'feeder': None,
+                'feeder_type': voltage
+            })
+
+        # Pre-fetch all relationships in single queries - ONLY ONBOARDED AND ACTIVE
         states = list(State.objects.all())
         districts = list(BusinessDistrict.objects.select_related('state').all())
-        feeders = list(Feeder.objects.select_related('business_district__state').all())
+        feeders = list(Feeder.objects.filter(is_onboarded=True, status='active').select_related('business_district__state').all())
 
-        # State level
-        for state in states:
-            configs.append({
-                'state': state,
-                'business_district': None,
-                'feeder': None
-            })
+        for voltage in voltages:
+            # State level
+            for state in states:
+                configs.append({
+                    'state': state,
+                    'business_district': None,
+                    'feeder': None,
+                    'feeder_type': voltage
+                })
 
-        # District level
-        for district in districts:
-            configs.append({
-                'state': district.state,
-                'business_district': district,
-                'feeder': None
-            })
+            # District level
+            for district in districts:
+                configs.append({
+                    'state': district.state,
+                    'business_district': district,
+                    'feeder': None,
+                    'feeder_type': voltage
+                })
 
-        # Feeder level
+        # Feeder level - feeder_type must match feeder's voltage_level
         for feeder in feeders:
             if feeder.business_district:
                 configs.append({
                     'state': feeder.business_district.state,
                     'business_district': feeder.business_district,
-                    'feeder': feeder
+                    'feeder': feeder,
+                    'feeder_type': feeder.voltage_level
                 })
 
         return configs
@@ -325,7 +334,8 @@ class Command(BaseCommand):
                     month=month,
                     state=config['state'],
                     business_district=config['business_district'],
-                    feeder=config['feeder']
+                    feeder=config['feeder'],
+                    feeder_type=config.get('feeder_type', '11kv')
                 )
         
         return MonthlyTechnicalSummary.objects.filter(q_objects).count()
@@ -360,7 +370,8 @@ class Command(BaseCommand):
                     summary.month,
                     summary.state_id,
                     summary.business_district_id,
-                    summary.feeder_id
+                    summary.feeder_id,
+                    summary.feeder_type
                 )
                 existing_summaries[key] = summary
         
@@ -382,7 +393,8 @@ class Command(BaseCommand):
                         month,
                         config['state'].id if config['state'] else None,
                         config['business_district'].id if config['business_district'] else None,
-                        config['feeder'].id if config['feeder'] else None
+                        config['feeder'].id if config['feeder'] else None,
+                        config.get('feeder_type', '11kv')
                     )
                     
                     # Check if exists
@@ -398,7 +410,8 @@ class Command(BaseCommand):
                         month_date=month,
                         state=config['state'],
                         business_district=config['business_district'],
-                        feeder=config['feeder']
+                        feeder=config['feeder'],
+                        feeder_type=config.get('feeder_type')
                     )
                     metrics = calculator.calculate_all_metrics()
                     total_calc_time += (time.time() - calc_start)
@@ -415,6 +428,7 @@ class Command(BaseCommand):
                             state=config['state'],
                             business_district=config['business_district'],
                             feeder=config['feeder'],
+                            feeder_type=config.get('feeder_type', '11kv'),
                             **metrics
                         ))
                 
@@ -604,7 +618,8 @@ class Command(BaseCommand):
             month=month,
             state=config['state'],
             business_district=config['business_district'],
-            feeder=config['feeder']
+            feeder=config['feeder'],
+            feeder_type=config.get('feeder_type', '11kv')
         ).first()
 
         if existing_summary and not self.force:
@@ -615,7 +630,8 @@ class Command(BaseCommand):
             month_date=month,
             state=config['state'],
             business_district=config['business_district'],
-            feeder=config['feeder']
+            feeder=config['feeder'],
+            feeder_type=config.get('feeder_type')
         )
 
         metrics = calculator.calculate_all_metrics()
@@ -634,6 +650,7 @@ class Command(BaseCommand):
                 state=config['state'],
                 business_district=config['business_district'],
                 feeder=config['feeder'],
+                feeder_type=config.get('feeder_type', '11kv'),
                 **metrics
             )
             return 'created'

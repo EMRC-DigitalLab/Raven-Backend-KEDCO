@@ -7,7 +7,7 @@ import logging
 
 from technical.models import (
     FeederEnergyDaily, FeederEnergyMonthly, HourlyLoad, 
-    FeederInterruption, DailyHoursOfSupply
+    FeederInterruption, DailyHoursOfSupply, EnergyDelivered
 )
 from common.models import Feeder, BusinessDistrict, State
 from commercial.models import Customer
@@ -20,11 +20,12 @@ class TechnicalCalculator:
     Corrected calculations based on domain knowledge and best practices.
     """
     
-    def __init__(self, month_date, state=None, business_district=None, feeder=None):
+    def __init__(self, month_date, state=None, business_district=None, feeder=None, feeder_type=None):
         self.month_date = month_date
         self.state = state
         self.business_district = business_district
         self.feeder = feeder
+        self.feeder_type = feeder_type
         
         # Calculate month boundaries
         self.start_date = month_date.replace(day=1)
@@ -37,37 +38,92 @@ class TechnicalCalculator:
         self.feeders = self._get_filtered_feeders()
         
     def _get_filtered_feeders(self):
-        """Get feeders based on filtering criteria"""
+        """Get feeders based on filtering criteria - ONLY ONOARDED AND ACTIVE"""
+        qs = Feeder.objects.filter(is_onboarded=True, status='active')
+        
+        if self.feeder_type:
+            qs = qs.filter(voltage_level=self.feeder_type)
+            
         if self.feeder:
-            return Feeder.objects.filter(id=self.feeder.id)
+            return qs.filter(id=self.feeder.id)
         elif self.business_district:
-            return Feeder.objects.filter(business_district=self.business_district)
+            return qs.filter(business_district=self.business_district)
         elif self.state:
-            return Feeder.objects.filter(business_district__state=self.state)
+            return qs.filter(business_district__state=self.state)
         else:
-            return Feeder.objects.all()
+            return qs
     
     def calculate_energy_metrics(self):
-        """Calculate energy delivery metrics"""
-        # Use monthly aggregates if available, otherwise sum daily
-        monthly_energy = FeederEnergyMonthly.objects.filter(
+        """
+        Calculate energy delivery metrics with high-fidelity validation.
+        PRIORITY: Meter Readings -> System Estimate Fallback.
+        
+        Validation:
+        1. Voltage-specific Ballooning Limit.
+        2. System Estimate Cross-Check (Reading vs Load x Hours).
+        """
+        # Threshold for "ballooning" - more restrictive for 11kV
+        if self.feeder_type == '11kv':
+            BALLOON_LIMIT = Decimal('500.00')
+        else:
+            BALLOON_LIMIT = Decimal('1000.00')
+            
+        energy_qs = EnergyDelivered.objects.filter(
             feeder__in=self.feeders,
-            period=self.start_date
-        ).aggregate(
+            date__range=(self.start_date, self.end_date),
+            energy_mwh__lt=BALLOON_LIMIT
+        )
+        
+        total_reading_energy = energy_qs.aggregate(
             total=Sum('energy_mwh')
         )['total'] or Decimal('0')
         
-        if monthly_energy == 0:
-            # Fallback to daily aggregation
-            monthly_energy = FeederEnergyDaily.objects.filter(
-                feeder__in=self.feeders,
-                date__range=(self.start_date, self.end_date)
-            ).aggregate(
-                total=Sum('energy_mwh')
-            )['total'] or Decimal('0')
+        # Calculate System Estimate for cross-check
+        load_metrics = self.calculate_load_metrics()
+        supply_metrics = self.calculate_supply_hours()
+        avg_load = float(load_metrics.get('_avg_load_internal', 0))
+        supply_hours = float(supply_metrics.get('total_supply_hours', 0))
+        system_estimate = Decimal(str(round(avg_load * supply_hours, 2)))
         
+        # Cross-Check Logic:
+        # 1. Inflation Check: If reading > 3x estimate, readings are likely cumulative.
+        # 2. Coverage Check: If reading < 0.5x estimate, readings are likely missing for many feeders.
+        is_suspect = False
+        reason = ""
+        if system_estimate > 10:
+            if total_reading_energy > (system_estimate * 3):
+                is_suspect = True
+                reason = "Inflation (Readings > 3x Estimate)"
+            elif total_reading_energy < (system_estimate * 0.5) and total_reading_energy > 0:
+                is_suspect = True
+                reason = "Partial Coverage (Readings < 0.5x Estimate)"
+        
+        if is_suspect:
+             logger.warning(
+                 f"Suspect energy reading: {total_reading_energy} MWh vs Estimate {system_estimate} MWh. "
+                 f"Reason: {reason}. Falling back to system estimate."
+             )
+             return {
+                 'total_energy_delivered': system_estimate,
+                 'energy_source': 'system',
+                 'is_verified': False,
+                 'reading_estimate_variance': total_reading_energy - system_estimate
+             }
+
+        if total_reading_energy > 0:
+            return {
+                'total_energy_delivered': total_reading_energy,
+                'energy_source': 'meter_reading',
+                'is_verified': True,
+                'reading_estimate_variance': total_reading_energy - system_estimate
+            }
+        
+        # Standard Fallback
         return {
-            'total_energy_delivered': monthly_energy
+            'total_energy_delivered': system_estimate,
+            'energy_source': 'system',
+            'is_verified': False,
+            'reading_estimate_variance': Decimal('0')
         }
     
     def calculate_load_metrics(self):
@@ -108,9 +164,9 @@ class TechnicalCalculator:
         )['max'] or Decimal('0')
         
         return {
-            'avg_load': avg_load,  # True average (for energy calculation)
             'avg_peak_load': avg_peak,
-            'max_peak_load': max_peak
+            'max_peak_load': max_peak,
+            '_avg_load_internal': avg_load  # internal use for energy calc
         }
     
     def calculate_supply_hours(self):
@@ -407,26 +463,19 @@ class TechnicalCalculator:
             )
             
             # =====================================================================
-            # Energy Delivered: ALWAYS use calculated formula for accuracy
-            # Formula: Average Load × Total Supply Hours
-            # This ensures consistent, mathematically correct values
+            # Energy Delivered Logic: Integrated Reading-Priority & Cross-Check
             # =====================================================================
-            total_supply_hours = float(supply_metrics.get('total_supply_hours', 0))
-            avg_load = float(load_metrics.get('avg_load', 0))
-            
-            # Energy (MWh) = Average Power (MW) × Total Time (hours across month)
-            final_energy = Decimal(str(round(avg_load * total_supply_hours, 2)))
+            final_energy = energy_metrics['total_energy_delivered']
+            energy_source = energy_metrics['energy_source']
             
             # Combine all metrics
             all_metrics = {
-                **energy_metrics,
-                **load_metrics,
-                **supply_metrics,
-                **interruption_metrics['summary_breakdown'],
-                **infrastructure_metrics,
-                **reliability_metrics,
-                # Override energy with calculated/final value
                 'total_energy_delivered': final_energy,
+                'energy_source': energy_source,
+                'avg_peak_load': load_metrics['avg_peak_load'],
+                'max_peak_load': load_metrics['max_peak_load'],
+                'avg_hours_of_supply': supply_metrics.get('avg_hours_of_supply', Decimal('0')),
+                'total_supply_hours': supply_metrics.get('total_supply_hours', Decimal('0')),
                 'total_interruptions': interruption_metrics['total_interruptions'],
                 'avg_daily_interruptions': interruption_metrics['avg_daily_interruptions'],
                 'avg_interruption_duration': interruption_metrics['avg_interruption_duration'],
@@ -434,6 +483,9 @@ class TechnicalCalculator:
                 'avg_turnaround_time': interruption_metrics['avg_turnaround_time'],
                 'avg_fault_turnaround_time': interruption_metrics['avg_fault_turnaround_time'],
                 'interruption_breakdown_json': interruption_metrics['interruption_breakdown'],
+                **interruption_metrics['summary_breakdown'],
+                **infrastructure_metrics,
+                **reliability_metrics,
             }
             
             # Add metadata

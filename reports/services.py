@@ -12,6 +12,7 @@ import logging
 from common.models import State, BusinessDistrict, InjectionSubstation, Feeder, Band
 from technical.models import HourlyLoad, FeederInterruption
 from technical.constants import TURNAROUND_EXCLUSIONS
+from technical.utils.energy_utils import calculate_energy_delivered
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,13 @@ SECTION_DEFINITIONS = {
             'show_logo': {'type': 'boolean', 'default': True},
             'show_subtitle': {'type': 'boolean', 'default': True},
         }
+    },
+    'table_of_contents': {
+        'display_name': 'Table of Contents',
+        'description': 'Auto-generated table of contents with section names and page numbers',
+        'category': 'general',
+        'supports_chart': False,
+        'config_options': {},
     },
     'infrastructure_overview': {
         'display_name': 'Infrastructure Overview',
@@ -286,11 +294,18 @@ class ReportDataService:
             self.period_days = (self.to_date - self.from_date).days + 1
     
     def _parse_date(self, date_val):
-        """Parse date from string or return as-is if already a date"""
+        """
+        Parse date from string or return as-is if already a date.
+
+        Always uses the YYYY-MM-DD portion of any ISO string, discarding time
+        and timezone parts.  This prevents off-by-N-day errors when the frontend
+        sends midnight-UTC strings for a date selected in a UTC+1 locale.
+        """
         if isinstance(date_val, str):
-            if 'T' in date_val:
-                return datetime.fromisoformat(date_val.replace('Z', '+00:00')).date()
-            return datetime.strptime(date_val, '%Y-%m-%d').date()
+            # Take only the date portion (first 10 chars) regardless of whether
+            # the string includes a time or timezone component.
+            date_str = date_val.split('T')[0].split(' ')[0].strip()
+            return datetime.strptime(date_str, '%Y-%m-%d').date()
         elif isinstance(date_val, datetime):
             return date_val.date()
         return date_val
@@ -298,27 +313,32 @@ class ReportDataService:
     def _get_filtered_feeder_ids(self):
         """Get feeder IDs based on all filters"""
         queryset = Feeder.objects.filter(is_onboarded=True)  # ✅ Only onboarded feeders
-        
+
+        # Filter by voltage level: '11kv' or '33kv' (optional)
+        voltage_level = self.filters.get('voltage_level')
+        if voltage_level in ('11kv', '33kv'):
+            queryset = queryset.filter(voltage_level=voltage_level)
+
         # Filter by specific feeders (only if list is not empty)
         if self.filters.get('feeders') and len(self.filters['feeders']) > 0:
             queryset = queryset.filter(id__in=self.filters['feeders'])
-        
+
         # Filter by bands (only if list is not empty)
         if self.filters.get('bands') and len(self.filters['bands']) > 0:
             queryset = queryset.filter(band_id__in=self.filters['bands'])
-        
+
         # Filter by substations (only if list is not empty)
         if self.filters.get('substations') and len(self.filters['substations']) > 0:
             queryset = queryset.filter(substation_id__in=self.filters['substations'])
-        
+
         # Filter by districts (only if list is not empty)
         if self.filters.get('districts') and len(self.filters['districts']) > 0:
             queryset = queryset.filter(business_district_id__in=self.filters['districts'])
-        
+
         # Filter by states (only if list is not empty)
         if self.filters.get('states') and len(self.filters['states']) > 0:
             queryset = queryset.filter(business_district__state_id__in=self.filters['states'])
-        
+
         return list(queryset.values_list('id', flat=True))
     
     def get_infrastructure_data(self):
@@ -326,15 +346,20 @@ class ReportDataService:
         feeders = Feeder.objects.filter(id__in=self.feeder_ids).select_related(
             'band', 'substation', 'business_district', 'business_district__state'
         )
-        
+
+        feeders_11kv = feeders.filter(voltage_level='11kv').count()
+        feeders_33kv = feeders.filter(voltage_level='33kv').count()
+
         return {
             'total_feeders': feeders.count(),
+            'feeders_11kv': feeders_11kv,
+            'feeders_33kv': feeders_33kv,
             'total_substations': feeders.values('substation').distinct().count(),
             'total_transformers': sum(f.transformers.count() for f in feeders),
             'feeders': [
                 {
                     'name': f.name,
-                    'voltage': f.voltage_level,
+                    'voltage': f.get_voltage_level_display(),
                     'band': f.band.name if f.band else '-',
                     'district': f.business_district.name if f.business_district else '-',
                     'substation': f.substation.name if f.substation else '-',
@@ -456,79 +481,20 @@ class ReportDataService:
     
     def _calculate_energy_delivered_hybrid(self):
         """
-        ✅ NEW: Calculate energy delivered using hybrid approach.
-        
-        Priority:
-        1. EnergyDelivered table (primary source)
-        2. HourlyLoad table (fallback)
-        
+        Calculate energy delivered using the shared energy_utils function.
+
+        Delegates to calculate_energy_delivered() which applies per-feeder
+        hybrid logic (meter primary, HourlyLoad fallback) with a MAX-daily
+        balloon-limit check that guarantees:
+
+            monthly total = Σ daily totals
+
         Returns total energy in MWh across all feeders for the period.
         """
         if not self.feeder_ids:
             return 0.0
-        
-        placeholders = ','.join(['%s'] * len(self.feeder_ids))
-        
-        # Hybrid query: Use EnergyDelivered if available, fallback to HourlyLoad
-        query = f"""
-            WITH feeder_dates AS (
-                SELECT 
-                    f.id as feeder_id,
-                    d.date
-                FROM (
-                    SELECT DISTINCT id FROM common_feeder WHERE id IN ({placeholders})
-                ) f
-                CROSS JOIN (
-                    SELECT generate_series(
-                        %s::date,
-                        %s::date,
-                        '1 day'::interval
-                    )::date as date
-                ) d
-            ),
-            energy_delivered_data AS (
-                SELECT 
-                    fd.feeder_id,
-                    fd.date,
-                    ed.energy_mwh as delivered_energy
-                FROM feeder_dates fd
-                LEFT JOIN technical_energydelivered ed 
-                    ON ed.feeder_id = fd.feeder_id 
-                    AND ed.date = fd.date
-            ),
-            hourly_load_data AS (
-                SELECT 
-                    feeder_id,
-                    date,
-                    SUM(load_mw) as hourly_energy
-                FROM technical_hourlyload
-                WHERE feeder_id IN ({placeholders})
-                    AND date BETWEEN %s AND %s
-                GROUP BY feeder_id, date
-            )
-            SELECT 
-                COALESCE(SUM(
-                    COALESCE(ed.delivered_energy, hl.hourly_energy, 0)
-                ), 0) as total_energy
-            FROM energy_delivered_data ed
-            LEFT JOIN hourly_load_data hl 
-                ON hl.feeder_id = ed.feeder_id 
-                AND hl.date = ed.date
-        """
-        
-        params = (
-            list(self.feeder_ids) + 
-            [self.from_date, self.to_date] + 
-            list(self.feeder_ids) + 
-            [self.from_date, self.to_date]
-        )
-        
-        with connection.cursor() as cursor:
-            cursor.execute(query, params)
-            result = cursor.fetchone()
-            total_energy = float(result[0]) if result else 0.0
-        
-        return total_energy
+        result = calculate_energy_delivered(self.feeder_ids, self.from_date, self.to_date)
+        return result['total_mwh']
     
     def _empty_technical_metrics(self):
         """Return empty technical metrics"""
@@ -766,47 +732,9 @@ class ReportDataService:
         return result
     
     def _calculate_energy_for_feeder(self, feeder_id):
-        """Calculate energy for a single feeder using hybrid approach"""
-        query = """
-            WITH date_series AS (
-                SELECT generate_series(
-                    %s::date,
-                    %s::date,
-                    '1 day'::interval
-                )::date as date
-            ),
-            energy_data AS (
-                SELECT 
-                    ds.date,
-                    ed.energy_mwh as delivered_energy
-                FROM date_series ds
-                LEFT JOIN technical_energydelivered ed 
-                    ON ed.feeder_id = %s AND ed.date = ds.date
-            ),
-            load_data AS (
-                SELECT 
-                    date,
-                    SUM(load_mw) as hourly_energy
-                FROM technical_hourlyload
-                WHERE feeder_id = %s
-                    AND date BETWEEN %s AND %s
-                GROUP BY date
-            )
-            SELECT 
-                COALESCE(SUM(
-                    COALESCE(ed.delivered_energy, ld.hourly_energy, 0)
-                ), 0) as total_energy
-            FROM energy_data ed
-            LEFT JOIN load_data ld ON ld.date = ed.date
-        """
-        
-        with connection.cursor() as cursor:
-            cursor.execute(query, [
-                self.from_date, self.to_date, feeder_id,
-                feeder_id, self.from_date, self.to_date
-            ])
-            result = cursor.fetchone()
-            return float(result[0]) if result else 0.0
+        """Calculate energy for a single feeder using the shared energy_utils function."""
+        result = calculate_energy_delivered([feeder_id], self.from_date, self.to_date)
+        return result['total_mwh']
     
     def get_hours_of_supply_trend(self, group_by='day'):
         """Get hours of supply trend data for charts"""
@@ -1076,6 +1004,7 @@ class ReportDataService:
                 'to_date': self.to_date.strftime('%Y-%m-%d'),
                 'period_days': self.period_days,
             },
+            'table_of_contents': lambda: {},  # Populated by PDFGenerator
             'infrastructure_overview': self.get_infrastructure_data,
             'technical_metrics': self.get_technical_metrics,
             'system_reliability': self.get_system_reliability,

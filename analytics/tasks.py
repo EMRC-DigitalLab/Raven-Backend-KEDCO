@@ -302,10 +302,15 @@ def cascade_update_technical_summaries(month_date_str, feeder_id=None):
                     # Update feeder level
                     update_monthly_technical_summary.delay(
                         month_date_str,
-                        {'state': state.id, 'business_district': district.id, 'feeder': feeder.id},
+                        {
+                            'state': state.id, 
+                            'business_district': district.id, 
+                            'feeder': feeder.id,
+                            'feeder_type': feeder.voltage_level
+                        },
                         priority='cascade'
                     )
-                    updated_summaries.append(f'feeder:{feeder.slug}')
+                    updated_summaries.append(f"feeder:{feeder.slug} ({feeder.voltage_level})")
                     
             except Feeder.DoesNotExist:
                 logger.warning(f"Feeder with ID {feeder_id} not found")
@@ -369,7 +374,8 @@ def parse_filter_params(filter_params):
     parsed = {
         'state': None,
         'business_district': None, 
-        'feeder': None
+        'feeder': None,
+        'feeder_type': filter_params.get('feeder_type', '11kv') if filter_params else '11kv'
     }
     
     if not filter_params:
@@ -438,13 +444,13 @@ def get_filter_description(filter_params):
     ) else filter_params
     
     if parsed.get('feeder'):
-        return f"feeder:{parsed['feeder'].slug}"
+        return f"feeder:{parsed['feeder'].slug} ({parsed.get('feeder_type')})"
     elif parsed.get('business_district'):
-        return f"district:{parsed['business_district'].name}"
+        return f"district:{parsed['business_district'].name} ({parsed.get('feeder_type')})"
     elif parsed.get('state'):
-        return f"state:{parsed['state'].name}"
+        return f"state:{parsed['state'].name} ({parsed.get('feeder_type')})"
     else:
-        return "national"
+        return f"national ({parsed.get('feeder_type')})"
 
 
 def calculate_and_save_technical_summary(month_date, filter_params):
@@ -470,7 +476,8 @@ def calculate_and_save_technical_summary(month_date, filter_params):
         month_date=month_date,
         state=filter_params.get('state'),
         business_district=filter_params.get('business_district'),
-        feeder=filter_params.get('feeder')
+        feeder=filter_params.get('feeder'),
+        feeder_type=filter_params.get('feeder_type')
     )
     
     # Calculate all metrics
@@ -482,6 +489,7 @@ def calculate_and_save_technical_summary(month_date, filter_params):
         state=filter_params.get('state'),
         business_district=filter_params.get('business_district'),
         feeder=filter_params.get('feeder'),
+        feeder_type=filter_params.get('feeder_type', '11kv'),
         defaults=metrics
     )
     

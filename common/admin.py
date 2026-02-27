@@ -3,7 +3,11 @@ from django.contrib import admin
 from django.utils import timezone
 from django.contrib import messages
 from django.db.models import Count, Q
-from .models import Band, State, BusinessDistrict, InjectionSubstation, Feeder, DistributionTransformer
+from .models import (
+    Band, State, BusinessDistrict, InjectionSubstation, Feeder,
+    DistributionTransformer, PowerTransformer, FeederTransformerMapping,
+    FeederSupplyRelationship
+)
 
 
 @admin.register(Band)
@@ -30,14 +34,15 @@ class BusinessDistrictAdmin(admin.ModelAdmin):
 
 @admin.register(InjectionSubstation)
 class InjectionSubstationAdmin(admin.ModelAdmin):
-    list_display = ('name', 'slug', 'total_feeders', 'onboarded_feeders', 'pending_feeders')
+    list_display = ('name', 'state', 'station_type', 'status', 'slug', 'total_feeders', 'onboarded_feeders', 'pending_feeders')
+    list_filter = ('state', 'station_type', 'status')
     search_fields = ('name',)
     prepopulated_fields = {'slug': ('name',)}
     actions = ['onboard_all_feeders']
     
     def get_queryset(self, request):
         queryset = super().get_queryset(request)
-        queryset = queryset.annotate(
+        queryset = queryset.select_related('state').annotate(
             _total_feeders=Count('feeders'),
             _onboarded_feeders=Count('feeders', filter=Q(feeders__is_onboarded=True))
         )
@@ -100,6 +105,8 @@ class FeederAdmin(admin.ModelAdmin):
         'name', 
         'substation', 
         'voltage_level', 
+        'feeder_class',
+        'status',
         'band', 
         'business_district',
         'is_onboarded',
@@ -108,7 +115,9 @@ class FeederAdmin(admin.ModelAdmin):
     )
     list_filter = (
         'is_onboarded',
-        'voltage_level', 
+        'voltage_level',
+        'feeder_class',
+        'status',
         'band', 
         'substation',
         'business_district'
@@ -120,7 +129,7 @@ class FeederAdmin(admin.ModelAdmin):
     
     fieldsets = (
         ('Basic Information', {
-            'fields': ('name', 'slug', 'substation', 'voltage_level', 'band', 'business_district')
+            'fields': ('name', 'slug', 'substation', 'voltage_level', 'feeder_class', 'status', 'band', 'business_district')
         }),
         ('Onboarding Status', {
             'fields': ('is_onboarded', 'onboarded_at', 'onboarded_by'),
@@ -214,3 +223,27 @@ class DistributionTransformerAdmin(admin.ModelAdmin):
         return obj.feeder.is_onboarded
     feeder_onboarded.short_description = 'Feeder Onboarded'
     feeder_onboarded.boolean = True
+
+
+@admin.register(PowerTransformer)
+class PowerTransformerAdmin(admin.ModelAdmin):
+    list_display = ('name', 'capacity_mva', 'voltage_rating', 'status', 'slug')
+    list_filter = ('status', 'voltage_rating')
+    search_fields = ('name',)
+    prepopulated_fields = {'slug': ('name',)}
+
+
+@admin.register(FeederTransformerMapping)
+class FeederTransformerMappingAdmin(admin.ModelAdmin):
+    list_display = ('feeder', 'transformer', 'connection_type', 'status')
+    list_filter = ('status', 'connection_type')
+    search_fields = ('feeder__name', 'transformer__name')
+    raw_id_fields = ('feeder', 'transformer')
+
+
+@admin.register(FeederSupplyRelationship)
+class FeederSupplyRelationshipAdmin(admin.ModelAdmin):
+    list_display = ('supplier_feeder', 'supplied_feeder', 'supply_type', 'priority_order', 'status')
+    list_filter = ('supply_type', 'status', 'supplier_feeder__voltage_level')
+    search_fields = ('supplier_feeder__name', 'supplied_feeder__name')
+    raw_id_fields = ('supplier_feeder', 'supplied_feeder')

@@ -90,6 +90,7 @@ class ReportSection(UUIDModel):
     SECTION_TYPE_CHOICES = [
         # Cover and intro
         ('cover_page', 'Cover Page'),
+        ('table_of_contents', 'Table of Contents'),
         ('infrastructure_overview', 'Infrastructure Overview'),
         
         # Technical sections

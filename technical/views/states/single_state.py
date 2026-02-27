@@ -9,6 +9,7 @@ from dateutil.relativedelta import relativedelta
 from django.utils import timezone
 from common.models import State, Feeder
 from technical.models import HourlyLoad, FeederInterruption, EnergyDelivered
+from technical.utils.energy_utils import calculate_energy_delivered
 from commercial.models import Customer
 from technical.constants import TURNAROUND_EXCLUSIONS
 
@@ -96,22 +97,23 @@ def get_month_range(year, month):
     return start, end
 
 
-def calculate_state_energy_delivered_sql(state_id, from_date, to_date):
+def calculate_state_energy_delivered_sql(state_id, from_date, to_date, voltage_level=None):
     """
     Calculate total energy delivered for a state using hybrid approach.
     OPTIMIZED: Uses raw SQL with EnergyDelivered primary, HourlyLoad fallback.
-    
+
     Priority:
     1. Use EnergyDelivered if available for a feeder-date combination
     2. Fall back to HourlyLoad sum for feeder-dates without EnergyDelivered
-    
-    Only considers ONBOARDED feeders.
-    
+
+    Only considers ONBOARDED feeders. Optionally filtered by voltage_level ('11kv' or '33kv').
+
     Returns:
         Total energy in MWh
     """
+    voltage_clause = "AND f.voltage_level = %s" if voltage_level else ""
     # Use raw SQL for optimal performance
-    query = """
+    query = f"""
         WITH date_series AS (
             SELECT generate_series(
                 %s::date,
@@ -125,6 +127,7 @@ def calculate_state_energy_delivered_sql(state_id, from_date, to_date):
             INNER JOIN common_businessdistrict bd ON f.business_district_id = bd.id
             WHERE bd.state_id = %s
                 AND f.is_onboarded = TRUE
+                {voltage_clause}
         ),
         feeder_dates AS (
             SELECT 
@@ -164,8 +167,9 @@ def calculate_state_energy_delivered_sql(state_id, from_date, to_date):
             AND hl.date = ed.date
     """
     
-    params = [from_date, to_date, state_id, from_date, to_date]
-    
+    # params order: date_series(%s,%s), onboarded_feeders(state_id, [voltage_level]), hourly_load(from,to)
+    params = [from_date, to_date, state_id] + ([voltage_level] if voltage_level else []) + [from_date, to_date]
+
     with connection.cursor() as cursor:
         cursor.execute(query, params)
         result = cursor.fetchone()
@@ -174,52 +178,61 @@ def calculate_state_energy_delivered_sql(state_id, from_date, to_date):
     return round(total_energy, 2)
 
 
-def calculate_state_hours_of_supply_sql(state_id, from_date, to_date):
+def calculate_state_hours_of_supply_sql(state_id, from_date, to_date, voltage_level=None):
     """
     Calculate average hours of supply per day for a state.
-    
+
     For single-day queries (especially today): Returns total hours per feeder (not daily average)
     For multi-day queries: Returns average hours per day per feeder
-    
+
     UPDATED Logic:
     - Only considers ONBOARDED feeders
     - Numerator: Sum of all hours supplied across all ONBOARDED feeders with data in the state
     - Denominator: Total ONBOARDED feeders in state × Days (or just feeders for single day)
     - This properly accounts for onboarded feeders with no data (they contribute 0)
     """
+    voltage_clause = "AND f.voltage_level = %s" if voltage_level else ""
+
     # Get total ONBOARDED feeders in state
-    feeder_count_query = """
+    feeder_count_query = f"""
         SELECT COUNT(DISTINCT f.id)
         FROM common_feeder f
         INNER JOIN common_businessdistrict bd ON f.business_district_id = bd.id
         WHERE bd.state_id = %s
             AND f.is_onboarded = TRUE
+            AND (f.onboarded_at IS NULL OR f.onboarded_at <= %s)
+            {voltage_clause}
     """
-    
+
     # Get total hours supplied across ONBOARDED feeders only
-    hours_query = """
-        SELECT 
+    hours_query = f"""
+        SELECT
             COUNT(DISTINCT CONCAT(hl.feeder_id, '-', hl.date, '-', hl.hour)) as total_hours
         FROM technical_hourlyload hl
         INNER JOIN common_feeder f ON hl.feeder_id = f.id
         INNER JOIN common_businessdistrict bd ON f.business_district_id = bd.id
         WHERE bd.state_id = %s
             AND f.is_onboarded = TRUE
+            AND (f.onboarded_at IS NULL OR f.onboarded_at <= %s)
+            {voltage_clause}
             AND hl.date BETWEEN %s AND %s
             AND hl.load_mw > 0
     """
-    
+
+    feeder_count_params = [state_id, to_date] + ([voltage_level] if voltage_level else [])
+    hours_params = [state_id, to_date] + ([voltage_level] if voltage_level else []) + [from_date, to_date]
+
     with connection.cursor() as cursor:
         # Get onboarded feeder count
-        cursor.execute(feeder_count_query, [state_id])
+        cursor.execute(feeder_count_query, feeder_count_params)
         result = cursor.fetchone()
         total_feeders = result[0] if result and result[0] else 0
-        
+
         if total_feeders == 0:
             return 0.0
-        
+
         # Get total hours
-        cursor.execute(hours_query, [state_id, from_date, to_date])
+        cursor.execute(hours_query, hours_params)
         result = cursor.fetchone()
         total_hours = result[0] if result and result[0] else 0
     
@@ -236,35 +249,17 @@ def calculate_state_hours_of_supply_sql(state_id, from_date, to_date):
     return round(min(avg_hours, 24.0), 2)
 
 
-def calculate_state_interruption_metrics_sql(state_id, from_date, to_date, exclude_types=None):
+def calculate_state_interruption_metrics_sql(state_id, from_date, to_date, exclude_types=None, voltage_level=None):
     """
     Calculate average interruption duration per day for a state.
-    
-    For single-day queries (especially today): Returns total hours per feeder (not daily average)
-    For multi-day queries: Returns average hours per day per feeder
-    
-    UPDATED Logic:
-    - Only considers ONBOARDED feeders
-    - Includes ALL interruptions active during the period (not just those that started in the period)
-    - Calculates only the hours that fall within the filtered period boundaries
-    - Uses timezone-aware datetime ranges for consistency
-    - Numerator: Sum of all interruption hours across all ONBOARDED feeders with interruptions
-    - Denominator: Total ONBOARDED feeders in state × Days (or just feeders for single day)
-    - This properly accounts for onboarded feeders with no interruptions (they contribute 0)
-    
-    Returns:
-        tuple: (avg_duration_per_day, total_interruption_count)
-            - avg_duration_per_day: Average interruption hours per day
-            - total_interruption_count: COUNT of interruptions that occurred in period (for FTC)
+    Optionally filtered by voltage_level ('11kv' or '33kv').
     """
-    # ✅ Check for future dates
     now = timezone.now()
     today = now.date()
     
     if from_date > today:
         return 0.0, 0
     
-    # Determine if single-day or multi-day query
     is_single_day = (from_date == to_date)
     
     if is_single_day:
@@ -273,7 +268,6 @@ def calculate_state_interruption_metrics_sql(state_id, from_date, to_date, exclu
         period_days = (to_date - from_date).days + 1
         max_hours_per_feeder = 24.0 * period_days
     
-    # ✅ Create timezone-aware datetime boundaries
     start_of_period = timezone.make_aware(
         datetime.combine(from_date, datetime.min.time())
     )
@@ -281,21 +275,27 @@ def calculate_state_interruption_metrics_sql(state_id, from_date, to_date, exclu
         datetime.combine(to_date, datetime.max.time())
     )
     
-    # Get total ONBOARDED feeders in state
-    feeder_count_query = """
+    voltage_clause = "AND f.voltage_level = %s" if voltage_level else ""
+    feeder_count_query = f"""
         SELECT COUNT(DISTINCT f.id)
         FROM common_feeder f
         INNER JOIN common_businessdistrict bd ON f.business_district_id = bd.id
         WHERE bd.state_id = %s
             AND f.is_onboarded = TRUE
+            AND (f.onboarded_at IS NULL OR f.onboarded_at <= %s)
+            {voltage_clause}
     """
     
-    # Build exclusion clause
     exclusion_clause = ""
-    duration_params = [end_of_period, end_of_period, start_of_period, max_hours_per_feeder, state_id, start_of_period, end_of_period, start_of_period, start_of_period]
+    duration_params = [end_of_period, end_of_period, start_of_period, max_hours_per_feeder, state_id]
+    if voltage_level:
+        duration_params.append(voltage_level)
+    duration_params += [start_of_period, end_of_period, start_of_period, start_of_period]
     
-    # Parameters for count calculation (only interruptions that occurred in period)
-    count_params = [state_id, start_of_period, end_of_period]
+    count_params = [state_id]
+    if voltage_level:
+        count_params.append(voltage_level)
+    count_params += [start_of_period, end_of_period]
     
     if exclude_types:
         placeholders = ','.join(['%s'] * len(exclude_types))
@@ -303,9 +303,6 @@ def calculate_state_interruption_metrics_sql(state_id, from_date, to_date, exclu
         duration_params.extend(exclude_types)
         count_params.extend(exclude_types)
     
-    # Calculate per-feeder totals first, then cap each at max_hours_per_feeder
-    # Only considers ONBOARDED feeders
-    # ✅ Uses timezone-aware datetime ranges
     interruption_duration_query = f"""
         SELECT 
             COALESCE(SUM(capped_hours), 0) as total_hours
@@ -328,6 +325,7 @@ def calculate_state_interruption_metrics_sql(state_id, from_date, to_date, exclu
             INNER JOIN common_businessdistrict bd ON f.business_district_id = bd.id
             WHERE bd.state_id = %s
                 AND f.is_onboarded = TRUE
+                {voltage_clause}
                 AND (
                     fi.occurred_at >= %s AND fi.occurred_at <= %s
                     OR (fi.occurred_at < %s AND (fi.restored_at IS NULL OR fi.restored_at >= %s))
@@ -337,8 +335,6 @@ def calculate_state_interruption_metrics_sql(state_id, from_date, to_date, exclu
         ) per_feeder_totals
     """
     
-    # Separate query for count (only interruptions that occurred in period, ONBOARDED feeders only)
-    # ✅ Uses timezone-aware datetime ranges
     interruption_count_query = f"""
         SELECT COUNT(*) as total_interruptions
         FROM technical_feederinterruption fi
@@ -346,69 +342,47 @@ def calculate_state_interruption_metrics_sql(state_id, from_date, to_date, exclu
         INNER JOIN common_businessdistrict bd ON f.business_district_id = bd.id
         WHERE bd.state_id = %s
             AND f.is_onboarded = TRUE
+            {voltage_clause}
             AND fi.occurred_at >= %s
             AND fi.occurred_at <= %s
             {exclusion_clause}
     """
     
+    feeder_count_params = [state_id, to_date] + ([voltage_level] if voltage_level else [])
     with connection.cursor() as cursor:
-        # Get onboarded feeder count
-        cursor.execute(feeder_count_query, [state_id])
+        cursor.execute(feeder_count_query, feeder_count_params)
         result = cursor.fetchone()
         total_feeders = result[0] if result and result[0] else 0
         
         if total_feeders == 0:
             return 0.0, 0
         
-        # Get interruption duration (all active during period)
         cursor.execute(interruption_duration_query, duration_params)
         result = cursor.fetchone()
         total_hours = float(result[0]) if result and result[0] else 0
         
-        # Get interruption count (only those that occurred in period)
         cursor.execute(interruption_count_query, count_params)
         result = cursor.fetchone()
         total_interruptions = result[0] if result and result[0] else 0
     
-    # ✅ CRITICAL: For single-day queries, return average hours per feeder (not daily average)
-    # For multi-day queries, return average hours per day per feeder
     if is_single_day:
-        # Single day: Average hours per feeder
         avg_hours = total_hours / total_feeders if total_feeders > 0 else 0
     else:
-        # Multi-day: Average hours per day per feeder
         avg_hours = total_hours / (total_feeders * period_days) if (total_feeders * period_days) > 0 else 0
     
-    # Ensure non-negative and cap at 24
     avg_hours = max(0, min(avg_hours, 24.0))
     
     return round(avg_hours, 2), int(total_interruptions)
 
 
-def calculate_state_avg_interruption_duration_sql(state_id, from_date, to_date):
+def calculate_state_avg_interruption_duration_sql(state_id, from_date, to_date, voltage_level=None):
     """
     Calculate average duration per interruption event for a state using raw SQL.
-    
-    INCLUDES:
-    1. Interruptions that OCCURRED within the period (resolved or ongoing)
-    2. Interruptions that started BEFORE the period but are still ongoing (not resolved)
-    
-    CORRECTED: Only counts the hours that fall WITHIN the filtered period.
-    - If interruption started before period: counts from period start
-    - If interruption ongoing: counts to NOW (if today) or end of period
-    - If interruption ended after period: counts to period end
-    
-    Only considers ONBOARDED feeders.
-    
-    Formula: SUM(clipped interruption durations) / COUNT(interruptions)
-    Result: Average hours per interruption event (not per day)
-    
-    For ongoing interruptions, uses NOW as the end time.
+    Optionally filtered by voltage_level ('11kv' or '33kv').
     """
     now = timezone.now()
     today = now.date()
     
-    # ✨ CRITICAL: If querying future dates, return 0 (no data available yet)
     if from_date > today:
         return 0.0
     
@@ -416,15 +390,15 @@ def calculate_state_avg_interruption_duration_sql(state_id, from_date, to_date):
         datetime.combine(from_date, datetime.min.time())
     )
     
-    # CRITICAL: If filtering for today, use NOW instead of end of day
     if to_date == today:
-        end_of_period = now  # Current time (e.g., 14:00)
+        end_of_period = now
     else:
         end_of_period = timezone.make_aware(
             datetime.combine(to_date, datetime.max.time())
         )
     
-    query = """
+    voltage_clause = "AND f.voltage_level = %s" if voltage_level else ""
+    query = f"""
         SELECT 
             COUNT(*) as interruption_count,
             COALESCE(SUM(
@@ -437,19 +411,24 @@ def calculate_state_avg_interruption_duration_sql(state_id, from_date, to_date):
         INNER JOIN common_businessdistrict bd ON f.business_district_id = bd.id
         WHERE bd.state_id = %s
             AND f.is_onboarded = TRUE
+            {voltage_clause}
             AND (
                 (fi.occurred_at AT TIME ZONE 'Africa/Lagos')::date BETWEEN %s AND %s
                 OR (fi.occurred_at < %s AND fi.restored_at IS NULL)
             )
     """
     
+    params = [now, end_of_period, start_of_period, state_id]
+    if voltage_level:
+        params.append(voltage_level)
+    params += [from_date, to_date, start_of_period]
+    
     with connection.cursor() as cursor:
-        cursor.execute(query, [now, end_of_period, start_of_period, state_id, from_date, to_date, start_of_period])
+        cursor.execute(query, params)
         result = cursor.fetchone()
         interruption_count = result[0] if result else 0
         total_hours = float(result[1]) if result else 0
     
-    # Calculate average
     avg_duration = total_hours / interruption_count if interruption_count > 0 else 0
     
     return round(avg_duration, 2)
@@ -487,56 +466,45 @@ def get_previous_periods(start_date, period_days, count=4):
     return periods
 
 
-def calculate_state_metrics_for_period(state_id, from_date, to_date):
+def calculate_state_metrics_for_period(state_id, from_date, to_date, voltage_level=None):
     """
     Calculate all metrics for a single period.
-    
-    UPDATED: 
-    - Only considers ONBOARDED feeders
-    - Uses actual elapsed time for current periods
-    - Uses timezone-aware datetime ranges
-    - Uses hybrid energy calculation
-    
-    CORRECTED: Duration includes all active interruptions,
-    count only includes interruptions that occurred in period.
+    Optionally filtered by voltage_level ('11kv' or '33kv').
     """
-    # 1. Supply hours (ONBOARDED feeders only, fractional days for current periods)
-    avg_supply = float(calculate_state_hours_of_supply_sql(state_id, from_date, to_date))
-    
-    # 2. Interruption duration (all types, includes ALL active interruptions, ONBOARDED feeders only)
+    avg_supply = float(calculate_state_hours_of_supply_sql(state_id, from_date, to_date, voltage_level=voltage_level))
+
     avg_duration, total_interruptions = calculate_state_interruption_metrics_sql(
-        state_id, from_date, to_date
+        state_id, from_date, to_date, voltage_level=voltage_level
     )
     avg_duration = float(avg_duration)
     
-    # 3. Turnaround time (exclude L/S and TCN, includes ALL active local faults, ONBOARDED feeders only)
     turnaround_time, _ = calculate_state_interruption_metrics_sql(
-        state_id, from_date, to_date, exclude_types=TURNAROUND_EXCLUSIONS
+        state_id, from_date, to_date, exclude_types=TURNAROUND_EXCLUSIONS, voltage_level=voltage_level
     )
     turnaround_time = float(turnaround_time)
     
-    # 4. Average interruption duration (hours per interruption event, ONBOARDED feeders only)
     avg_int_duration = float(calculate_state_avg_interruption_duration_sql(
-        state_id, from_date, to_date
+        state_id, from_date, to_date, voltage_level=voltage_level
     ))
     
-    # 5. Energy delivered (Hybrid: EnergyDelivered + HourlyLoad fallback, ONBOARDED feeders only)
-    total_energy = float(calculate_state_energy_delivered_sql(state_id, from_date, to_date))
-    
-    # 6. Feeder count (ONBOARDED feeders only)
-    feeder_count = Feeder.objects.filter(
+    feeder_qs = Feeder.objects.filter(
         business_district__state_id=state_id,
         is_onboarded=True
-    ).count()
+    )
+    if voltage_level:
+        feeder_qs = feeder_qs.filter(voltage_level=voltage_level)
+    feeder_ids = list(feeder_qs.values_list('id', flat=True))
+    feeder_count = len(feeder_ids)
+
+    total_energy = calculate_energy_delivered(feeder_ids, from_date, to_date)['total_mwh']
     
-    # Validate time-based metrics
     avg_supply = min(avg_supply, 24.0)
-    avg_duration = min(avg_duration, 24.0)
+    avg_duration = round(24.0 - avg_supply, 2)  # always sums to 24 with supply
     turnaround_time = min(turnaround_time, 24.0)
-    
+
     return {
         "avg_supply": round(avg_supply, 2),
-        "avg_duration": round(avg_duration, 2),
+        "avg_duration": avg_duration,
         "turnaround_time": round(turnaround_time, 2),
         "avg_interruption_duration": round(avg_int_duration, 2),
         "interruptions": int(total_interruptions),
@@ -545,12 +513,10 @@ def calculate_state_metrics_for_period(state_id, from_date, to_date):
     }
 
 
-def build_metrics_with_history(state, start_date, end_date, period_days):
+def build_metrics_with_history(state, start_date, end_date, period_days, voltage_level=None):
     """Build metrics response with historical data"""
-    # Get current period metrics
-    current = calculate_state_metrics_for_period(state.id, start_date, end_date)
+    current = calculate_state_metrics_for_period(state.id, start_date, end_date, voltage_level=voltage_level)
     
-    # Get historical periods
     previous_periods = get_previous_periods(start_date, period_days)
     
     history_data = []
@@ -558,10 +524,11 @@ def build_metrics_with_history(state, start_date, end_date, period_days):
         hist_metrics = calculate_state_metrics_for_period(
             state.id, 
             period["start"], 
-            period["end"]
+            period["end"],
+            voltage_level=voltage_level
         )
         history_data.append({
-            "month": period["label"],  # Keep "month" for backward compatibility
+            "month": period["label"],
             **hist_metrics
         })
     
@@ -594,14 +561,14 @@ def build_metrics_with_history(state, start_date, end_date, period_days):
     return metrics
 
 
-def get_top_bottom_feeders_sql(state_id, from_date, to_date):
+def get_top_bottom_feeders_sql(state_id, from_date, to_date, voltage_level=None):
     """
-    Get top 5 and bottom 5 feeders by peak load
-    
-    UPDATED: Only considers ONBOARDED feeders.
+    Get top 5 and bottom 5 feeders by peak load.
+    Only considers ONBOARDED feeders. Optionally filtered by voltage_level ('11kv' or '33kv').
     """
-    query = """
-        SELECT 
+    voltage_clause = "AND f.voltage_level = %s" if voltage_level else ""
+    query = f"""
+        SELECT
             f.name as feeder_name,
             f.slug as feeder_slug,
             s.name as substation_name,
@@ -613,13 +580,15 @@ def get_top_bottom_feeders_sql(state_id, from_date, to_date):
         INNER JOIN common_businessdistrict bd ON f.business_district_id = bd.id
         WHERE bd.state_id = %s
             AND f.is_onboarded = TRUE
+            {voltage_clause}
             AND hl.date BETWEEN %s AND %s
         GROUP BY f.id, f.name, f.slug, s.name, f.voltage_level
         ORDER BY peak_load DESC
     """
-    
+
+    params = [state_id] + ([voltage_level] if voltage_level else []) + [from_date, to_date]
     with connection.cursor() as cursor:
-        cursor.execute(query, [state_id, from_date, to_date])
+        cursor.execute(query, params)
         results = cursor.fetchall()
     
     if not results:
@@ -644,57 +613,38 @@ def get_top_bottom_feeders_sql(state_id, from_date, to_date):
     return top_5, bottom_5
 
 
-def get_load_trend_hourly_sql(state_id, day):
+def get_load_trend_hourly_sql(state_id, day, voltage_level=None):
     """
-    Get hourly load trend for a specific day (for daily mode)
-    
-    UPDATED: 
-    - Only considers ONBOARDED feeders
-    - Returns all hours from 0 to current hour (if today) or 0-23 (if past)
-    - Missing hours filled with 0
-    
-    Returns hourly breakdown for the specified day
+    Get hourly load trend for a specific day.
+    Optionally filtered by voltage_level ('11kv' or '33kv').
     """
     if not day:
         return []
-    
+
     today = timezone.now().date()
     now = timezone.now()
-    
-    # Determine max hour to return
+
     if day == today:
-        # For current day, only return up to current hour
         max_hour = now.hour
     else:
-        # For past days, return all 24 hours
         max_hour = 23
-    
-    query = """
-        SELECT 
-            hl.hour,
-            AVG(hl.load_mw) as avg_load
-        FROM technical_hourlyload hl
-        INNER JOIN common_feeder f ON hl.feeder_id = f.id
-        INNER JOIN common_businessdistrict bd ON f.business_district_id = bd.id
-        WHERE bd.state_id = %s
-            AND f.is_onboarded = TRUE
-            AND hl.date = %s
-        GROUP BY hl.hour
-        ORDER BY hl.hour
-    """
-    
+
     try:
-        with connection.cursor() as cursor:
-            cursor.execute(query, [state_id, day])
-            results = cursor.fetchall()
-        
-        # Create a dictionary for quick lookup
+        qs = HourlyLoad.objects.filter(
+            feeder__business_district__state_id=state_id,
+            feeder__is_onboarded=True,
+            date=day,
+        )
+        if voltage_level:
+            qs = qs.filter(feeder__voltage_level=voltage_level)
+
+        results = qs.values('hour').annotate(avg_load=Avg('load_mw')).order_by('hour')
+
         loads_dict = {
-            row[0]: round(float(row[1] or 0), 2)
+            row['hour']: round(float(row['avg_load'] or 0), 2)
             for row in results
         }
-        
-        # Generate series with all hours from 0 to max_hour
+
         series = [
             {
                 "hour": hour,
@@ -702,96 +652,64 @@ def get_load_trend_hourly_sql(state_id, day):
             }
             for hour in range(max_hour + 1)
         ]
-        
+
         return series
-        
+
     except Exception as e:
         print(f"Error getting hourly load trend: {str(e)}")
         return []
 
 
-def get_load_trend_daily_sql(state_id, from_date, to_date):
+def get_load_trend_daily_sql(state_id, from_date, to_date, voltage_level=None):
     """
-    Get daily load trend for a date range (for monthly/weekly/custom modes)
-    
-    UPDATED: 
-    - Only considers ONBOARDED feeders
-    - Returns all days from from_date to min(to_date, today)
-    - Missing days filled with 0
-    
-    Returns daily averages for each day in the range
+    Get daily load trend for a date range.
+    Optionally filtered by voltage_level ('11kv' or '33kv').
     """
     today = timezone.now().date()
-    
-    # Cap effective end date at today
     effective_end = min(to_date, today)
-    
-    query = """
-        SELECT 
-            hl.date,
-            AVG(hl.load_mw) as avg_load
-        FROM technical_hourlyload hl
-        INNER JOIN common_feeder f ON hl.feeder_id = f.id
-        INNER JOIN common_businessdistrict bd ON f.business_district_id = bd.id
-        WHERE bd.state_id = %s
-            AND f.is_onboarded = TRUE
-            AND hl.date BETWEEN %s AND %s
-        GROUP BY hl.date
-        ORDER BY hl.date
-    """
-    
+
     try:
-        with connection.cursor() as cursor:
-            cursor.execute(query, [state_id, from_date, effective_end])
-            results = cursor.fetchall()
-        
-        # Create a dictionary for quick lookup
+        qs = HourlyLoad.objects.filter(
+            feeder__business_district__state_id=state_id,
+            feeder__is_onboarded=True,
+            date__gte=from_date,
+            date__lte=effective_end,
+        )
+        if voltage_level:
+            qs = qs.filter(feeder__voltage_level=voltage_level)
+
+        results = qs.values('date').annotate(avg_load=Avg('load_mw')).order_by('date')
+
         loads_dict = {
-            row[0]: round(float(row[1] or 0), 2)
+            row['date']: round(float(row['avg_load'] or 0), 2)
             for row in results
         }
-        
-        # Generate series with all days from from_date to effective_end
+
         series = []
         current_date = from_date
-        
+
         while current_date <= effective_end:
             series.append({
                 "date": current_date.isoformat(),
                 "value": loads_dict.get(current_date, 0)
             })
             current_date += timedelta(days=1)
-        
+
         return series
-        
+
     except Exception as e:
         print(f"Error getting daily load trend: {str(e)}")
         return []
 
 
-def get_load_trend_adaptive(state_id, from_date, to_date, mode, specific_date=None):
+def get_load_trend_adaptive(state_id, from_date, to_date, mode, specific_date=None, voltage_level=None):
     """
-    Get load trend adapted to the query mode
-    
-    UPDATED:
-    - Fills missing values with 0
-    - Stops at current hour for today (hourly mode)
-    - Stops at today (daily mode)
-    
-    Args:
-        state_id: ID of the state
-        from_date: Start date of the period
-        to_date: End date of the period
-        mode: Query mode (daily, monthly, weekly, custom, yearly)
-        specific_date: Optional specific date for trend (overrides mode logic)
-    
-    Returns:
-        dict: Load trend data with appropriate format for the mode
+    Get load trend adapted to the query mode.
+    Optionally filtered by voltage_level ('11kv' or '33kv').
     """
     if mode == "daily" or specific_date:
-        # For daily mode or when specific date is provided: show hourly breakdown
         trend_date = specific_date if specific_date else from_date
-        series = get_load_trend_hourly_sql(state_id, trend_date)
+        series = get_load_trend_hourly_sql(state_id, trend_date, voltage_level=voltage_level)
         
         return {
             "unit": "MW",
@@ -800,14 +718,13 @@ def get_load_trend_adaptive(state_id, from_date, to_date, mode, specific_date=No
             "series": series
         }
     else:
-        # For monthly/weekly/custom/yearly: show daily averages
-        series = get_load_trend_daily_sql(state_id, from_date, to_date)
+        series = get_load_trend_daily_sql(state_id, from_date, to_date, voltage_level=voltage_level)
         
         if mode == "monthly":
             date_label = f"{from_date.year}-{from_date.month:02d}"
         elif mode == "yearly":
             date_label = str(from_date.year)
-        else:  # weekly, custom
+        else:
             date_label = f"{from_date.strftime('%Y-%m-%d')} to {to_date.strftime('%Y-%m-%d')}"
         
         return {
@@ -878,7 +795,6 @@ def state_technical_summary(request):
     if not state_name:
         return Response({"error": "State parameter is required"}, status=400)
     
-    # Get state object
     state = get_object_or_404(State, name__iexact=state_name)
     
     try:
@@ -886,7 +802,10 @@ def state_technical_summary(request):
     except ValueError as e:
         return Response({"error": str(e)}, status=400)
     
-    # Parse specific date for load trend (optional override)
+    # ✅ Parse voltage level filter
+    feeder_type_param = request.GET.get("feeder_type", "")
+    voltage_level = feeder_type_param if feeder_type_param in ("11kv", "33kv") else None
+    
     day_param = request.GET.get("date")
     specific_date = None
     if day_param:
@@ -895,35 +814,29 @@ def state_technical_summary(request):
         except ValueError:
             specific_date = None
     
-    # Calculate period days
     period_days = (to_date - from_date).days + 1
     
-    # Get metrics with history (ONBOARDED feeders only)
-    metrics = build_metrics_with_history(state, from_date, to_date, period_days)
+    # Get metrics with history (filtered by voltage_level)
+    metrics = build_metrics_with_history(state, from_date, to_date, period_days, voltage_level=voltage_level)
     
-    # Get top and bottom feeders (ONBOARDED feeders only)
-    top_feeders, bottom_feeders = get_top_bottom_feeders_sql(state.id, from_date, to_date)
+    # Top/bottom feeders filtered by voltage_level
+    top_feeders, bottom_feeders = get_top_bottom_feeders_sql(state.id, from_date, to_date, voltage_level=voltage_level)
     
-    # Get adaptive load trend (ONBOARDED feeders only)
-    # - For daily mode: returns hourly breakdown (0 to current hour if today, 0-23 if past)
-    # - For monthly/weekly/custom/yearly: returns daily averages (up to today)
-    # - Missing values filled with 0
-    load_trend = get_load_trend_adaptive(state.id, from_date, to_date, mode, specific_date)
+    # Load trend filtered by voltage_level
+    load_trend = get_load_trend_adaptive(state.id, from_date, to_date, mode, specific_date, voltage_level=voltage_level)
     
-    # Format period label for backward compatibility
     if mode == "monthly":
         period_label = f"{from_date.year}-{from_date.month:02d}"
     elif mode == "yearly":
         period_label = str(from_date.year)
     elif mode == "daily":
         period_label = from_date.strftime("%Y-%m-%d")
-    else:  # weekly, custom
+    else:
         period_label = f"{from_date.strftime('%Y-%m-%d')} to {to_date.strftime('%Y-%m-%d')}"
     
-    # Build response maintaining original structure
     response_data = {
         "state": state_name,
-        "month": period_label,  # Keep original field name
+        "month": period_label,
         "top_feeders": top_feeders,
         "bottom_feeders": bottom_feeders,
         "load_trend": load_trend,
