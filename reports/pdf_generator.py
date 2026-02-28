@@ -147,11 +147,16 @@ body {
 }
 
 /* ── Stats Container ─────────────────────────────────────────────────────── */
+/* gap: shorthand is WeasyPrint <54 unsafe — use margin-right on children     */
 .stats-container {
     display: flex;
-    gap: 40px;
     margin-bottom: 25px;
     flex-wrap: wrap;
+}
+
+.stat-item {
+    margin-right: 40px;
+    margin-bottom: 10px;
 }
 
 .stat-item h3 {
@@ -277,19 +282,23 @@ tbody td {
 }
 
 /* ── Metric Cards ─────────────────────────────────────────────────────────── */
+/* Use flexbox+wrap instead of CSS Grid for WeasyPrint compatibility           */
 .metrics-grid {
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: 12px;
-    margin-bottom: 15px;
+    display: -webkit-flex;
+    display: flex;
+    flex-wrap: wrap;
+    margin-left: -6px;
+    margin-right: -6px;
+    margin-bottom: 9px;
 }
 
 .metric-card {
+    width: calc(50% - 12px);
+    margin: 6px;
     border-radius: 15px;
     padding: 18px 22px;
     display: flex;
     align-items: center;
-    gap: 18px;
 }
 
 .metric-card.primary {
@@ -302,6 +311,7 @@ tbody td {
 
 .metric-label {
     flex: 0 0 175px;
+    padding-right: 18px;
 }
 
 .metric-label h2 {
@@ -342,18 +352,19 @@ tbody td {
 }
 
 /* ── Reliability Card ─────────────────────────────────────────────────────── */
+/* gap: removed — WeasyPrint <54 unsafe; spacing done via margin-right         */
 .reliability-card {
     background-color: #1e2f4a;
     border-radius: 15px;
     padding: 25px 30px;
     display: flex;
     align-items: center;
-    gap: 30px;
     margin-bottom: 25px;
 }
 
 .reliability-label {
     flex: 0 0 auto;
+    margin-right: 30px;
 }
 
 .reliability-label h2 {
@@ -405,18 +416,24 @@ tbody td {
 }
 
 /* ── Gaps/Improvements Grid ───────────────────────────────────────────────── */
+/* 3-column flex layout — WeasyPrint-safe (no CSS Grid, no gap shorthand)     */
 .sections-grid {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 15px;
+    display: -webkit-flex;
+    display: flex;
+    flex-wrap: wrap;
+    margin-left: -7px;
+    margin-right: -7px;
     margin-bottom: 20px;
 }
 
 .section-card {
+    width: calc(33.33% - 14px);
+    margin: 7px;
     background-color: #ececec;
     border-radius: 15px;
     padding: 20px;
     min-height: 160px;
+    box-sizing: border-box;
 }
 
 .section-header {
@@ -705,6 +722,20 @@ def render_infrastructure_overview(data, context, page_number):
     feeders_11kv = data.get('feeders_11kv', 0)
     feeders_33kv = data.get('feeders_33kv', 0)
 
+    # Only show a voltage stat box when that type actually exists in the result
+    # set — avoids showing "33kV Feeders: 0" when the user filtered to 11kV only
+    voltage_11kv_html = f"""
+            <div class="stat-item">
+                <h3>11kV Feeders</h3>
+                <div class="value">{feeders_11kv}</div>
+            </div>""" if feeders_11kv > 0 else ""
+
+    voltage_33kv_html = f"""
+            <div class="stat-item">
+                <h3>33kV Feeders</h3>
+                <div class="value">{feeders_33kv}</div>
+            </div>""" if feeders_33kv > 0 else ""
+
     return f"""
     <div class="page">
         <div class="header">
@@ -719,14 +750,8 @@ def render_infrastructure_overview(data, context, page_number):
                 <h3>Total Feeders Monitored</h3>
                 <div class="value">{data.get('total_feeders', 0)}</div>
             </div>
-            <div class="stat-item">
-                <h3>11kV Feeders</h3>
-                <div class="value">{feeders_11kv}</div>
-            </div>
-            <div class="stat-item">
-                <h3>33kV Feeders</h3>
-                <div class="value">{feeders_33kv}</div>
-            </div>
+            {voltage_11kv_html}
+            {voltage_33kv_html}
             <div class="stat-item">
                 <h3>D/Transformers Monitored</h3>
                 <div class="value">{data.get('total_transformers', 0)}</div>
@@ -1513,6 +1538,13 @@ class PDFGenerator:
 
     def generate_pdf(self):
         """Generate PDF from HTML"""
+        if not WEASYPRINT_AVAILABLE:
+            raise RuntimeError(
+                "WeasyPrint is not available on this server. "
+                "PDF generation requires WeasyPrint and its GTK dependencies. "
+                "Please contact your system administrator."
+            )
+
         html_content = self.generate_html()
 
         font_config = FontConfiguration()
