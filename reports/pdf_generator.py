@@ -613,63 +613,132 @@ tbody td {
     font-weight: 700;
 }
 
-/* ── Cover Page ───────────────────────────────────────────────────────────── */
+/* ── Cover Page (Modern) ──────────────────────────────────────────────────── */
+/* Layout: 8 px yellow accent bar (left) + full content column (right)        */
 .cover-page {
-    padding: 60px 80px;
+    padding: 0;
+    display: -webkit-flex;
+    display: flex;
+    flex-direction: row;
+    min-height: 297mm;
+    page-break-after: always;
+}
+
+.cover-left-accent {
+    width: 10px;
+    background-color: #fcd300;
+    flex-shrink: 0;
+}
+
+.cover-body {
+    flex: 1;
+    padding: 48px 60px;
+    display: -webkit-flex;
     display: flex;
     flex-direction: column;
-    justify-content: space-between;
-    min-height: 297mm;
 }
 
-.cover-main-content {
-    flex: 1;
+/* Top strip: company name left, date right */
+.cover-top-strip {
+    display: -webkit-flex;
     display: flex;
-    align-items: center;
     justify-content: space-between;
-    padding-right: 40px;
+    align-items: center;
+    margin-bottom: 48px;
 }
 
-.cover-title-section {
+.cover-top-company {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 2.5px;
+    opacity: 0.55;
+}
+
+.cover-top-date {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 2.5px;
+    opacity: 0.55;
+}
+
+/* Logo */
+.cover-logo-wrap {
+    margin-bottom: 52px;
+}
+
+.cover-logo-wrap img {
+    max-height: 72px;
+    max-width: 280px;
+    width: auto;
+}
+
+/* Main title block — takes remaining vertical space */
+.cover-title-block {
+    -webkit-flex: 1;
     flex: 1;
 }
 
-.cover-title-section h1 {
-    font-size: 64px;
-    font-weight: 400;
-    line-height: 1.1;
-    margin: 0;
+.cover-eyebrow {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 3.5px;
+    color: #fcd300;
+    margin-bottom: 20px;
 }
 
-.cover-subtitle {
-    font-size: 64px;
-    font-weight: 400;
-    line-height: 1.1;
+.cover-main-title {
+    font-size: 68px;
+    font-weight: 800;
+    line-height: 1.0;
+    text-transform: uppercase;
+    margin: 0 0 6px 0;
+    letter-spacing: -1px;
 }
 
-.cover-performance {
+.cover-main-title-accent {
     color: #fcd300;
 }
 
-.cover-logo-section {
-    display: flex;
-    align-items: center;
-    margin-left: 50px;
+.cover-accent-rule {
+    width: 70px;
+    height: 5px;
+    background-color: #fcd300;
+    border-radius: 3px;
+    margin: 28px 0;
 }
 
-.cover-logo-section img {
-    max-width: 300px;
-    height: auto;
+.cover-subtitle-text {
+    font-size: 15px;
+    font-weight: 400;
+    line-height: 1.6;
+    opacity: 0.65;
+    max-width: 480px;
 }
 
+/* Bottom footer strip */
 .cover-footer {
+    display: -webkit-flex;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
     padding-top: 20px;
+    margin-top: 40px;
     border-top: 1px solid rgba(255, 255, 255, 0.15);
 }
 
 .cover-footer img {
-    max-width: 150px;
+    max-width: 130px;
     height: auto;
+}
+
+.cover-footer-period {
+    font-size: 12px;
+    font-weight: 600;
+    opacity: 0.6;
+    letter-spacing: 1px;
 }
 
 /* ── Chart placeholder ────────────────────────────────────────────────────── */
@@ -760,29 +829,61 @@ PORTRAIT_STYLES = """
 # =============================================================================
 
 def render_cover_page(_data, context):
-    """Render cover page HTML"""
-    return f"""
-    <div class="page cover-page">
-        <div class="header">
-            <div class="company-name">{context.get('company_name', 'KANO ELECTRICITY DISTRIBUTION COMPANY')}</div>
-            <div class="date">{context.get('report_date', '')}</div>
-        </div>
+    """Render modern cover page HTML"""
+    company_name = context.get('company_name', 'KANO ELECTRICITY DISTRIBUTION COMPANY')
+    report_title = context.get('report_title', 'Monthly Performance Report')
+    report_subtitle = context.get('report_subtitle', '')
+    report_date = context.get('report_date', '')
 
-        <div class="cover-main-content">
-            <div class="cover-title-section">
-                <h1>{context.get('report_title', 'Monthly Performance Report')}</h1>
-                <div class="cover-subtitle">
-                    <span class="cover-performance">{context.get('report_subtitle', '')}</span>
-                </div>
+    # Split title into first word(s) + last word for accent colouring.
+    # e.g. "Monthly Performance Report" → "Monthly Performance" white + "Report" yellow
+    words = report_title.split()
+    if len(words) > 1:
+        title_main = ' '.join(words[:-1])
+        title_accent = words[-1]
+    else:
+        title_main = report_title
+        title_accent = ''
+
+    subtitle_html = (
+        f'<div class="cover-subtitle-text">{report_subtitle}</div>'
+        if report_subtitle else
+        f'<div class="cover-subtitle-text">{company_name}</div>'
+    )
+
+    return f"""
+    <div class="cover-page">
+        <div class="cover-left-accent"></div>
+
+        <div class="cover-body">
+
+            <div class="cover-top-strip">
+                <div class="cover-top-company">{company_name}</div>
+                <div class="cover-top-date">{report_date}</div>
             </div>
 
-            <div class="cover-logo-section">
+            <div class="cover-logo-wrap">
                 <img src="{context.get('logo_gray_url', '')}" alt="Company Logo" />
             </div>
-        </div>
 
-        <div class="cover-footer">
-            <img src="{context.get('footer_logo_url', '')}" alt="Powered by EMRC" />
+            <div class="cover-title-block">
+                <div class="cover-eyebrow">Performance Monitoring Tool</div>
+
+                <h1 class="cover-main-title">
+                    {title_main}<br/>
+                    <span class="cover-main-title-accent">{title_accent}</span>
+                </h1>
+
+                <div class="cover-accent-rule"></div>
+
+                {subtitle_html}
+            </div>
+
+            <div class="cover-footer">
+                <img src="{context.get('footer_logo_url', '')}" alt="Powered by EMRC" />
+                <div class="cover-footer-period">{report_date}</div>
+            </div>
+
         </div>
     </div>
     """
