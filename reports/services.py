@@ -823,42 +823,55 @@ class ReportDataService:
     
     def get_service_band_summary(self):
         """Get summary by service band"""
-        bands = Band.objects.all().order_by('name')
-        
+        # Build band -> feeder_ids mapping in one shot to avoid N+1 queries
+        feeder_band_map = dict(
+            Feeder.objects.filter(id__in=self.feeder_ids)
+            .values_list('id', 'band_id')
+        )
+        # Group feeder_ids by band_id
+        from collections import defaultdict
+        band_feeder_map = defaultdict(list)
+        for fid, bid in feeder_band_map.items():
+            if bid is not None:
+                band_feeder_map[bid].append(fid)
+
+        bands = Band.objects.filter(id__in=band_feeder_map.keys()).order_by('name')
+
         result = []
         for band in bands:
-            band_feeder_ids = [
-                fid for fid in self.feeder_ids 
-                if Feeder.objects.filter(id=fid, band=band).exists()
-            ]
-            
+            band_feeder_ids = band_feeder_map[band.id]
+
             if not band_feeder_ids:
                 continue
-            
+
             feeder_count = len(band_feeder_ids)
-            
+
             # Hours of supply
             hours_count = HourlyLoad.objects.filter(
                 feeder_id__in=band_feeder_ids,
                 date__range=(self.from_date, self.to_date),
                 load_mw__gt=0
             ).count()
-            
-            avg_supply = hours_count / (feeder_count * self.period_days) if feeder_count > 0 else 0
-            
+
+            # Match main metrics: single-day vs multi-day
+            if self.is_single_day:
+                avg_supply = float(hours_count) / feeder_count if feeder_count > 0 else 0
+            else:
+                avg_supply = hours_count / (feeder_count * self.period_days) if feeder_count > 0 else 0
+
             # Interruptions
             interruption_count = FeederInterruption.objects.filter(
                 feeder_id__in=band_feeder_ids,
                 occurred_at__date__range=(self.from_date, self.to_date)
             ).count()
-            
+
             result.append({
                 'band': band.name,
                 'feeder_count': feeder_count,
                 'hours_of_supply': round(min(avg_supply, 24.0), 2),
                 'interruptions': interruption_count,
             })
-        
+
         return result
     
     def get_state_performance(self):
@@ -895,21 +908,22 @@ class ReportDataService:
                 date__range=(self.from_date, self.to_date),
                 load_mw__gt=0
             ).count()
-            
-            avg_supply = hours_count / (feeder_count * self.period_days) if feeder_count > 0 else 0
-            
+
+            # Match main metrics: single-day vs multi-day
+            if self.is_single_day:
+                avg_supply = float(hours_count) / feeder_count if feeder_count > 0 else 0
+            else:
+                avg_supply = hours_count / (feeder_count * self.period_days) if feeder_count > 0 else 0
+
             # Peak load
             peak_load = HourlyLoad.objects.filter(
                 feeder_id__in=feeder_ids,
                 date__range=(self.from_date, self.to_date)
             ).aggregate(max_load=Max('load_mw'))['max_load'] or 0
-            
-            # Energy
-            energy = HourlyLoad.objects.filter(
-                feeder_id__in=feeder_ids,
-                date__range=(self.from_date, self.to_date)
-            ).aggregate(total=Sum('load_mw'))['total'] or 0
-            
+
+            # Energy — use same hybrid function as main metrics for consistency
+            energy = calculate_energy_delivered(feeder_ids, self.from_date, self.to_date)['total_mwh']
+
             # Interruptions
             interruption_count = FeederInterruption.objects.filter(
                 feeder_id__in=feeder_ids,
@@ -963,21 +977,22 @@ class ReportDataService:
                 date__range=(self.from_date, self.to_date),
                 load_mw__gt=0
             ).count()
-            
-            avg_supply = hours_count / (feeder_count * self.period_days) if feeder_count > 0 else 0
-            
+
+            # Match main metrics: single-day vs multi-day
+            if self.is_single_day:
+                avg_supply = float(hours_count) / feeder_count if feeder_count > 0 else 0
+            else:
+                avg_supply = hours_count / (feeder_count * self.period_days) if feeder_count > 0 else 0
+
             # Peak load
             peak_load = HourlyLoad.objects.filter(
                 feeder_id__in=feeder_ids,
                 date__range=(self.from_date, self.to_date)
             ).aggregate(max_load=Max('load_mw'))['max_load'] or 0
-            
-            # Energy
-            energy = HourlyLoad.objects.filter(
-                feeder_id__in=feeder_ids,
-                date__range=(self.from_date, self.to_date)
-            ).aggregate(total=Sum('load_mw'))['total'] or 0
-            
+
+            # Energy — use same hybrid function as main metrics for consistency
+            energy = calculate_energy_delivered(feeder_ids, self.from_date, self.to_date)['total_mwh']
+
             # Interruptions
             interruption_count = FeederInterruption.objects.filter(
                 feeder_id__in=feeder_ids,

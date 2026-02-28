@@ -357,7 +357,7 @@ tbody td {
 }
 
 .metric-card {
-    width: 49%;
+    width: 32%;
     margin: 0 0.5% 1% 0.5%;
     border-radius: 15px;
     padding: 18px 22px;
