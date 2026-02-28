@@ -315,7 +315,10 @@ class ReportDataService:
         queryset = Feeder.objects.filter(is_onboarded=True)  # ✅ Only onboarded feeders
 
         # Filter by voltage level: '11kv' or '33kv' (optional)
+        # Normalize to lowercase so '11kV', '11KV', etc. all work
         voltage_level = self.filters.get('voltage_level')
+        if voltage_level:
+            voltage_level = str(voltage_level).lower().strip()
         if voltage_level in ('11kv', '33kv'):
             queryset = queryset.filter(voltage_level=voltage_level)
 
