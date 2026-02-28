@@ -1,6 +1,6 @@
 # reports/views.py
 from rest_framework.decorators import api_view
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.generics import (
@@ -41,7 +41,7 @@ class ReportTemplateListCreateView(ListCreateAPIView):
     GET: List templates (filtered by user unless is_public=True)
     POST: Create a new template
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [AllowAny]
     
     def get_serializer_class(self):
         if self.request.method == 'POST':
@@ -60,7 +60,7 @@ class ReportTemplateDetailView(RetrieveUpdateDestroyAPIView):
     """
     Retrieve, update, or delete a report template.
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [AllowAny]
     
     def get_serializer_class(self):
         if self.request.method in ['PUT', 'PATCH']:
@@ -455,7 +455,7 @@ class GeneratedReportListView(ListAPIView):
     """
     List generated reports history for the current user.
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [AllowAny]
     serializer_class = GeneratedReportSerializer
     
     def get_queryset(self):

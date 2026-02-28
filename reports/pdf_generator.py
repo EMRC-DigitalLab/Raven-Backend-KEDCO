@@ -124,8 +124,7 @@ body {
 }
 
 /* ── Footer ──────────────────────────────────────────────────────────────── */
-/* margin-top: auto in a flex-column container pushes the footer to the very
-   bottom of the page regardless of content height.                           */
+/* HTML preview: margin-top:auto in flex column keeps footer at section bottom */
 
 .footer {
     margin-top: auto;
@@ -142,6 +141,50 @@ body {
 }
 
 .page-number {
+    font-size: 24px;
+    font-weight: 600;
+}
+
+/* ── PDF-mode fixed footer ────────────────────────────────────────────────── */
+/* WeasyPrint repeats position:fixed elements on every physical page.         */
+/* .footer-fixed is ONLY shown when <body class="pdf-mode"> is set, which     */
+/* generate_pdf() does. In HTML preview mode it stays hidden.                 */
+
+.footer-fixed {
+    display: none;
+}
+
+.pdf-mode .page {
+    padding-bottom: 65px;
+}
+
+.pdf-mode .footer,
+.pdf-mode .cover-footer {
+    display: none;
+}
+
+.pdf-mode .footer-fixed {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    padding: 12px 40px 15px;
+    display: -webkit-flex;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-top: 1px solid rgba(255, 255, 255, 0.15);
+    background-color: #002050;
+}
+
+.pdf-mode .footer-fixed img {
+    max-width: 150px;
+    height: auto;
+}
+
+/* CSS counter auto-increments per physical page in WeasyPrint */
+.pdf-mode .footer-fixed .page-number::after {
+    content: counter(page);
     font-size: 24px;
     font-weight: 600;
 }
@@ -281,6 +324,24 @@ tbody td {
     font-weight: 500;
 }
 
+/* Prevent rows from breaking across pages */
+.table-container tr {
+    page-break-inside: avoid;
+}
+
+/* ── Two-column trend layout ──────────────────────────────────────────────── */
+.trend-columns {
+    display: -webkit-flex;
+    display: flex;
+    margin-left: -10px;
+    margin-right: -10px;
+}
+
+.trend-column {
+    width: calc(50% - 20px);
+    margin: 0 10px;
+}
+
 /* ── Metric Cards ─────────────────────────────────────────────────────────── */
 /* Use flexbox+wrap instead of CSS Grid for WeasyPrint compatibility           */
 .metrics-grid {
@@ -408,6 +469,67 @@ tbody td {
     opacity: 0.9;
 }
 
+/* ── Reliability KPI grid ─────────────────────────────────────────────────── */
+.reliability-kpi-grid {
+    display: -webkit-flex;
+    display: flex;
+    flex-wrap: wrap;
+    margin-left: -8px;
+    margin-right: -8px;
+    margin-bottom: 25px;
+}
+
+.reliability-kpi-card {
+    width: calc(33.33% - 16px);
+    margin: 8px;
+    background-color: #1e2f4a;
+    border-radius: 15px;
+    padding: 30px 24px;
+    text-align: center;
+    box-sizing: border-box;
+}
+
+.reliability-kpi-value {
+    font-size: 42px;
+    font-weight: 700;
+    color: #fcd300;
+    line-height: 1;
+    margin-bottom: 10px;
+}
+
+.reliability-kpi-label {
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    opacity: 0.85;
+    line-height: 1.4;
+}
+
+.reliability-highlight {
+    background-color: #0a3d6b;
+    border-radius: 15px;
+    padding: 25px 30px;
+    margin-bottom: 20px;
+    text-align: center;
+}
+
+.reliability-highlight h2 {
+    font-size: 20px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: #cbffcb;
+    margin-bottom: 6px;
+}
+
+.reliability-highlight p {
+    font-size: 12px;
+    font-weight: 400;
+    opacity: 0.75;
+    line-height: 1.5;
+}
+
 /* ── Section Title ────────────────────────────────────────────────────────── */
 .section-title {
     font-size: 24px;
@@ -491,63 +613,132 @@ tbody td {
     font-weight: 700;
 }
 
-/* ── Cover Page ───────────────────────────────────────────────────────────── */
+/* ── Cover Page (Modern) ──────────────────────────────────────────────────── */
+/* Layout: 8 px yellow accent bar (left) + full content column (right)        */
 .cover-page {
-    padding: 60px 80px;
+    padding: 0;
+    display: -webkit-flex;
+    display: flex;
+    flex-direction: row;
+    min-height: 297mm;
+    page-break-after: always;
+}
+
+.cover-left-accent {
+    width: 10px;
+    background-color: #fcd300;
+    flex-shrink: 0;
+}
+
+.cover-body {
+    flex: 1;
+    padding: 48px 60px;
+    display: -webkit-flex;
     display: flex;
     flex-direction: column;
-    justify-content: space-between;
-    min-height: 297mm;
 }
 
-.cover-main-content {
-    flex: 1;
+/* Top strip: company name left, date right */
+.cover-top-strip {
+    display: -webkit-flex;
     display: flex;
-    align-items: center;
     justify-content: space-between;
-    padding-right: 40px;
+    align-items: center;
+    margin-bottom: 48px;
 }
 
-.cover-title-section {
+.cover-top-company {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 2.5px;
+    opacity: 0.55;
+}
+
+.cover-top-date {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 2.5px;
+    opacity: 0.55;
+}
+
+/* Logo */
+.cover-logo-wrap {
+    margin-bottom: 52px;
+}
+
+.cover-logo-wrap img {
+    max-height: 72px;
+    max-width: 280px;
+    width: auto;
+}
+
+/* Main title block — takes remaining vertical space */
+.cover-title-block {
+    -webkit-flex: 1;
     flex: 1;
 }
 
-.cover-title-section h1 {
-    font-size: 64px;
-    font-weight: 400;
-    line-height: 1.1;
-    margin: 0;
+.cover-eyebrow {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 3.5px;
+    color: #fcd300;
+    margin-bottom: 20px;
 }
 
-.cover-subtitle {
-    font-size: 64px;
-    font-weight: 400;
-    line-height: 1.1;
+.cover-main-title {
+    font-size: 68px;
+    font-weight: 800;
+    line-height: 1.0;
+    text-transform: uppercase;
+    margin: 0 0 6px 0;
+    letter-spacing: -1px;
 }
 
-.cover-performance {
+.cover-main-title-accent {
     color: #fcd300;
 }
 
-.cover-logo-section {
-    display: flex;
-    align-items: center;
-    margin-left: 50px;
+.cover-accent-rule {
+    width: 70px;
+    height: 5px;
+    background-color: #fcd300;
+    border-radius: 3px;
+    margin: 28px 0;
 }
 
-.cover-logo-section img {
-    max-width: 300px;
-    height: auto;
+.cover-subtitle-text {
+    font-size: 15px;
+    font-weight: 400;
+    line-height: 1.6;
+    opacity: 0.65;
+    max-width: 480px;
 }
 
+/* Bottom footer strip */
 .cover-footer {
+    display: -webkit-flex;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
     padding-top: 20px;
+    margin-top: 40px;
     border-top: 1px solid rgba(255, 255, 255, 0.15);
 }
 
 .cover-footer img {
-    max-width: 150px;
+    max-width: 130px;
     height: auto;
+}
+
+.cover-footer-period {
+    font-size: 12px;
+    font-weight: 600;
+    opacity: 0.6;
+    letter-spacing: 1px;
 }
 
 /* ── Chart placeholder ────────────────────────────────────────────────────── */
@@ -638,29 +829,61 @@ PORTRAIT_STYLES = """
 # =============================================================================
 
 def render_cover_page(_data, context):
-    """Render cover page HTML"""
-    return f"""
-    <div class="page cover-page">
-        <div class="header">
-            <div class="company-name">{context.get('company_name', 'KANO ELECTRICITY DISTRIBUTION COMPANY')}</div>
-            <div class="date">{context.get('report_date', '')}</div>
-        </div>
+    """Render modern cover page HTML"""
+    company_name = context.get('company_name', 'KANO ELECTRICITY DISTRIBUTION COMPANY')
+    report_title = context.get('report_title', 'Monthly Performance Report')
+    report_subtitle = context.get('report_subtitle', '')
+    report_date = context.get('report_date', '')
 
-        <div class="cover-main-content">
-            <div class="cover-title-section">
-                <h1>{context.get('report_title', 'Monthly Performance Report')}</h1>
-                <div class="cover-subtitle">
-                    <span class="cover-performance">{context.get('report_subtitle', '')}</span>
-                </div>
+    # Split title into first word(s) + last word for accent colouring.
+    # e.g. "Monthly Performance Report" → "Monthly Performance" white + "Report" yellow
+    words = report_title.split()
+    if len(words) > 1:
+        title_main = ' '.join(words[:-1])
+        title_accent = words[-1]
+    else:
+        title_main = report_title
+        title_accent = ''
+
+    subtitle_html = (
+        f'<div class="cover-subtitle-text">{report_subtitle}</div>'
+        if report_subtitle else
+        f'<div class="cover-subtitle-text">{company_name}</div>'
+    )
+
+    return f"""
+    <div class="cover-page">
+        <div class="cover-left-accent"></div>
+
+        <div class="cover-body">
+
+            <div class="cover-top-strip">
+                <div class="cover-top-company">{company_name}</div>
+                <div class="cover-top-date">{report_date}</div>
             </div>
 
-            <div class="cover-logo-section">
+            <div class="cover-logo-wrap">
                 <img src="{context.get('logo_gray_url', '')}" alt="Company Logo" />
             </div>
-        </div>
 
-        <div class="cover-footer">
-            <img src="{context.get('footer_logo_url', '')}" alt="Powered by EMRC" />
+            <div class="cover-title-block">
+                <div class="cover-eyebrow">Performance Monitoring Tool</div>
+
+                <h1 class="cover-main-title">
+                    {title_main}<br/>
+                    <span class="cover-main-title-accent">{title_accent}</span>
+                </h1>
+
+                <div class="cover-accent-rule"></div>
+
+                {subtitle_html}
+            </div>
+
+            <div class="cover-footer">
+                <img src="{context.get('footer_logo_url', '')}" alt="Powered by EMRC" />
+                <div class="cover-footer-period">{report_date}</div>
+            </div>
+
         </div>
     </div>
     """
@@ -891,7 +1114,11 @@ def render_technical_metrics(data, context, page_number, config=None):
 
 
 def render_system_reliability(data, context, page_number):
-    """Render system reliability section HTML"""
+    """Render system reliability section HTML — expanded KPI card layout"""
+    cum_hours = data.get('cumulative_interruption_hours', 0)
+    avg_duration = data.get('avg_duration_of_interruption', 0)
+    avg_tat = data.get('avg_turnaround_time', 0)
+
     return f"""
     <div class="page">
         <div class="header">
@@ -901,23 +1128,23 @@ def render_system_reliability(data, context, page_number):
 
         <h1 class="page-title">System Reliability</h1>
 
-        <div class="reliability-card">
-            <div class="reliability-label">
-                <h2>SYSTEM<br/>RELIABILITY</h2>
+        <div class="reliability-highlight">
+            <h2>System Reliability Summary</h2>
+            <p>Key reliability metrics for the reporting period across all monitored feeders</p>
+        </div>
+
+        <div class="reliability-kpi-grid">
+            <div class="reliability-kpi-card">
+                <div class="reliability-kpi-value">{cum_hours} hrs</div>
+                <div class="reliability-kpi-label">Cumulative Hours<br/>of Interruption</div>
             </div>
-            <div class="reliability-metrics">
-                <div class="reliability-item">
-                    <div class="reliability-value">{data.get('cumulative_interruption_hours', 0)} hrs</div>
-                    <div class="reliability-description">Cumulative Hours of Interruption</div>
-                </div>
-                <div class="reliability-item">
-                    <div class="reliability-value">{data.get('avg_duration_of_interruption', 0)} hrs</div>
-                    <div class="reliability-description">Average Duration of Interruption</div>
-                </div>
-                <div class="reliability-item">
-                    <div class="reliability-value">{data.get('avg_turnaround_time', 0)} hrs</div>
-                    <div class="reliability-description">Average Turnaround Time (Local Faults)</div>
-                </div>
+            <div class="reliability-kpi-card">
+                <div class="reliability-kpi-value">{avg_duration} hrs</div>
+                <div class="reliability-kpi-label">Average Duration<br/>of Interruption</div>
+            </div>
+            <div class="reliability-kpi-card">
+                <div class="reliability-kpi-value">{avg_tat} hrs</div>
+                <div class="reliability-kpi-label">Average Turnaround<br/>Time (Local Faults)</div>
             </div>
         </div>
 
@@ -1028,17 +1255,32 @@ def render_feeder_performance_table(data, context, page_number):
 
 
 def render_service_band_summary(data, context, page_number):
-    """Render service band summary HTML"""
+    """Render service band summary HTML with summary stat cards"""
     rows_html = ""
+    total_feeders = 0
+    total_interruptions = 0
+    weighted_supply_sum = 0.0
+
     for band in data:
+        fc = band.get('feeder_count', 0)
+        intr = band.get('interruptions', 0)
+        hrs = band.get('hours_of_supply', 0)
+        total_feeders += fc
+        total_interruptions += intr
+        try:
+            weighted_supply_sum += float(hrs) * fc
+        except (ValueError, TypeError):
+            pass
         rows_html += f"""
         <tr>
             <td>Band {band['band']}</td>
-            <td style="text-align:right;">{band['feeder_count']}</td>
-            <td style="text-align:right;">{band['hours_of_supply']} hrs</td>
-            <td style="text-align:right;">{band['interruptions']}</td>
+            <td style="text-align:right;">{fc}</td>
+            <td style="text-align:right;">{hrs} hrs</td>
+            <td style="text-align:right;">{intr}</td>
         </tr>
         """
+
+    avg_supply = round(weighted_supply_sum / total_feeders, 2) if total_feeders > 0 else 0
 
     return f"""
     <div class="page">
@@ -1048,6 +1290,21 @@ def render_service_band_summary(data, context, page_number):
         </div>
 
         <h1 class="page-title">Service Band Summary</h1>
+
+        <div class="stats-container">
+            <div class="stat-item">
+                <h3>Total Feeders</h3>
+                <div class="value">{total_feeders}</div>
+            </div>
+            <div class="stat-item">
+                <h3>Avg Hours of Supply</h3>
+                <div class="value">{avg_supply} hrs</div>
+            </div>
+            <div class="stat-item">
+                <h3>Total Interruptions</h3>
+                <div class="value">{total_interruptions}</div>
+            </div>
+        </div>
 
         <div class="table-container">
             <table>
@@ -1251,17 +1508,36 @@ def render_gaps_improvements(data, context, page_number):
     """
 
 
-def render_hours_of_supply_chart(data, context, page_number):
-    """Render hours of supply trend table HTML"""
-    rows_html = ""
-    if isinstance(data, list):
-        for item in data:
-            rows_html += f"""
+def _split_trend_rows(data, key_date, key_value, unit):
+    """Split trend data into two HTML column strings for a 2-column layout."""
+    items = data if isinstance(data, list) else []
+    mid = (len(items) + 1) // 2
+    left, right = items[:mid], items[mid:]
+
+    def make_rows(chunk):
+        html = ""
+        for item in chunk:
+            html += f"""
             <tr>
-                <td>{item.get('date', '')}</td>
-                <td style="text-align:right;">{item.get('hours', 0)} hrs</td>
+                <td>{item.get(key_date, '')}</td>
+                <td style="text-align:right;">{item.get(key_value, 0)} {unit}</td>
+            </tr>"""
+        return html
+
+    return make_rows(left), make_rows(right)
+
+
+def render_hours_of_supply_chart(data, context, page_number):
+    """Render hours of supply trend table HTML — two-column layout"""
+    left_rows, right_rows = _split_trend_rows(data, 'date', 'hours', 'hrs')
+
+    col_header = """
+        <thead>
+            <tr>
+                <th>Date</th>
+                <th style="text-align:right;">Hrs of Supply</th>
             </tr>
-            """
+        </thead>"""
 
     return f"""
     <div class="page">
@@ -1272,18 +1548,17 @@ def render_hours_of_supply_chart(data, context, page_number):
 
         <h1 class="page-title">Hours of Supply Trend</h1>
 
-        <div class="table-container">
-            <table>
-                <thead>
-                    <tr>
-                        <th>Date</th>
-                        <th style="text-align:right;">Hours of Supply</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {rows_html}
-                </tbody>
-            </table>
+        <div class="trend-columns">
+            <div class="trend-column">
+                <div class="table-container">
+                    <table>{col_header}<tbody>{left_rows}</tbody></table>
+                </div>
+            </div>
+            <div class="trend-column">
+                <div class="table-container">
+                    <table>{col_header}<tbody>{right_rows}</tbody></table>
+                </div>
+            </div>
         </div>
 
         <div class="footer">
@@ -1295,16 +1570,16 @@ def render_hours_of_supply_chart(data, context, page_number):
 
 
 def render_load_trend_chart(data, context, page_number):
-    """Render load trend table HTML"""
-    rows_html = ""
-    if isinstance(data, list):
-        for item in data:
-            rows_html += f"""
+    """Render load trend table HTML — two-column layout"""
+    left_rows, right_rows = _split_trend_rows(data, 'date', 'value', 'MW')
+
+    col_header = """
+        <thead>
             <tr>
-                <td>{item.get('date', '')}</td>
-                <td style="text-align:right;">{item.get('value', 0)} MW</td>
+                <th>Date</th>
+                <th style="text-align:right;">Load (MW)</th>
             </tr>
-            """
+        </thead>"""
 
     return f"""
     <div class="page">
@@ -1315,18 +1590,17 @@ def render_load_trend_chart(data, context, page_number):
 
         <h1 class="page-title">Load Trend</h1>
 
-        <div class="table-container">
-            <table>
-                <thead>
-                    <tr>
-                        <th>Date</th>
-                        <th style="text-align:right;">Load (MW)</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {rows_html}
-                </tbody>
-            </table>
+        <div class="trend-columns">
+            <div class="trend-column">
+                <div class="table-container">
+                    <table>{col_header}<tbody>{left_rows}</tbody></table>
+                </div>
+            </div>
+            <div class="trend-column">
+                <div class="table-container">
+                    <table>{col_header}<tbody>{right_rows}</tbody></table>
+                </div>
+            </div>
         </div>
 
         <div class="footer">
@@ -1338,16 +1612,16 @@ def render_load_trend_chart(data, context, page_number):
 
 
 def render_energy_delivered_chart(data, context, page_number):
-    """Render energy delivered trend table HTML"""
-    rows_html = ""
-    if isinstance(data, list):
-        for item in data:
-            rows_html += f"""
+    """Render energy delivered trend table HTML — two-column layout"""
+    left_rows, right_rows = _split_trend_rows(data, 'date', 'value', 'MWh')
+
+    col_header = """
+        <thead>
             <tr>
-                <td>{item.get('date', '')}</td>
-                <td style="text-align:right;">{item.get('value', 0)} MWh</td>
+                <th>Date</th>
+                <th style="text-align:right;">Energy (MWh)</th>
             </tr>
-            """
+        </thead>"""
 
     return f"""
     <div class="page">
@@ -1358,18 +1632,17 @@ def render_energy_delivered_chart(data, context, page_number):
 
         <h1 class="page-title">Energy Delivered Trend</h1>
 
-        <div class="table-container">
-            <table>
-                <thead>
-                    <tr>
-                        <th>Date</th>
-                        <th style="text-align:right;">Energy (MWh)</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {rows_html}
-                </tbody>
-            </table>
+        <div class="trend-columns">
+            <div class="trend-column">
+                <div class="table-container">
+                    <table>{col_header}<tbody>{left_rows}</tbody></table>
+                </div>
+            </div>
+            <div class="trend-column">
+                <div class="table-container">
+                    <table>{col_header}<tbody>{right_rows}</tbody></table>
+                </div>
+            </div>
         </div>
 
         <div class="footer">
@@ -1474,9 +1747,20 @@ class PDFGenerator:
             })
         return toc_entries
 
-    def generate_html(self):
-        """Generate full HTML document"""
-        sections = self.report_config.get('sections', [])
+    def generate_html(self, for_pdf=False):
+        """Generate full HTML document.
+
+        for_pdf=True  → adds pdf-mode body class so the CSS fixed footer fires;
+                        used by generate_pdf() so every physical page has a footer.
+        for_pdf=False → normal HTML preview; inline per-section footers are used.
+        """
+        sections = list(self.report_config.get('sections', []))
+
+        # Auto-inject TOC as the second section (after cover page) if not already present
+        section_types = [s.get('section_type') for s in sections]
+        if 'table_of_contents' not in section_types:
+            insert_at = 1 if 'cover_page' in section_types else 0
+            sections.insert(insert_at, {'section_type': 'table_of_contents', 'config': {}})
 
         # Pre-build TOC entries so they are ready when the TOC section is rendered
         toc_entries = self._build_toc_entries(sections)
@@ -1516,6 +1800,17 @@ class PDFGenerator:
         # Build full HTML
         orientation_css = LANDSCAPE_STYLES if self.orientation == 'landscape' else PORTRAIT_STYLES
 
+        # pdf-mode body class activates the CSS fixed footer (position:fixed)
+        # which WeasyPrint repeats on every physical page automatically.
+        body_class = ' class="pdf-mode"' if for_pdf else ''
+
+        # One global fixed-footer element; CSS shows it only in pdf-mode.
+        fixed_footer_html = f"""
+        <div class="footer-fixed">
+            <img src="{self.context['footer_logo_url']}" alt="Powered by EMRC" />
+            <div class="page-number"></div>
+        </div>""" if for_pdf else ""
+
         html = f"""
         <!DOCTYPE html>
         <html lang="en">
@@ -1528,7 +1823,8 @@ class PDFGenerator:
                 {orientation_css}
             </style>
         </head>
-        <body>
+        <body{body_class}>
+            {fixed_footer_html}
             {sections_html}
         </body>
         </html>
@@ -1545,7 +1841,7 @@ class PDFGenerator:
                 "Please contact your system administrator."
             )
 
-        html_content = self.generate_html()
+        html_content = self.generate_html(for_pdf=True)
 
         font_config = FontConfiguration()
         html = HTML(string=html_content)
