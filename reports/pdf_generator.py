@@ -95,9 +95,9 @@ body {
    _paginate_table helper already splits long tables into multiple pages).    */
 
 .page {
-    width: 100%;
-    height: 297mm;
-    padding: 25px 40px;
+    width: 297mm;
+    height: 210mm;
+    padding: 18px 35px;
     page-break-after: always;
     display: flex;
     flex-direction: column;
@@ -110,8 +110,9 @@ body {
 }
 
 .page-landscape {
+    width: 297mm;
     height: 210mm;
-    padding: 20px 35px;
+    padding: 18px 30px;
 }
 
 /* ── Header ──────────────────────────────────────────────────────────────── */
@@ -613,7 +614,7 @@ tbody td {
     display: -webkit-flex;
     display: flex;
     flex-direction: row;
-    min-height: 297mm;
+    min-height: 210mm;
     page-break-after: always;
 }
 
@@ -821,11 +822,12 @@ PORTRAIT_STYLES = """
 # TABLE PAGINATION HELPER
 # =============================================================================
 
-def _paginate_table(rows_data, header_html, page_title, context, start_page, max_rows=12):
+def _paginate_table(rows_data, header_html, page_title, context, start_page, max_rows=12, landscape=False):
     """
     Split a potentially long table into multiple .page divs of max_rows rows.
 
     max_rows=12 keeps each page safely under 297mm even when cell text wraps.
+    Set landscape=True to render in A4 landscape (height 210mm, width 297mm).
 
     Returns (html_string, pages_used).  Caller must increment page_number by
     pages_used instead of 1 so subsequent section numbers stay accurate.
@@ -833,13 +835,15 @@ def _paginate_table(rows_data, header_html, page_title, context, start_page, max
     items = list(rows_data) if rows_data else []
     chunks = [items[i:i + max_rows] for i in range(0, max(len(items), 1), max_rows)]
 
+    page_class = 'page page-landscape' if landscape else 'page'
+
     pages_html = ""
     for idx, chunk in enumerate(chunks):
         pnum = start_page + idx
         suffix = " (continued)" if idx > 0 else ""
         rows_html = "".join(chunk)        # chunk already contains rendered <tr> strings
         pages_html += f"""
-    <div class="page">
+    <div class="{page_class}">
         <div class="page-content">
             <div class="header">
                 <div class="company-name">{context.get('company_name', '')}</div>
@@ -1237,13 +1241,13 @@ def render_feeder_performance_table(data, context, page_number):
     """Render feeder performance table — paginates at 20 rows per page."""
     header_html = """
         <colgroup>
-            <col style="width:26%">
-            <col style="width:7%">
-            <col style="width:15%">
-            <col style="width:13%">
-            <col style="width:13%">
-            <col style="width:12%">
+            <col style="width:30%">
+            <col style="width:6%">
             <col style="width:14%">
+            <col style="width:12%">
+            <col style="width:12%">
+            <col style="width:13%">
+            <col style="width:13%">
         </colgroup>
         <thead>
             <tr>
@@ -1271,7 +1275,7 @@ def render_feeder_performance_table(data, context, page_number):
         </tr>""")
 
     return _paginate_table(row_strings, header_html, "Feeder Performance",
-                           context, page_number, max_rows=20)
+                           context, page_number, max_rows=25)
 
 
 def render_service_band_summary(data, context, page_number):
@@ -1913,6 +1917,7 @@ class PDFGenerator:
             page.set_content(html_content, wait_until='networkidle')
             pdf_bytes = page.pdf(
                 format='A4',
+                landscape=True,
                 print_background=True,
                 margin={'top': '0', 'bottom': '0', 'left': '0', 'right': '0'},
             )
