@@ -306,11 +306,6 @@ tbody td {
     background-color: #005bd5;
 }
 
-.table-container thead th {
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
 
 .table-container tbody tr {
     background-color: #1e2f4a;
