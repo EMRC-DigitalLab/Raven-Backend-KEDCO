@@ -1741,7 +1741,7 @@ class PDFGenerator:
         """
         self.report_config = report_config
         self.data_service = data_service
-        self.orientation = report_config.get('orientation', 'portrait')
+        self.orientation = 'landscape'  # Always landscape — full-width tables require it
 
         # Build context
         self.context = {
@@ -1867,7 +1867,8 @@ class PDFGenerator:
                 page_number += 1
 
         # Build full HTML
-        orientation_css = LANDSCAPE_STYLES if self.orientation == 'landscape' else PORTRAIT_STYLES
+        # Always use landscape styles — report is landscape throughout
+        orientation_css = LANDSCAPE_STYLES
 
         html = f"""
         <!DOCTYPE html>
