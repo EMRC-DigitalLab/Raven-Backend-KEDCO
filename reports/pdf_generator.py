@@ -317,8 +317,8 @@ tbody td {
 }
 
 .table-container tbody td {
-    padding: 7px 10px;
-    font-size: 11px;
+    padding: 5px 8px;
+    font-size: 10.5px;
     font-weight: 500;
     white-space: nowrap;
     overflow: hidden;
@@ -328,6 +328,11 @@ tbody td {
 /* Prevent rows from breaking across pages */
 .table-container tr {
     page-break-inside: avoid;
+}
+
+/* Prevent table itself from overflowing into footer */
+.table-container {
+    overflow: hidden;
 }
 
 /* ── Two-column trend layout ──────────────────────────────────────────────── */
@@ -1234,7 +1239,7 @@ def render_interruption_breakdown(data, context, page_number):
         </tr>""")
 
     return _paginate_table(row_strings, header_html, "Interruption Breakdown",
-                           context, page_number, max_rows=20)
+                           context, page_number, max_rows=15)
 
 
 def render_feeder_performance_table(data, context, page_number):
@@ -1275,7 +1280,7 @@ def render_feeder_performance_table(data, context, page_number):
         </tr>""")
 
     return _paginate_table(row_strings, header_html, "Feeder Performance",
-                           context, page_number, max_rows=25)
+                           context, page_number, max_rows=15)
 
 
 def render_service_band_summary(data, context, page_number):
