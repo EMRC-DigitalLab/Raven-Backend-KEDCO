@@ -87,19 +87,22 @@ body {
 }
 
 /* ── Page layout ─────────────────────────────────────────────────────────── */
-/* Flex column ensures footer is always pushed to the physical bottom of each
-   page regardless of how much content is on it.  min-height: 297mm pins the
-   container to a full A4 portrait page; WeasyPrint will break at natural
-   overflow points if content is taller than one page.                        */
+/* IMPORTANT: height is fixed at exactly A4 (297 mm portrait / 210 mm landscape)
+   so every .page div maps to precisely one printed page.  The flex column
+   layout pushes .footer to the physical bottom of the page regardless of how
+   much body content there is.  overflow:hidden ensures content that is taller
+   than the page body area is clipped rather than expanding the page (the
+   _paginate_table helper already splits long tables into multiple pages).    */
 
 .page {
     width: 100%;
-    min-height: 297mm;
+    height: 297mm;
     padding: 25px 40px;
     page-break-after: always;
     display: flex;
     flex-direction: column;
     box-sizing: border-box;
+    overflow: hidden;
 }
 
 .page:last-child {
@@ -107,7 +110,7 @@ body {
 }
 
 .page-landscape {
-    min-height: 210mm;
+    height: 210mm;
     padding: 20px 35px;
 }
 
@@ -136,26 +139,46 @@ body {
     margin-bottom: 20px;
 }
 
+/* ── Page content wrapper ────────────────────────────────────────────────── */
+/* flex:1 grows to fill available space between page top and the footer.
+   overflow:hidden prevents body content from pushing the footer off the page. */
+.page-content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
 /* ── Footer ──────────────────────────────────────────────────────────────── */
-/* HTML preview: margin-top:auto in flex column keeps footer at section bottom */
+/* flex-shrink:0 prevents the footer from being compressed when the page is
+   content-heavy.  page-break-inside/before:avoid keeps logo and page-number
+   together on the same PDF page. */
 
 .footer {
-    margin-top: auto;
-    padding-top: 20px;
+    flex-shrink: 0;
+    padding-top: 15px;
+    padding-bottom: 10px;
     display: flex;
+    flex-direction: row;
     justify-content: space-between;
-    align-items: flex-end;
+    align-items: center;
     border-top: 1px solid rgba(255, 255, 255, 0.15);
+    page-break-inside: avoid;
+    page-break-before: avoid;
 }
 
 .footer img {
-    max-width: 150px;
-    height: auto;
+    max-height: 44px;
+    width: auto;
+    flex-shrink: 0;
+    display: block;
 }
 
 .page-number {
     font-size: 24px;
-    font-weight: 600;
+    font-weight: 700;
+    flex-shrink: 0;
+    white-space: nowrap;
 }
 
 /* inline footer is always used — position:fixed + counter(page) is unreliable
@@ -793,9 +816,11 @@ PORTRAIT_STYLES = """
 # TABLE PAGINATION HELPER
 # =============================================================================
 
-def _paginate_table(rows_data, header_html, page_title, context, start_page, max_rows=20):
+def _paginate_table(rows_data, header_html, page_title, context, start_page, max_rows=12):
     """
     Split a potentially long table into multiple .page divs of max_rows rows.
+
+    max_rows=12 keeps each page safely under 297mm even when cell text wraps.
 
     Returns (html_string, pages_used).  Caller must increment page_number by
     pages_used instead of 1 so subsequent section numbers stay accurate.
@@ -810,20 +835,22 @@ def _paginate_table(rows_data, header_html, page_title, context, start_page, max
         rows_html = "".join(chunk)        # chunk already contains rendered <tr> strings
         pages_html += f"""
     <div class="page">
-        <div class="header">
-            <div class="company-name">{context.get('company_name', '')}</div>
-            <div class="date">{context.get('report_date', '')}</div>
-        </div>
+        <div class="page-content">
+            <div class="header">
+                <div class="company-name">{context.get('company_name', '')}</div>
+                <div class="date">{context.get('report_date', '')}</div>
+            </div>
 
-        <h1 class="page-title">{page_title}{suffix}</h1>
+            <h1 class="page-title">{page_title}{suffix}</h1>
 
-        <div class="table-container">
-            <table>
-                {header_html}
-                <tbody>
-                    {rows_html}
-                </tbody>
-            </table>
+            <div class="table-container">
+                <table>
+                    {header_html}
+                    <tbody>
+                        {rows_html}
+                    </tbody>
+                </table>
+            </div>
         </div>
 
         <div class="footer">
@@ -915,15 +942,17 @@ def render_table_of_contents(entries, context, page_number):
 
     return f"""
     <div class="page">
-        <div class="header">
-            <div class="company-name">{context.get('company_name', '')}</div>
-            <div class="date">{context.get('report_date', '')}</div>
-        </div>
+        <div class="page-content">
+            <div class="header">
+                <div class="company-name">{context.get('company_name', '')}</div>
+                <div class="date">{context.get('report_date', '')}</div>
+            </div>
 
-        <h1 class="page-title">Contents</h1>
+            <h1 class="page-title">Contents</h1>
 
-        <div class="toc-container">
-            {rows_html}
+            <div class="toc-container">
+                {rows_html}
+            </div>
         </div>
 
         <div class="footer">
@@ -972,53 +1001,55 @@ def render_infrastructure_overview(data, context, page_number):
 
     return f"""
     <div class="page">
-        <div class="header">
-            <div class="company-name">{context.get('company_name', '')}</div>
-            <div class="date">{context.get('report_date', '')}</div>
-        </div>
-
-        <h1 class="page-title">Infrastructure Overview</h1>
-
-        <div class="stats-container">
-            <div class="stat-item">
-                <h3>Total Feeders Monitored</h3>
-                <div class="value">{data.get('total_feeders', 0)}</div>
-            </div>
-            {voltage_11kv_html}
-            {voltage_33kv_html}
-            <div class="stat-item">
-                <h3>D/Transformers Monitored</h3>
-                <div class="value">{data.get('total_transformers', 0)}</div>
-            </div>
-            <div class="stat-item">
-                <h3>Onboarded Substations</h3>
-                <div class="value">{data.get('total_substations', 0)}</div>
-            </div>
-        </div>
-
-        <div class="content-box">
-            <div class="summary-section">
-                <h2>PERFORMANCE SUMMARY</h2>
-                <ul>
-                    {summary_html}
-                </ul>
+        <div class="page-content">
+            <div class="header">
+                <div class="company-name">{context.get('company_name', '')}</div>
+                <div class="date">{context.get('report_date', '')}</div>
             </div>
 
-            <div class="table-section">
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Feeder Name</th>
-                            <th>Voltage</th>
-                            <th>Band</th>
-                            <th>District</th>
-                            <th>NO. D/T</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {feeders_html}
-                    </tbody>
-                </table>
+            <h1 class="page-title">Infrastructure Overview</h1>
+
+            <div class="stats-container">
+                <div class="stat-item">
+                    <h3>Total Feeders Monitored</h3>
+                    <div class="value">{data.get('total_feeders', 0)}</div>
+                </div>
+                {voltage_11kv_html}
+                {voltage_33kv_html}
+                <div class="stat-item">
+                    <h3>D/Transformers Monitored</h3>
+                    <div class="value">{data.get('total_transformers', 0)}</div>
+                </div>
+                <div class="stat-item">
+                    <h3>Onboarded Substations</h3>
+                    <div class="value">{data.get('total_substations', 0)}</div>
+                </div>
+            </div>
+
+            <div class="content-box">
+                <div class="summary-section">
+                    <h2>PERFORMANCE SUMMARY</h2>
+                    <ul>
+                        {summary_html}
+                    </ul>
+                </div>
+
+                <div class="table-section">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Feeder Name</th>
+                                <th>Voltage</th>
+                                <th>Band</th>
+                                <th>District</th>
+                                <th>NO. D/T</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {feeders_html}
+                        </tbody>
+                    </table>
+                </div>
             </div>
         </div>
 
@@ -1105,15 +1136,17 @@ def render_technical_metrics(data, context, page_number, config=None):
 
     return f"""
     <div class="page">
-        <div class="header">
-            <div class="company-name">{context.get('company_name', '')}</div>
-            <div class="date">{context.get('report_date', '')}</div>
-        </div>
+        <div class="page-content">
+            <div class="header">
+                <div class="company-name">{context.get('company_name', '')}</div>
+                <div class="date">{context.get('report_date', '')}</div>
+            </div>
 
-        <h1 class="page-title">Technical Overview</h1>
+            <h1 class="page-title">Technical Overview</h1>
 
-        <div class="metrics-grid">
-            {cards_html}
+            <div class="metrics-grid">
+                {cards_html}
+            </div>
         </div>
 
         <div class="footer">
@@ -1132,30 +1165,32 @@ def render_system_reliability(data, context, page_number):
 
     return f"""
     <div class="page">
-        <div class="header">
-            <div class="company-name">{context.get('company_name', '')}</div>
-            <div class="date">{context.get('report_date', '')}</div>
-        </div>
-
-        <h1 class="page-title">System Reliability</h1>
-
-        <div class="reliability-highlight">
-            <h2>System Reliability Summary</h2>
-            <p>Key reliability metrics for the reporting period across all monitored feeders</p>
-        </div>
-
-        <div class="reliability-kpi-grid">
-            <div class="reliability-kpi-card">
-                <div class="reliability-kpi-value">{cum_hours} hrs</div>
-                <div class="reliability-kpi-label">Cumulative Hours<br/>of Interruption</div>
+        <div class="page-content">
+            <div class="header">
+                <div class="company-name">{context.get('company_name', '')}</div>
+                <div class="date">{context.get('report_date', '')}</div>
             </div>
-            <div class="reliability-kpi-card">
-                <div class="reliability-kpi-value">{avg_duration} hrs</div>
-                <div class="reliability-kpi-label">Average Duration<br/>of Interruption</div>
+
+            <h1 class="page-title">System Reliability</h1>
+
+            <div class="reliability-highlight">
+                <h2>System Reliability Summary</h2>
+                <p>Key reliability metrics for the reporting period across all monitored feeders</p>
             </div>
-            <div class="reliability-kpi-card">
-                <div class="reliability-kpi-value">{avg_tat} hrs</div>
-                <div class="reliability-kpi-label">Average Turnaround<br/>Time (Local Faults)</div>
+
+            <div class="reliability-kpi-grid">
+                <div class="reliability-kpi-card">
+                    <div class="reliability-kpi-value">{cum_hours} hrs</div>
+                    <div class="reliability-kpi-label">Cumulative Hours<br/>of Interruption</div>
+                </div>
+                <div class="reliability-kpi-card">
+                    <div class="reliability-kpi-value">{avg_duration} hrs</div>
+                    <div class="reliability-kpi-label">Average Duration<br/>of Interruption</div>
+                </div>
+                <div class="reliability-kpi-card">
+                    <div class="reliability-kpi-value">{avg_tat} hrs</div>
+                    <div class="reliability-kpi-label">Average Turnaround<br/>Time (Local Faults)</div>
+                </div>
             </div>
         </div>
 
