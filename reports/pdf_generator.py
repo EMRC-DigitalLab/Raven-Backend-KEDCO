@@ -1693,9 +1693,31 @@ class PDFGenerator:
             return f"{from_date.strftime('%d %b %Y')} \u2013 {to_date.strftime('%d %b %Y')}"
 
     def _get_static_url(self, path):
-        """Get full URL for static files"""
+        """Return image as a base64 data URI so it renders in both HTML preview
+        and PDF regardless of whether the static-file server is reachable."""
+        import os
+        # Try each directory listed in STATICFILES_DIRS first
+        static_dirs = getattr(settings, 'STATICFILES_DIRS', [])
+        candidates = [os.path.join(d, path) for d in static_dirs]
+        # Also try STATIC_ROOT as a fallback
+        static_root = getattr(settings, 'STATIC_ROOT', None)
+        if static_root:
+            candidates.append(os.path.join(static_root, path))
+
+        for abs_path in candidates:
+            if os.path.isfile(abs_path):
+                ext = os.path.splitext(abs_path)[1].lower().lstrip('.')
+                mime = {'png': 'image/png', 'jpg': 'image/jpeg',
+                        'jpeg': 'image/jpeg', 'svg': 'image/svg+xml',
+                        'gif': 'image/gif'}.get(ext, 'image/png')
+                with open(abs_path, 'rb') as f:
+                    data = base64.b64encode(f.read()).decode('utf-8')
+                return f"data:{mime};base64,{data}"
+
+        # Last resort: fall back to the HTTP URL (may not load in preview)
         static_url = getattr(settings, 'STATIC_URL', '/static/')
         base_url = getattr(settings, 'BASE_URL', 'http://localhost:8000')
+        logger.warning("Static file not found on disk: %s — falling back to HTTP URL", path)
         return f"{base_url.rstrip('/')}{static_url}{path}"
 
     def _build_toc_entries(self, sections):
