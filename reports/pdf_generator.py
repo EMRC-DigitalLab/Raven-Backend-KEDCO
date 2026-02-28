@@ -292,6 +292,7 @@ tbody td {
     font-size: 12px;
     font-weight: 500;
     vertical-align: middle;
+    white-space: nowrap;
 }
 
 .table-container {
@@ -305,6 +306,12 @@ tbody td {
     background-color: #005bd5;
 }
 
+.table-container thead th {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
 .table-container tbody tr {
     background-color: #1e2f4a;
 }
@@ -314,9 +321,12 @@ tbody td {
 }
 
 .table-container tbody td {
-    padding: 11px 16px;
-    font-size: 13px;
+    padding: 7px 10px;
+    font-size: 11px;
     font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 /* Prevent rows from breaking across pages */
@@ -1231,6 +1241,15 @@ def render_interruption_breakdown(data, context, page_number):
 def render_feeder_performance_table(data, context, page_number):
     """Render feeder performance table — paginates at 20 rows per page."""
     header_html = """
+        <colgroup>
+            <col style="width:26%">
+            <col style="width:7%">
+            <col style="width:15%">
+            <col style="width:13%">
+            <col style="width:13%">
+            <col style="width:12%">
+            <col style="width:14%">
+        </colgroup>
         <thead>
             <tr>
                 <th>Feeder Name</th>
@@ -1353,29 +1372,39 @@ def render_state_performance_table(data, context, page_number):
 
     return f"""
     <div class="page">
-        <div class="header">
-            <div class="company-name">{context.get('company_name', '')}</div>
-            <div class="date">{context.get('report_date', '')}</div>
-        </div>
+        <div class="page-content">
+            <div class="header">
+                <div class="company-name">{context.get('company_name', '')}</div>
+                <div class="date">{context.get('report_date', '')}</div>
+            </div>
 
-        <h1 class="page-title">State Performance</h1>
+            <h1 class="page-title">State Performance</h1>
 
-        <div class="table-container">
-            <table>
-                <thead>
-                    <tr>
-                        <th>State</th>
-                        <th style="text-align:right;">Feeders</th>
-                        <th style="text-align:right;">Avg Supply (hrs)</th>
-                        <th style="text-align:right;">Availability</th>
-                        <th style="text-align:right;">Interruptions</th>
-                        <th style="text-align:right;">Peak Load</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {rows_html}
-                </tbody>
-            </table>
+            <div class="table-container">
+                <table>
+                    <colgroup>
+                        <col style="width:28%">
+                        <col style="width:12%">
+                        <col style="width:18%">
+                        <col style="width:14%">
+                        <col style="width:14%">
+                        <col style="width:14%">
+                    </colgroup>
+                    <thead>
+                        <tr>
+                            <th>State</th>
+                            <th style="text-align:right;">Feeders</th>
+                            <th style="text-align:right;">Avg Supply (hrs)</th>
+                            <th style="text-align:right;">Availability</th>
+                            <th style="text-align:right;">Interruptions</th>
+                            <th style="text-align:right;">Peak Load</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {rows_html}
+                    </tbody>
+                </table>
+            </div>
         </div>
 
         <div class="footer">
@@ -1404,30 +1433,41 @@ def render_district_performance_table(data, context, page_number):
 
     return f"""
     <div class="page">
-        <div class="header">
-            <div class="company-name">{context.get('company_name', '')}</div>
-            <div class="date">{context.get('report_date', '')}</div>
-        </div>
+        <div class="page-content">
+            <div class="header">
+                <div class="company-name">{context.get('company_name', '')}</div>
+                <div class="date">{context.get('report_date', '')}</div>
+            </div>
 
-        <h1 class="page-title">District Performance</h1>
+            <h1 class="page-title">District Performance</h1>
 
-        <div class="table-container">
-            <table>
-                <thead>
-                    <tr>
-                        <th>District</th>
-                        <th>State</th>
-                        <th style="text-align:right;">Feeders</th>
-                        <th style="text-align:right;">Avg Supply (hrs)</th>
-                        <th style="text-align:right;">Availability</th>
-                        <th style="text-align:right;">Interruptions</th>
-                        <th style="text-align:right;">Peak Load</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {rows_html}
-                </tbody>
-            </table>
+            <div class="table-container">
+                <table>
+                    <colgroup>
+                        <col style="width:24%">
+                        <col style="width:16%">
+                        <col style="width:10%">
+                        <col style="width:16%">
+                        <col style="width:12%">
+                        <col style="width:11%">
+                        <col style="width:11%">
+                    </colgroup>
+                    <thead>
+                        <tr>
+                            <th>District</th>
+                            <th>State</th>
+                            <th style="text-align:right;">Feeders</th>
+                            <th style="text-align:right;">Avg Supply (hrs)</th>
+                            <th style="text-align:right;">Availability</th>
+                            <th style="text-align:right;">Interruptions</th>
+                            <th style="text-align:right;">Peak Load</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {rows_html}
+                    </tbody>
+                </table>
+            </div>
         </div>
 
         <div class="footer">
