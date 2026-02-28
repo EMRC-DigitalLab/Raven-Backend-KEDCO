@@ -1260,7 +1260,7 @@ def render_feeder_performance_table(data, context, page_number):
                 <th>Band</th>
                 <th style="text-align:right;">Avg Supply (hrs)</th>
                 <th style="text-align:right;">Availability</th>
-                <th style="text-align:right;">Interruptions</th>
+                <th style="text-align:right;">Duration (hrs)</th>
                 <th style="text-align:right;">Peak Load</th>
                 <th style="text-align:right;">Energy (MWh)</th>
             </tr>
@@ -1274,7 +1274,7 @@ def render_feeder_performance_table(data, context, page_number):
             <td>{feeder['band']}</td>
             <td style="text-align:right;">{feeder['hours_of_supply']} hrs</td>
             <td style="text-align:right;">{feeder['availability_percentage']}%</td>
-            <td style="text-align:right;">{feeder['interruptions']}</td>
+            <td style="text-align:right;">{feeder['duration_hours']} hrs</td>
             <td style="text-align:right;">{feeder['peak_load']} MW</td>
             <td style="text-align:right;">{feeder['energy_delivered']} MWh</td>
         </tr>""")

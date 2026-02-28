@@ -711,23 +711,21 @@ class ReportDataService:
                 date__range=(self.from_date, self.to_date)
             ).aggregate(max_load=Max('load_mw'))['max_load'] or 0
             
-            # Interruption count
-            interruption_count = FeederInterruption.objects.filter(
-                feeder=feeder,
-                occurred_at__date__range=(self.from_date, self.to_date)
-            ).count()
-            
+            # Duration of interruptions = 24h minus avg supply hours per day
+            avg_supply_capped = min(avg_supply, 24.0)
+            duration_hours = round(max(24.0 - avg_supply_capped, 0.0), 2)
+
             # ✅ FIXED: Use hybrid energy calculation for single feeder
             energy = self._calculate_energy_for_feeder(feeder.id)
-            
+
             result.append({
                 'id': str(feeder.id),
                 'name': feeder.name,
                 'band': feeder.band.name if feeder.band else '-',
                 'district': feeder.business_district.name if feeder.business_district else '-',
-                'hours_of_supply': round(min(avg_supply, 24.0), 2),
-                'availability_percentage': round((min(avg_supply, 24.0) / 24) * 100, 1),
-                'interruptions': interruption_count,
+                'hours_of_supply': round(avg_supply_capped, 2),
+                'availability_percentage': round((avg_supply_capped / 24) * 100, 1),
+                'duration_hours': duration_hours,
                 'peak_load': round(float(peak_load), 2),
                 'energy_delivered': round(float(energy), 2),
             })
