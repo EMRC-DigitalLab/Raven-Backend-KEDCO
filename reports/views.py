@@ -1,5 +1,5 @@
 # reports/views.py
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework import status
@@ -324,7 +324,6 @@ def preview_all_sections(request):
 # =============================================================================
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
 def generate_report_pdf(request):
     """
     Generate a PDF report.
@@ -409,7 +408,6 @@ def generate_report_pdf(request):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
 def generate_report_html_preview(request):
     """
     Generate HTML preview of the report (for frontend rendering).
