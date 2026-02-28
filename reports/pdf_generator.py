@@ -1,18 +1,31 @@
 # reports/pdf_generator.py
 """
-PDF generation service using WeasyPrint.
+PDF generation service.
+Primary engine: Playwright (headless Chromium) — produces output identical to
+the browser live preview.
+Fallback engine: WeasyPrint — used only if Playwright is unavailable.
 """
 from django.conf import settings
+
+# ── Playwright (preferred) ─────────────────────────────────────────────────
 try:
-    from weasyprint import HTML
+    from playwright.sync_api import sync_playwright
+    PLAYWRIGHT_AVAILABLE = True
+except ImportError:
+    sync_playwright = None
+    PLAYWRIGHT_AVAILABLE = False
+    print("INFO: Playwright not installed. Install with: pip install playwright && playwright install chromium")
+
+# ── WeasyPrint (fallback) ──────────────────────────────────────────────────
+try:
+    from weasyprint import HTML as WeasyHTML
     from weasyprint.text.fonts import FontConfiguration
     WEASYPRINT_AVAILABLE = True
 except (OSError, ImportError) as e:
-    # GTK or other dependencies missing
-    HTML = None
+    WeasyHTML = None
     FontConfiguration = None
     WEASYPRINT_AVAILABLE = False
-    print(f"WARNING: WeasyPrint could not be imported. PDF generation will not work. Error: {e}")
+    print(f"WARNING: WeasyPrint could not be imported. Error: {e}")
 
 import io
 import base64
@@ -1781,23 +1794,45 @@ class PDFGenerator:
         return html
 
     def generate_pdf(self):
-        """Generate PDF from HTML"""
-        if not WEASYPRINT_AVAILABLE:
-            raise RuntimeError(
-                "WeasyPrint is not available on this server. "
-                "PDF generation requires WeasyPrint and its GTK dependencies. "
-                "Please contact your system administrator."
-            )
+        """Generate PDF.
 
+        Uses Playwright (headless Chromium) when available — output is identical
+        to the browser live preview.  Falls back to WeasyPrint if Playwright is
+        not installed.
+        """
         html_content = self.generate_html()
 
+        if PLAYWRIGHT_AVAILABLE:
+            return self._generate_pdf_playwright(html_content)
+
+        if WEASYPRINT_AVAILABLE:
+            return self._generate_pdf_weasyprint(html_content)
+
+        raise RuntimeError(
+            "No PDF engine available. "
+            "Install Playwright:  pip install playwright && playwright install chromium"
+        )
+
+    def _generate_pdf_playwright(self, html_content):
+        """Render HTML to PDF using headless Chromium (Playwright)."""
+        with sync_playwright() as p:
+            browser = p.chromium.launch()
+            page = browser.new_page()
+            page.set_content(html_content, wait_until='networkidle')
+            pdf_bytes = page.pdf(
+                format='A4',
+                print_background=True,
+                margin={'top': '0', 'bottom': '0', 'left': '0', 'right': '0'},
+            )
+            browser.close()
+        return io.BytesIO(pdf_bytes)
+
+    def _generate_pdf_weasyprint(self, html_content):
+        """Render HTML to PDF using WeasyPrint (fallback)."""
         font_config = FontConfiguration()
-        html = HTML(string=html_content)
-
         pdf_buffer = io.BytesIO()
-        html.write_pdf(pdf_buffer, font_config=font_config)
+        WeasyHTML(string=html_content).write_pdf(pdf_buffer, font_config=font_config)
         pdf_buffer.seek(0)
-
         return pdf_buffer
 
     def generate_pdf_base64(self):
