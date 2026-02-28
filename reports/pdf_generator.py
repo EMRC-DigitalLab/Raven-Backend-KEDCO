@@ -145,49 +145,8 @@ body {
     font-weight: 600;
 }
 
-/* ── PDF-mode fixed footer ────────────────────────────────────────────────── */
-/* WeasyPrint repeats position:fixed elements on every physical page.         */
-/* .footer-fixed is ONLY shown when <body class="pdf-mode"> is set, which     */
-/* generate_pdf() does. In HTML preview mode it stays hidden.                 */
-
-.footer-fixed {
-    display: none;
-}
-
-.pdf-mode .page {
-    padding-bottom: 65px;
-}
-
-.pdf-mode .footer,
-.pdf-mode .cover-footer {
-    display: none;
-}
-
-.pdf-mode .footer-fixed {
-    position: fixed;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    padding: 12px 40px 15px;
-    display: -webkit-flex;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    border-top: 1px solid rgba(255, 255, 255, 0.15);
-    background-color: #002050;
-}
-
-.pdf-mode .footer-fixed img {
-    max-width: 150px;
-    height: auto;
-}
-
-/* CSS counter auto-increments per physical page in WeasyPrint */
-.pdf-mode .footer-fixed .page-number::after {
-    content: counter(page);
-    font-size: 24px;
-    font-weight: 600;
-}
+/* inline footer is always used — position:fixed + counter(page) is unreliable
+   in WeasyPrint; Python-supplied page numbers via inline footers are used instead */
 
 /* ── Stats Container ─────────────────────────────────────────────────────── */
 /* gap: shorthand is WeasyPrint <54 unsafe — use margin-right on children     */
@@ -330,32 +289,29 @@ tbody td {
 }
 
 /* ── Two-column trend layout ──────────────────────────────────────────────── */
+/* Pure-percentage widths — WeasyPrint cannot mix % and px inside calc()      */
 .trend-columns {
     display: -webkit-flex;
     display: flex;
-    margin-left: -10px;
-    margin-right: -10px;
 }
 
 .trend-column {
-    width: calc(50% - 20px);
-    margin: 0 10px;
+    width: 49%;
+    margin: 0 0.5%;
 }
 
 /* ── Metric Cards ─────────────────────────────────────────────────────────── */
-/* Use flexbox+wrap instead of CSS Grid for WeasyPrint compatibility           */
+/* Pure-percentage widths for WeasyPrint compatibility                         */
 .metrics-grid {
     display: -webkit-flex;
     display: flex;
     flex-wrap: wrap;
-    margin-left: -6px;
-    margin-right: -6px;
     margin-bottom: 9px;
 }
 
 .metric-card {
-    width: calc(50% - 12px);
-    margin: 6px;
+    width: 49%;
+    margin: 0 0.5% 1% 0.5%;
     border-radius: 15px;
     padding: 18px 22px;
     display: flex;
@@ -474,14 +430,12 @@ tbody td {
     display: -webkit-flex;
     display: flex;
     flex-wrap: wrap;
-    margin-left: -8px;
-    margin-right: -8px;
     margin-bottom: 25px;
 }
 
 .reliability-kpi-card {
-    width: calc(33.33% - 16px);
-    margin: 8px;
+    width: 32%;
+    margin: 0 0.5% 1% 0.5%;
     background-color: #1e2f4a;
     border-radius: 15px;
     padding: 30px 24px;
@@ -538,19 +492,17 @@ tbody td {
 }
 
 /* ── Gaps/Improvements Grid ───────────────────────────────────────────────── */
-/* 3-column flex layout — WeasyPrint-safe (no CSS Grid, no gap shorthand)     */
+/* Pure-percentage 3-column flex — WeasyPrint-safe                            */
 .sections-grid {
     display: -webkit-flex;
     display: flex;
     flex-wrap: wrap;
-    margin-left: -7px;
-    margin-right: -7px;
     margin-bottom: 20px;
 }
 
 .section-card {
-    width: calc(33.33% - 14px);
-    margin: 7px;
+    width: 32%;
+    margin: 0 0.5% 1% 0.5%;
     background-color: #ececec;
     border-radius: 15px;
     padding: 20px;
@@ -822,6 +774,52 @@ PORTRAIT_STYLES = """
     size: A4 portrait;
 }
 """
+
+
+# =============================================================================
+# TABLE PAGINATION HELPER
+# =============================================================================
+
+def _paginate_table(rows_data, header_html, page_title, context, start_page, max_rows=20):
+    """
+    Split a potentially long table into multiple .page divs of max_rows rows.
+
+    Returns (html_string, pages_used).  Caller must increment page_number by
+    pages_used instead of 1 so subsequent section numbers stay accurate.
+    """
+    items = list(rows_data) if rows_data else []
+    chunks = [items[i:i + max_rows] for i in range(0, max(len(items), 1), max_rows)]
+
+    pages_html = ""
+    for idx, chunk in enumerate(chunks):
+        pnum = start_page + idx
+        suffix = " (continued)" if idx > 0 else ""
+        rows_html = "".join(chunk)        # chunk already contains rendered <tr> strings
+        pages_html += f"""
+    <div class="page">
+        <div class="header">
+            <div class="company-name">{context.get('company_name', '')}</div>
+            <div class="date">{context.get('report_date', '')}</div>
+        </div>
+
+        <h1 class="page-title">{page_title}{suffix}</h1>
+
+        <div class="table-container">
+            <table>
+                {header_html}
+                <tbody>
+                    {rows_html}
+                </tbody>
+            </table>
+        </div>
+
+        <div class="footer">
+            <img src="{context.get('footer_logo_url', '')}" alt="Powered by EMRC" />
+            <div class="page-number">{pnum}</div>
+        </div>
+    </div>"""
+
+    return pages_html, len(chunks)
 
 
 # =============================================================================
@@ -1157,56 +1155,49 @@ def render_system_reliability(data, context, page_number):
 
 
 def render_interruption_breakdown(data, context, page_number):
-    """Render interruption breakdown table HTML"""
-    rows_html = ""
-    for item in data:
-        rows_html += f"""
+    """Render interruption breakdown — paginates if more than 20 rows."""
+    header_html = """
+        <thead>
+            <tr>
+                <th>Interruption Type</th>
+                <th style="text-align:right;">Count</th>
+                <th style="text-align:right;">Total Hours</th>
+                <th style="text-align:right;">Avg Duration</th>
+            </tr>
+        </thead>"""
+
+    row_strings = []
+    for item in (data or []):
+        row_strings.append(f"""
         <tr>
             <td>{item['type']}</td>
             <td style="text-align:right;">{item['count']}</td>
             <td style="text-align:right;">{item['total_hours']} hrs</td>
             <td style="text-align:right;">{item['avg_duration']} hrs</td>
-        </tr>
-        """
+        </tr>""")
 
-    return f"""
-    <div class="page">
-        <div class="header">
-            <div class="company-name">{context.get('company_name', '')}</div>
-            <div class="date">{context.get('report_date', '')}</div>
-        </div>
-
-        <h1 class="page-title">Interruption Breakdown</h1>
-
-        <div class="table-container">
-            <table>
-                <thead>
-                    <tr>
-                        <th>Interruption Type</th>
-                        <th style="text-align:right;">Count</th>
-                        <th style="text-align:right;">Total Hours</th>
-                        <th style="text-align:right;">Avg Duration</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {rows_html}
-                </tbody>
-            </table>
-        </div>
-
-        <div class="footer">
-            <img src="{context.get('footer_logo_url', '')}" alt="Powered by EMRC" />
-            <div class="page-number">{page_number}</div>
-        </div>
-    </div>
-    """
+    return _paginate_table(row_strings, header_html, "Interruption Breakdown",
+                           context, page_number, max_rows=20)
 
 
 def render_feeder_performance_table(data, context, page_number):
-    """Render feeder performance table HTML"""
-    rows_html = ""
-    for feeder in data:
-        rows_html += f"""
+    """Render feeder performance table — paginates at 20 rows per page."""
+    header_html = """
+        <thead>
+            <tr>
+                <th>Feeder Name</th>
+                <th>Band</th>
+                <th style="text-align:right;">Avg Supply (hrs)</th>
+                <th style="text-align:right;">Availability</th>
+                <th style="text-align:right;">Interruptions</th>
+                <th style="text-align:right;">Peak Load</th>
+                <th style="text-align:right;">Energy (MWh)</th>
+            </tr>
+        </thead>"""
+
+    row_strings = []
+    for feeder in (data or []):
+        row_strings.append(f"""
         <tr>
             <td>{feeder['name']}</td>
             <td>{feeder['band']}</td>
@@ -1215,43 +1206,10 @@ def render_feeder_performance_table(data, context, page_number):
             <td style="text-align:right;">{feeder['interruptions']}</td>
             <td style="text-align:right;">{feeder['peak_load']} MW</td>
             <td style="text-align:right;">{feeder['energy_delivered']} MWh</td>
-        </tr>
-        """
+        </tr>""")
 
-    return f"""
-    <div class="page">
-        <div class="header">
-            <div class="company-name">{context.get('company_name', '')}</div>
-            <div class="date">{context.get('report_date', '')}</div>
-        </div>
-
-        <h1 class="page-title">Feeder Performance</h1>
-
-        <div class="table-container">
-            <table>
-                <thead>
-                    <tr>
-                        <th>Feeder Name</th>
-                        <th>Band</th>
-                        <th style="text-align:right;">Avg Supply (hrs)</th>
-                        <th style="text-align:right;">Availability</th>
-                        <th style="text-align:right;">Interruptions</th>
-                        <th style="text-align:right;">Peak Load</th>
-                        <th style="text-align:right;">Energy (MWh)</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {rows_html}
-                </tbody>
-            </table>
-        </div>
-
-        <div class="footer">
-            <img src="{context.get('footer_logo_url', '')}" alt="Powered by EMRC" />
-            <div class="page-number">{page_number}</div>
-        </div>
-    </div>
-    """
+    return _paginate_table(row_strings, header_html, "Feeder Performance",
+                           context, page_number, max_rows=20)
 
 
 def render_service_band_summary(data, context, page_number):
@@ -1747,13 +1705,9 @@ class PDFGenerator:
             })
         return toc_entries
 
-    def generate_html(self, for_pdf=False):
-        """Generate full HTML document.
-
-        for_pdf=True  → adds pdf-mode body class so the CSS fixed footer fires;
-                        used by generate_pdf() so every physical page has a footer.
-        for_pdf=False → normal HTML preview; inline per-section footers are used.
-        """
+    def generate_html(self):
+        """Generate full HTML document. Inline per-section footers are used for
+        both HTML preview and PDF — reliable across all WeasyPrint versions."""
         sections = list(self.report_config.get('sections', []))
 
         # Auto-inject TOC as the second section (after cover page) if not already present
@@ -1787,29 +1741,24 @@ class PDFGenerator:
             renderer = self.SECTION_RENDERERS[section_type]
 
             if section_type == 'cover_page':
-                sections_html += renderer(data, self.context)
+                result = renderer(data, self.context)
             elif section_type == 'table_of_contents':
-                sections_html += renderer(toc_entries, self.context, page_number)
+                result = renderer(toc_entries, self.context, page_number)
             elif section_type == 'technical_metrics':
-                sections_html += renderer(data, self.context, page_number, config)
+                result = renderer(data, self.context, page_number, config)
             else:
-                sections_html += renderer(data, self.context, page_number)
+                result = renderer(data, self.context, page_number)
 
-            page_number += 1
+            # Renderers may return (html, pages_used) for paginated sections
+            if isinstance(result, tuple):
+                sections_html += result[0]
+                page_number += result[1]
+            else:
+                sections_html += result
+                page_number += 1
 
         # Build full HTML
         orientation_css = LANDSCAPE_STYLES if self.orientation == 'landscape' else PORTRAIT_STYLES
-
-        # pdf-mode body class activates the CSS fixed footer (position:fixed)
-        # which WeasyPrint repeats on every physical page automatically.
-        body_class = ' class="pdf-mode"' if for_pdf else ''
-
-        # One global fixed-footer element; CSS shows it only in pdf-mode.
-        fixed_footer_html = f"""
-        <div class="footer-fixed">
-            <img src="{self.context['footer_logo_url']}" alt="Powered by EMRC" />
-            <div class="page-number"></div>
-        </div>""" if for_pdf else ""
 
         html = f"""
         <!DOCTYPE html>
@@ -1823,8 +1772,7 @@ class PDFGenerator:
                 {orientation_css}
             </style>
         </head>
-        <body{body_class}>
-            {fixed_footer_html}
+        <body>
             {sections_html}
         </body>
         </html>
@@ -1841,7 +1789,7 @@ class PDFGenerator:
                 "Please contact your system administrator."
             )
 
-        html_content = self.generate_html(for_pdf=True)
+        html_content = self.generate_html()
 
         font_config = FontConfiguration()
         html = HTML(string=html_content)
