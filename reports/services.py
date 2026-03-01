@@ -582,59 +582,17 @@ class ReportDataService:
         else:
             avg_duration = total_interruption_hours / (total_feeders * self.period_days) if (total_feeders * self.period_days) > 0 else 0
         
-        avg_duration = max(0, min(avg_duration, 24.0))
-        
-        # Local faults only (for turnaround time)
-        excluded_types = TURNAROUND_EXCLUSIONS
-        type_placeholders = ','.join(['%s'] * len(excluded_types))
-        
-        turnaround_query = f"""
-            SELECT 
-                COALESCE(SUM(capped_hours), 0) as total_hours
-            FROM (
-                SELECT 
-                    fi.feeder_id,
-                    LEAST(
-                        SUM(
-                            GREATEST(
-                                EXTRACT(EPOCH FROM (
-                                    LEAST(COALESCE(restored_at, %s), %s) - GREATEST(occurred_at, %s)
-                                )) / 3600.0,
-                                0
-                            )
-                        ),
-                        %s
-                    ) as capped_hours
-                FROM technical_feederinterruption fi
-                WHERE fi.feeder_id IN ({placeholders})
-                    AND (
-                        fi.occurred_at >= %s AND fi.occurred_at <= %s
-                        OR (fi.occurred_at < %s AND (fi.restored_at IS NULL OR fi.restored_at >= %s))
-                    )
-                    AND fi.interruption_type NOT IN ({type_placeholders})
-                GROUP BY fi.feeder_id
-            ) per_feeder_totals
-        """
-        
-        turnaround_params = [
-            end_of_period, end_of_period, start_of_period, max_hours_per_feeder
-        ] + list(self.feeder_ids) + [
-            start_of_period, end_of_period, start_of_period, start_of_period
-        ] + list(excluded_types)
-        
-        with connection.cursor() as cursor:
-            cursor.execute(turnaround_query, turnaround_params)
-            result = cursor.fetchone()
-            total_turnaround_hours = float(result[0]) if result else 0
-        
-        # ✅ FIXED: Handle single-day vs multi-day
+        # avg_duration = 24 - hours_of_supply  (same HourlyLoad source as Technical Overview
+        # so avg_supply + avg_duration always sums to exactly 24)
+        hours_of_supply = self._calculate_hours_of_supply()
+        avg_duration = max(0.0, min(24.0 - hours_of_supply, 24.0))
+
+        # Cumulative interruption hours = avg_duration × feeders × period_days
         if self.is_single_day:
-            avg_turnaround = total_turnaround_hours / total_feeders if total_feeders > 0 else 0
+            total_interruption_hours = avg_duration * total_feeders
         else:
-            avg_turnaround = total_turnaround_hours / (total_feeders * self.period_days) if (total_feeders * self.period_days) > 0 else 0
-        
-        avg_turnaround = max(0, min(avg_turnaround, 24.0))
-        
+            total_interruption_hours = avg_duration * total_feeders * self.period_days
+
         return {
             'cumulative_interruption_hours': round(total_interruption_hours, 2),
             'avg_duration_of_interruption': round(avg_duration, 2),
@@ -729,9 +687,9 @@ class ReportDataService:
                 'peak_load': round(float(peak_load), 2),
                 'energy_delivered': round(float(energy), 2),
             })
-        
-        return result
-    
+        # Sort by band name (A→E) then feeder name within each band
+        return sorted(result, key=lambda x: (x['band'], x['name']))
+
     def _calculate_energy_for_feeder(self, feeder_id):
         """Calculate energy for a single feeder using the shared energy_utils function."""
         result = calculate_energy_delivered([feeder_id], self.from_date, self.to_date)
