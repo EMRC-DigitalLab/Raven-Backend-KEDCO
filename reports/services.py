@@ -533,22 +533,67 @@ class ReportDataService:
         else:
             total_interruption_hours = avg_duration * total_feeders * self.period_days
 
-        # Turnaround time — LOCAL faults only (exclude L/S and TCN types),
-        # same logic as calculate_interruption_metrics() in technical/models.py
-        turnaround_hours = 0.0
-        turnaround_count = 0
-        local_fault_interruptions = FeederInterruption.objects.filter(
-            feeder_id__in=self.feeder_ids,
-            occurred_at__date__range=(self.from_date, self.to_date),
-        ).exclude(interruption_type__in=TURNAROUND_EXCLUSIONS)
+        # Turnaround time — LOCAL faults only (exclude L/S and TCN types)
+        # Same SQL approach as calculate_interruption_duration_network() in overview_views.py:
+        # per-feeder SUM capped at max_hours, then avg across feeders × period_days
+        if self.is_single_day:
+            max_hours_per_feeder = 24.0
+        else:
+            max_hours_per_feeder = self.period_days * 24.0
 
-        reference_time = timezone.now()
-        for intr in local_fault_interruptions:
-            duration = intr.get_duration_hours_at_time(reference_time)
-            turnaround_hours += duration
-            turnaround_count += 1
+        start_of_period = timezone.make_aware(
+            datetime.combine(self.from_date, datetime.min.time())
+        )
+        end_of_period = timezone.make_aware(
+            datetime.combine(self.to_date, datetime.max.time())
+        )
 
-        avg_turnaround = round(turnaround_hours / turnaround_count, 2) if turnaround_count > 0 else 0.0
+        feeder_placeholders = ','.join(['%s'] * len(self.feeder_ids))
+        excl_placeholders = ','.join(['%s'] * len(TURNAROUND_EXCLUSIONS))
+
+        turnaround_query = f"""
+            SELECT COALESCE(SUM(capped_hours), 0)
+            FROM (
+                SELECT
+                    feeder_id,
+                    LEAST(
+                        SUM(
+                            GREATEST(
+                                EXTRACT(EPOCH FROM (
+                                    LEAST(COALESCE(restored_at, %s), %s) - GREATEST(occurred_at, %s)
+                                )) / 3600.0,
+                                0
+                            )
+                        ),
+                        %s
+                    ) as capped_hours
+                FROM technical_feederinterruption
+                WHERE (
+                    occurred_at >= %s AND occurred_at <= %s
+                    OR (occurred_at < %s AND (restored_at IS NULL OR restored_at >= %s))
+                )
+                AND feeder_id IN ({feeder_placeholders})
+                AND interruption_type NOT IN ({excl_placeholders})
+                GROUP BY feeder_id
+            ) per_feeder_totals
+        """
+        turnaround_params = (
+            [end_of_period, end_of_period, start_of_period, max_hours_per_feeder,
+             start_of_period, end_of_period, start_of_period, start_of_period]
+            + list(self.feeder_ids)
+            + list(TURNAROUND_EXCLUSIONS)
+        )
+        with connection.cursor() as cursor:
+            cursor.execute(turnaround_query, turnaround_params)
+            result = cursor.fetchone()
+            total_turnaround_hours = float(result[0]) if result else 0.0
+
+        if self.is_single_day:
+            avg_turnaround = total_turnaround_hours / total_feeders if total_feeders > 0 else 0.0
+        else:
+            avg_turnaround = total_turnaround_hours / (total_feeders * self.period_days) if (total_feeders * self.period_days) > 0 else 0.0
+
+        avg_turnaround = round(max(0.0, min(avg_turnaround, 24.0)), 2)
 
         return {
             'cumulative_interruption_hours': round(total_interruption_hours, 2),
