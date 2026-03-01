@@ -284,27 +284,8 @@ tbody tr {
     background-color: transparent;
 }
 
-/* Beautiful Status Pills */
-.pill {
-    display: inline-block;
-    padding: 2px 6px;
-    font-size: 9px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    border-radius: 4px;
-    margin-top: 4px;
-}
-.pill-meter {
-    background-color: #e6f4ea;
-    color: #137333;
-    border: 1px solid #ceead6;
-}
-.pill-system {
-    background-color: #fef7e0;
-    color: #b06000;
-    border: 1px solid #fde293;
-}
+/* Removed Status Pills */
+
 
 tbody tr:nth-child(even) {
     background-color: rgba(255, 255, 255, 0.04);
@@ -1284,7 +1265,11 @@ def render_feeder_performance_table(data, context, page_number):
                 <th style="text-align:right;">Availability</th>
                 <th style="text-align:right;">Duration (hrs)</th>
                 <th style="text-align:right;">Peak Load</th>
-                <th style="text-align:right;">Energy (MWh)</th>
+                <th style="text-align:right; line-height: 1.2;">
+                    Energy (MWh)<br>
+                    <span style="font-size:7px; font-weight:normal; color:#4caf50;">&#9679; METER</span> &nbsp;
+                    <span style="font-size:7px; font-weight:normal; color:#fcd300;">&#9679; SYSTEM</span>
+                </th>
             </tr>
         </thead>"""
 
@@ -1309,7 +1294,7 @@ def render_feeder_performance_table(data, context, page_number):
         </tr>""")
         # Color code the energy source
         source_label = feeder.get('energy_source', 'system').upper()
-        pill_class = 'pill-meter' if source_label == 'METER' else 'pill-system'
+        dot_color = '#4caf50' if source_label == 'METER' else '#fcd300'
         
         row_strings.append(f"""
         <tr>
@@ -1319,9 +1304,8 @@ def render_feeder_performance_table(data, context, page_number):
             <td style="text-align:right;">{feeder['availability_percentage']}%</td>
             <td style="text-align:right;">{feeder['duration_hours']} hrs</td>
             <td style="text-align:right;">{feeder['peak_load']} MW</td>
-            <td style="text-align:right;">
-                {feeder['energy_delivered']} MWh<br>
-                <span class="pill {pill_class}">{source_label}</span>
+            <td style="text-align:right; white-space:nowrap;">
+                <span style="color:{dot_color}; font-size:10px;">&#9679;</span> {feeder['energy_delivered']} MWh
             </td>
         </tr>""")
 
