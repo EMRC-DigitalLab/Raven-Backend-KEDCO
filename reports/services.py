@@ -519,73 +519,13 @@ class ReportDataService:
                 'avg_duration_of_interruption': 0.0,
                 'avg_turnaround_time': 0.0,
             }
-        
+
         total_feeders = len(self.feeder_ids)
-        
-        # ✅ FIXED: Use proper max hours based on single-day vs multi-day
-        if self.is_single_day:
-            max_hours_per_feeder = 24.0
-        else:
-            max_hours_per_feeder = self.period_days * 24.0
-        
-        start_of_period = timezone.make_aware(
-            datetime.combine(self.from_date, datetime.min.time())
-        )
-        end_of_period = timezone.make_aware(
-            datetime.combine(self.to_date, datetime.max.time())
-        )
-        
-        placeholders = ','.join(['%s'] * len(self.feeder_ids))
-        
-        # All interruptions (for duration)
-        duration_query = f"""
-            SELECT 
-                COALESCE(SUM(capped_hours), 0) as total_hours
-            FROM (
-                SELECT 
-                    fi.feeder_id,
-                    LEAST(
-                        SUM(
-                            GREATEST(
-                                EXTRACT(EPOCH FROM (
-                                    LEAST(COALESCE(restored_at, %s), %s) - GREATEST(occurred_at, %s)
-                                )) / 3600.0,
-                                0
-                            )
-                        ),
-                        %s
-                    ) as capped_hours
-                FROM technical_feederinterruption fi
-                WHERE fi.feeder_id IN ({placeholders})
-                    AND (
-                        fi.occurred_at >= %s AND fi.occurred_at <= %s
-                        OR (fi.occurred_at < %s AND (fi.restored_at IS NULL OR fi.restored_at >= %s))
-                    )
-                GROUP BY fi.feeder_id
-            ) per_feeder_totals
-        """
-        
-        duration_params = [
-            end_of_period, end_of_period, start_of_period, max_hours_per_feeder
-        ] + list(self.feeder_ids) + [
-            start_of_period, end_of_period, start_of_period, start_of_period
-        ]
-        
-        with connection.cursor() as cursor:
-            cursor.execute(duration_query, duration_params)
-            result = cursor.fetchone()
-            total_interruption_hours = float(result[0]) if result else 0
-        
-        # ✅ FIXED: Handle single-day vs multi-day
-        if self.is_single_day:
-            avg_duration = total_interruption_hours / total_feeders if total_feeders > 0 else 0
-        else:
-            avg_duration = total_interruption_hours / (total_feeders * self.period_days) if (total_feeders * self.period_days) > 0 else 0
-        
-        # avg_duration = 24 - hours_of_supply  (same HourlyLoad source as Technical Overview
+
+        # avg_duration = 24 - hours_of_supply (same HourlyLoad source as Technical Overview
         # so avg_supply + avg_duration always sums to exactly 24)
         hours_of_supply = self._calculate_hours_of_supply()
-        avg_duration = max(0.0, min(24.0 - hours_of_supply, 24.0))
+        avg_duration = round(max(0.0, min(24.0 - hours_of_supply, 24.0)), 2)
 
         # Cumulative interruption hours = avg_duration × feeders × period_days
         if self.is_single_day:
@@ -595,9 +535,10 @@ class ReportDataService:
 
         return {
             'cumulative_interruption_hours': round(total_interruption_hours, 2),
-            'avg_duration_of_interruption': round(avg_duration, 2),
-            'avg_turnaround_time': round(avg_turnaround, 2),
+            'avg_duration_of_interruption': avg_duration,
+            'avg_turnaround_time': 0.0,
         }
+
     
     def get_interruption_breakdown(self, group_by='type'):
         """Get interruption breakdown data"""
