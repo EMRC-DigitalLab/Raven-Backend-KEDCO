@@ -1267,7 +1267,24 @@ def render_feeder_performance_table(data, context, page_number):
         </thead>"""
 
     row_strings = []
+    current_band = None
     for feeder in (data or []):
+        # Insert a band group header row whenever the band changes
+        band = feeder['band']
+        if band != current_band:
+            current_band = band
+            row_strings.append(f"""
+        <tr style="background-color:#0d2240;">
+            <td colspan="7" style="
+                font-weight:700;
+                font-size:11px;
+                letter-spacing:1.5px;
+                text-transform:uppercase;
+                color:#fcd300;
+                padding:6px 10px;
+                border-bottom:2px solid rgba(255,255,255,0.2);
+            ">&#9658; Band {band}</td>
+        </tr>""")
         row_strings.append(f"""
         <tr>
             <td>{feeder['name']}</td>
