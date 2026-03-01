@@ -284,6 +284,28 @@ tbody tr {
     background-color: transparent;
 }
 
+/* Beautiful Status Pills */
+.pill {
+    display: inline-block;
+    padding: 2px 6px;
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    border-radius: 4px;
+    margin-top: 4px;
+}
+.pill-meter {
+    background-color: #e6f4ea;
+    color: #137333;
+    border: 1px solid #ceead6;
+}
+.pill-system {
+    background-color: #fef7e0;
+    color: #b06000;
+    border: 1px solid #fde293;
+}
+
 tbody tr:nth-child(even) {
     background-color: rgba(255, 255, 255, 0.04);
 }
@@ -1285,6 +1307,10 @@ def render_feeder_performance_table(data, context, page_number):
                 border-bottom:2px solid rgba(255,255,255,0.2);
             ">&#9658; Band {band}</td>
         </tr>""")
+        # Color code the energy source
+        source_label = feeder.get('energy_source', 'system').upper()
+        pill_class = 'pill-meter' if source_label == 'METER' else 'pill-system'
+        
         row_strings.append(f"""
         <tr>
             <td>{feeder['name']}</td>
@@ -1293,7 +1319,10 @@ def render_feeder_performance_table(data, context, page_number):
             <td style="text-align:right;">{feeder['availability_percentage']}%</td>
             <td style="text-align:right;">{feeder['duration_hours']} hrs</td>
             <td style="text-align:right;">{feeder['peak_load']} MW</td>
-            <td style="text-align:right;">{feeder['energy_delivered']} MWh</td>
+            <td style="text-align:right;">
+                {feeder['energy_delivered']} MWh<br>
+                <span class="pill {pill_class}">{source_label}</span>
+            </td>
         </tr>""")
 
     return _paginate_table(row_strings, header_html, "Feeder Performance",
