@@ -461,30 +461,31 @@ class ReportDataService:
         placeholders = ','.join(['%s'] * len(self.feeder_ids))
         
         query = f"""
-            SELECT COUNT(DISTINCT CONCAT(feeder_id, '-', date, '-', hour)) as total_hours
+            SELECT 
+                COUNT(DISTINCT CONCAT(feeder_id, '-', date, '-', hour)) as total_hours
             FROM technical_hourlyload
-            WHERE feeder_id IN ({placeholders})
-                AND date BETWEEN %s AND %s
-                AND load_mw >= 0
+            WHERE date BETWEEN %s AND %s
+                AND load_mw > 0
+                AND feeder_id IN ({placeholders})
         """
         
         with connection.cursor() as cursor:
-            cursor.execute(query, list(self.feeder_ids) + [self.from_date, self.to_date])
+            cursor.execute(query, [self.from_date, self.to_date] + list(self.feeder_ids))
             result = cursor.fetchone()
-            total_hours = result[0] if result else 0
+            total_hours_all_feeders = result[0] if result and result[0] else 0
         
         total_feeders = len(self.feeder_ids)
         
-        # ✅ CRITICAL: For single-day queries, return average hours per feeder (not daily average)
-        # For multi-day queries, return average hours per day per feeder
-        if self.is_single_day:
+        # ✅ CRITICAL: Same exact calculation as calculate_hours_of_supply_network in overview_views
+        if self.from_date == self.to_date:
             # Single day: Average hours per feeder
-            avg_hours = total_hours / total_feeders if total_feeders > 0 else 0
+            avg_hours = total_hours_all_feeders / total_feeders if total_feeders > 0 else 0
         else:
             # Multi-day: Average hours per day per feeder
-            avg_hours = total_hours / (total_feeders * self.period_days) if (total_feeders * self.period_days) > 0 else 0
+            period_days = (self.to_date - self.from_date).days + 1
+            avg_hours = total_hours_all_feeders / (total_feeders * period_days) if (total_feeders * period_days) > 0 else 0
         
-        return min(avg_hours, 24.0)
+        return round(min(avg_hours, 24.0), 2)
     
     def _calculate_energy_delivered_hybrid(self):
         """
@@ -657,18 +658,9 @@ class ReportDataService:
         
         result = []
         for feeder in feeders:
-            # Hours of supply for this feeder
-            hours_count = HourlyLoad.objects.filter(
-                feeder=feeder,
-                date__range=(self.from_date, self.to_date),
-                load_mw__gt=0
-            ).count()
-            
-            # ✅ FIXED: Handle single-day vs multi-day
-            if self.is_single_day:
-                avg_supply = float(hours_count)
-            else:
-                avg_supply = hours_count / self.period_days if self.period_days > 0 else 0
+            # ✅ FIXED: Use the exact same backend overview calculation for hours of supply
+            from technical.views.overview.overview_views import calculate_hours_of_supply_feeder
+            avg_supply_capped = calculate_hours_of_supply_feeder(feeder.id, self.from_date, self.to_date)
             
             # Peak load
             peak_load = HourlyLoad.objects.filter(
@@ -677,7 +669,6 @@ class ReportDataService:
             ).aggregate(max_load=Max('load_mw'))['max_load'] or 0
             
             # Duration of interruptions = 24h minus avg supply hours per day
-            avg_supply_capped = min(avg_supply, 24.0)
             duration_hours = round(max(24.0 - avg_supply_capped, 0.0), 2)
 
             # ✅ FIXED: Use hybrid energy calculation for single feeder
@@ -710,13 +701,17 @@ class ReportDataService:
         total_feeders = len(self.feeder_ids)
         
         if group_by == 'day':
-            # Group by date
+            # Group by date using a reliable distinct approach for hourly load
+            # Similar to technical_calculations.py
+            from django.db.models import Count, ExpressionWrapper, FloatField, F
+            
             daily_data = HourlyLoad.objects.filter(
                 feeder_id__in=self.feeder_ids,
                 date__range=(self.from_date, self.to_date),
                 load_mw__gt=0
             ).values('date').annotate(
-                total_hours=Count('id')
+                # We count distinct hour+feeder combinations and divide by total feeders
+                total_hours=Count('id') 
             ).order_by('date')
             
             return [
