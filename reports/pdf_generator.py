@@ -854,7 +854,7 @@ def _paginate_table(rows_data, header_html, page_title, context, start_page, max
     <div class="{page_class}">
         <div class="page-content">
             <div class="header">
-                <div class="company-name">{context.get('company_name', '')}</div>
+                <div class="company-name">{context.get('company_name', '')} <span style="opacity:0.6; margin-left:8px;">| {context.get('report_scope', '')}</span></div>
                 <div class="date">{context.get('report_date', '')}</div>
             </div>
 
@@ -903,7 +903,7 @@ def render_cover_page(_data, context):
     subtitle_html = (
         f'<div class="cover-subtitle-text">{report_subtitle}</div>'
         if report_subtitle else
-        f'<div class="cover-subtitle-text">{company_name}</div>'
+        f'<div class="cover-subtitle-text">{company_name} &bull; {context.get("report_scope", "")}</div>'
     )
 
     return f"""
@@ -961,7 +961,7 @@ def render_table_of_contents(entries, context, page_number):
     <div class="page">
         <div class="page-content">
             <div class="header">
-                <div class="company-name">{context.get('company_name', '')}</div>
+                <div class="company-name">{context.get('company_name', '')} <span style="opacity:0.6; margin-left:8px;">| {context.get('report_scope', '')}</span></div>
                 <div class="date">{context.get('report_date', '')}</div>
             </div>
 
@@ -1020,7 +1020,7 @@ def render_infrastructure_overview(data, context, page_number):
     <div class="page">
         <div class="page-content">
             <div class="header">
-                <div class="company-name">{context.get('company_name', '')}</div>
+                <div class="company-name">{context.get('company_name', '')} <span style="opacity:0.6; margin-left:8px;">| {context.get('report_scope', '')}</span></div>
                 <div class="date">{context.get('report_date', '')}</div>
             </div>
 
@@ -1155,7 +1155,7 @@ def render_technical_metrics(data, context, page_number, config=None):
     <div class="page">
         <div class="page-content">
             <div class="header">
-                <div class="company-name">{context.get('company_name', '')}</div>
+                <div class="company-name">{context.get('company_name', '')} <span style="opacity:0.6; margin-left:8px;">| {context.get('report_scope', '')}</span></div>
                 <div class="date">{context.get('report_date', '')}</div>
             </div>
 
@@ -1184,7 +1184,7 @@ def render_system_reliability(data, context, page_number):
     <div class="page">
         <div class="page-content">
             <div class="header">
-                <div class="company-name">{context.get('company_name', '')}</div>
+                <div class="company-name">{context.get('company_name', '')} <span style="opacity:0.6; margin-left:8px;">| {context.get('report_scope', '')}</span></div>
                 <div class="date">{context.get('report_date', '')}</div>
             </div>
 
@@ -1344,7 +1344,7 @@ def render_service_band_summary(data, context, page_number):
     return f"""
     <div class="page">
         <div class="header">
-            <div class="company-name">{context.get('company_name', '')}</div>
+            <div class="company-name">{context.get('company_name', '')} <span style="opacity:0.6; margin-left:8px;">| {context.get('report_scope', '')}</span></div>
             <div class="date">{context.get('report_date', '')}</div>
         </div>
 
@@ -1408,7 +1408,7 @@ def render_state_performance_table(data, context, page_number):
     <div class="page">
         <div class="page-content">
             <div class="header">
-                <div class="company-name">{context.get('company_name', '')}</div>
+                <div class="company-name">{context.get('company_name', '')} <span style="opacity:0.6; margin-left:8px;">| {context.get('report_scope', '')}</span></div>
                 <div class="date">{context.get('report_date', '')}</div>
             </div>
 
@@ -1469,7 +1469,7 @@ def render_district_performance_table(data, context, page_number):
     <div class="page">
         <div class="page-content">
             <div class="header">
-                <div class="company-name">{context.get('company_name', '')}</div>
+                <div class="company-name">{context.get('company_name', '')} <span style="opacity:0.6; margin-left:8px;">| {context.get('report_scope', '')}</span></div>
                 <div class="date">{context.get('report_date', '')}</div>
             </div>
 
@@ -1520,7 +1520,7 @@ def render_custom_text(data, context, page_number):
     return f"""
     <div class="page">
         <div class="header">
-            <div class="company-name">{context.get('company_name', '')}</div>
+            <div class="company-name">{context.get('company_name', '')} <span style="opacity:0.6; margin-left:8px;">| {context.get('report_scope', '')}</span></div>
             <div class="date">{context.get('report_date', '')}</div>
         </div>
 
@@ -1568,7 +1568,7 @@ def render_gaps_improvements(data, context, page_number):
     return f"""
     <div class="page">
         <div class="header">
-            <div class="company-name">{context.get('company_name', '')}</div>
+            <div class="company-name">{context.get('company_name', '')} <span style="opacity:0.6; margin-left:8px;">| {context.get('report_scope', '')}</span></div>
             <div class="date">{context.get('report_date', '')}</div>
         </div>
 
@@ -1622,7 +1622,7 @@ def render_hours_of_supply_chart(data, context, page_number):
     return f"""
     <div class="page">
         <div class="header">
-            <div class="company-name">{context.get('company_name', '')}</div>
+            <div class="company-name">{context.get('company_name', '')} <span style="opacity:0.6; margin-left:8px;">| {context.get('report_scope', '')}</span></div>
             <div class="date">{context.get('report_date', '')}</div>
         </div>
 
@@ -1664,7 +1664,7 @@ def render_load_trend_chart(data, context, page_number):
     return f"""
     <div class="page">
         <div class="header">
-            <div class="company-name">{context.get('company_name', '')}</div>
+            <div class="company-name">{context.get('company_name', '')} <span style="opacity:0.6; margin-left:8px;">| {context.get('report_scope', '')}</span></div>
             <div class="date">{context.get('report_date', '')}</div>
         </div>
 
@@ -1706,7 +1706,7 @@ def render_energy_delivered_chart(data, context, page_number):
     return f"""
     <div class="page">
         <div class="header">
-            <div class="company-name">{context.get('company_name', '')}</div>
+            <div class="company-name">{context.get('company_name', '')} <span style="opacity:0.6; margin-left:8px;">| {context.get('report_scope', '')}</span></div>
             <div class="date">{context.get('report_date', '')}</div>
         </div>
 
@@ -1778,11 +1778,30 @@ class PDFGenerator:
         self.data_service = data_service
         self.orientation = 'landscape'  # Always landscape — full-width tables require it
 
+        # Determine scope
+        filters = self.data_service.filters
+        v_level = filters.get('voltage_level')
+        if v_level and str(v_level).lower() == '11kv':
+            scope_label = "11kV Report"
+        elif v_level and str(v_level).lower() == '33kv':
+            scope_label = "33kV Report"
+        elif filters.get('feeders'):
+            scope_label = f"Selected Feeders ({len(filters['feeders'])})"
+        elif filters.get('substations'):
+            scope_label = f"Selected Substations ({len(filters['substations'])})"
+        elif filters.get('districts'):
+            scope_label = f"Selected Districts ({len(filters['districts'])})"
+        elif filters.get('states'):
+            scope_label = f"Selected States ({len(filters['states'])})"
+        else:
+            scope_label = "KEDCO Wide Report"
+
         # Build context
         self.context = {
             'company_name': report_config.get('company_name', 'KANO ELECTRICITY DISTRIBUTION COMPANY'),
             'report_title': report_config.get('report_title', 'Monthly Performance Report'),
             'report_subtitle': report_config.get('report_subtitle', ''),
+            'report_scope': scope_label,
             'report_date': self._format_report_date(),
             'logo_url': self._get_static_url('reports/images/kedco_logo.png'),
             'logo_gray_url': self._get_static_url('reports/images/kedco_gray_logo.png'),
