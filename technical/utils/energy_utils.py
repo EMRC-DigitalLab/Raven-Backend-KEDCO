@@ -79,7 +79,7 @@ def calculate_energy_delivered(feeder_ids, from_date, to_date):
         days = int(row['days'] or 1)
         # ✅ FIX: reject if ANY single day exceeds the balloon limit
         # (previously used avg which masked outlier days over long ranges)
-        if days > 0 and max_daily <= DAILY_BALLOON_LIMIT:
+        if days > 0 and 0 < max_daily <= DAILY_BALLOON_LIMIT:
             ed_by_feeder[fid] = total
 
     # ── Step 2: System estimate for feeders with no valid meter data ──────────
