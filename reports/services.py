@@ -312,8 +312,12 @@ class ReportDataService:
     
     def _get_filtered_feeder_ids(self):
         """Get feeder IDs based on all filters"""
-        queryset = Feeder.objects.filter(is_onboarded=True)  # ✅ Only onboarded feeders
-
+        from django.db.models import Q
+        
+        # ✅ Only onboarded feeders (SEASONALITY AWARE - just like overview_views)
+        queryset = Feeder.objects.filter(is_onboarded=True).filter(
+            Q(onboarded_at__lte=self.to_date) | Q(onboarded_at__isnull=True)
+        )
         # Filter by voltage level: '11kv' or '33kv' (optional)
         # Normalize to lowercase so '11kV', '11KV', etc. all work
         voltage_level = self.filters.get('voltage_level')
@@ -461,7 +465,7 @@ class ReportDataService:
             FROM technical_hourlyload
             WHERE feeder_id IN ({placeholders})
                 AND date BETWEEN %s AND %s
-                AND load_mw > 0
+                AND load_mw >= 0
         """
         
         with connection.cursor() as cursor:
