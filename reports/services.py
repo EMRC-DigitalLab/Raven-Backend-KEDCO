@@ -533,10 +533,27 @@ class ReportDataService:
         else:
             total_interruption_hours = avg_duration * total_feeders * self.period_days
 
+        # Turnaround time — LOCAL faults only (exclude L/S and TCN types),
+        # same logic as calculate_interruption_metrics() in technical/models.py
+        turnaround_hours = 0.0
+        turnaround_count = 0
+        local_fault_interruptions = FeederInterruption.objects.filter(
+            feeder_id__in=self.feeder_ids,
+            occurred_at__date__range=(self.from_date, self.to_date),
+        ).exclude(interruption_type__in=TURNAROUND_EXCLUSIONS)
+
+        reference_time = timezone.now()
+        for intr in local_fault_interruptions:
+            duration = intr.get_duration_hours_at_time(reference_time)
+            turnaround_hours += duration
+            turnaround_count += 1
+
+        avg_turnaround = round(turnaround_hours / turnaround_count, 2) if turnaround_count > 0 else 0.0
+
         return {
             'cumulative_interruption_hours': round(total_interruption_hours, 2),
             'avg_duration_of_interruption': avg_duration,
-            'avg_turnaround_time': 0.0,
+            'avg_turnaround_time': avg_turnaround,
         }
 
     
