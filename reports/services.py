@@ -671,8 +671,12 @@ class ReportDataService:
             # Duration of interruptions = 24h minus avg supply hours per day
             duration_hours = round(max(24.0 - avg_supply_capped, 0.0), 2)
 
-            # ✅ FIXED: Use hybrid energy calculation for single feeder
-            energy = self._calculate_energy_for_feeder(feeder.id)
+            # ✅ FIXED: Use hybrid energy calculation for single feeder, returning both value and source
+            energy_data = self._calculate_energy_for_feeder(feeder.id)
+            energy = energy_data['total_mwh']
+            
+            # Determine source: if meter_feeders > 0 it used the meter, otherwise it fell back to system
+            energy_source = 'meter' if energy_data.get('meter_feeders', 0) > 0 else 'system'
 
             result.append({
                 'id': str(feeder.id),
@@ -684,6 +688,7 @@ class ReportDataService:
                 'duration_hours': duration_hours,
                 'peak_load': round(float(peak_load), 2),
                 'energy_delivered': round(float(energy), 2),
+                'energy_source': energy_source,
             })
         # Sort by band name (A→E) then feeder name within each band
         return sorted(result, key=lambda x: (x['band'], x['name']))
@@ -691,7 +696,7 @@ class ReportDataService:
     def _calculate_energy_for_feeder(self, feeder_id):
         """Calculate energy for a single feeder using the shared energy_utils function."""
         result = calculate_energy_delivered([feeder_id], self.from_date, self.to_date)
-        return result['total_mwh']
+        return result
     
     def get_hours_of_supply_trend(self, group_by='day'):
         """Get hours of supply trend data for charts"""
