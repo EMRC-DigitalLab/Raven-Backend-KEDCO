@@ -854,7 +854,7 @@ def _paginate_table(rows_data, header_html, page_title, context, start_page, max
     <div class="{page_class}">
         <div class="page-content">
             <div class="header">
-                <div class="company-name">{context.get('company_name', '')} <span style="opacity:0.6; margin-left:8px;">| {context.get('report_scope', '')}</span></div>
+                <div class="company-name">{context.get('company_name', '')} | {context.get('report_scope', '')}</div>
                 <div class="date">{context.get('report_date', '')}</div>
             </div>
 
@@ -901,7 +901,7 @@ def render_cover_page(_data, context):
         title_accent = ''
 
     subtitle_html = (
-        f'<div class="cover-subtitle-text">{report_subtitle}</div>'
+        f'<div class="cover-subtitle-text">{report_subtitle} &bull; {context.get("report_scope", "")}</div>'
         if report_subtitle else
         f'<div class="cover-subtitle-text">{company_name} &bull; {context.get("report_scope", "")}</div>'
     )
@@ -961,7 +961,7 @@ def render_table_of_contents(entries, context, page_number):
     <div class="page">
         <div class="page-content">
             <div class="header">
-                <div class="company-name">{context.get('company_name', '')} <span style="opacity:0.6; margin-left:8px;">| {context.get('report_scope', '')}</span></div>
+                <div class="company-name">{context.get('company_name', '')} | {context.get('report_scope', '')}</div>
                 <div class="date">{context.get('report_date', '')}</div>
             </div>
 
@@ -1020,7 +1020,7 @@ def render_infrastructure_overview(data, context, page_number):
     <div class="page">
         <div class="page-content">
             <div class="header">
-                <div class="company-name">{context.get('company_name', '')} <span style="opacity:0.6; margin-left:8px;">| {context.get('report_scope', '')}</span></div>
+                <div class="company-name">{context.get('company_name', '')} | {context.get('report_scope', '')}</div>
                 <div class="date">{context.get('report_date', '')}</div>
             </div>
 
@@ -1155,7 +1155,7 @@ def render_technical_metrics(data, context, page_number, config=None):
     <div class="page">
         <div class="page-content">
             <div class="header">
-                <div class="company-name">{context.get('company_name', '')} <span style="opacity:0.6; margin-left:8px;">| {context.get('report_scope', '')}</span></div>
+                <div class="company-name">{context.get('company_name', '')} | {context.get('report_scope', '')}</div>
                 <div class="date">{context.get('report_date', '')}</div>
             </div>
 
@@ -1184,7 +1184,7 @@ def render_system_reliability(data, context, page_number):
     <div class="page">
         <div class="page-content">
             <div class="header">
-                <div class="company-name">{context.get('company_name', '')} <span style="opacity:0.6; margin-left:8px;">| {context.get('report_scope', '')}</span></div>
+                <div class="company-name">{context.get('company_name', '')} | {context.get('report_scope', '')}</div>
                 <div class="date">{context.get('report_date', '')}</div>
             </div>
 
@@ -1344,7 +1344,7 @@ def render_service_band_summary(data, context, page_number):
     return f"""
     <div class="page">
         <div class="header">
-            <div class="company-name">{context.get('company_name', '')} <span style="opacity:0.6; margin-left:8px;">| {context.get('report_scope', '')}</span></div>
+            <div class="company-name">{context.get('company_name', '')} | {context.get('report_scope', '')}</div>
             <div class="date">{context.get('report_date', '')}</div>
         </div>
 
@@ -1408,7 +1408,7 @@ def render_state_performance_table(data, context, page_number):
     <div class="page">
         <div class="page-content">
             <div class="header">
-                <div class="company-name">{context.get('company_name', '')} <span style="opacity:0.6; margin-left:8px;">| {context.get('report_scope', '')}</span></div>
+                <div class="company-name">{context.get('company_name', '')} | {context.get('report_scope', '')}</div>
                 <div class="date">{context.get('report_date', '')}</div>
             </div>
 
@@ -1469,7 +1469,7 @@ def render_district_performance_table(data, context, page_number):
     <div class="page">
         <div class="page-content">
             <div class="header">
-                <div class="company-name">{context.get('company_name', '')} <span style="opacity:0.6; margin-left:8px;">| {context.get('report_scope', '')}</span></div>
+                <div class="company-name">{context.get('company_name', '')} | {context.get('report_scope', '')}</div>
                 <div class="date">{context.get('report_date', '')}</div>
             </div>
 
@@ -1520,7 +1520,7 @@ def render_custom_text(data, context, page_number):
     return f"""
     <div class="page">
         <div class="header">
-            <div class="company-name">{context.get('company_name', '')} <span style="opacity:0.6; margin-left:8px;">| {context.get('report_scope', '')}</span></div>
+            <div class="company-name">{context.get('company_name', '')} | {context.get('report_scope', '')}</div>
             <div class="date">{context.get('report_date', '')}</div>
         </div>
 
@@ -1568,7 +1568,7 @@ def render_gaps_improvements(data, context, page_number):
     return f"""
     <div class="page">
         <div class="header">
-            <div class="company-name">{context.get('company_name', '')} <span style="opacity:0.6; margin-left:8px;">| {context.get('report_scope', '')}</span></div>
+            <div class="company-name">{context.get('company_name', '')} | {context.get('report_scope', '')}</div>
             <div class="date">{context.get('report_date', '')}</div>
         </div>
 
@@ -1622,7 +1622,7 @@ def render_hours_of_supply_chart(data, context, page_number):
     return f"""
     <div class="page">
         <div class="header">
-            <div class="company-name">{context.get('company_name', '')} <span style="opacity:0.6; margin-left:8px;">| {context.get('report_scope', '')}</span></div>
+            <div class="company-name">{context.get('company_name', '')} | {context.get('report_scope', '')}</div>
             <div class="date">{context.get('report_date', '')}</div>
         </div>
 
@@ -1664,7 +1664,7 @@ def render_load_trend_chart(data, context, page_number):
     return f"""
     <div class="page">
         <div class="header">
-            <div class="company-name">{context.get('company_name', '')} <span style="opacity:0.6; margin-left:8px;">| {context.get('report_scope', '')}</span></div>
+            <div class="company-name">{context.get('company_name', '')} | {context.get('report_scope', '')}</div>
             <div class="date">{context.get('report_date', '')}</div>
         </div>
 
@@ -1706,7 +1706,7 @@ def render_energy_delivered_chart(data, context, page_number):
     return f"""
     <div class="page">
         <div class="header">
-            <div class="company-name">{context.get('company_name', '')} <span style="opacity:0.6; margin-left:8px;">| {context.get('report_scope', '')}</span></div>
+            <div class="company-name">{context.get('company_name', '')} | {context.get('report_scope', '')}</div>
             <div class="date">{context.get('report_date', '')}</div>
         </div>
 
