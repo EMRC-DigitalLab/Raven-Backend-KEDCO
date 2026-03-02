@@ -1,5 +1,6 @@
 # technical/views/crud.py
 from rest_framework import viewsets
+from rest_framework.permissions import AllowAny
 from technical.models import *
 from technical.serializers import *
 from commercial.date_filters import get_date_range_from_request
@@ -20,6 +21,8 @@ from datetime import datetime
 
 class EnergyDeliveredViewSet(viewsets.ModelViewSet):
     serializer_class = EnergyDeliveredSerializer
+    authentication_classes = []
+    permission_classes = [AllowAny]
     http_method_names = ['get', 'post', 'head', 'options']  # No PUT/PATCH/DELETE
 
     def get_queryset(self):
@@ -184,6 +187,8 @@ class EnergyDeliveredViewSet(viewsets.ModelViewSet):
 
 class HourlyLoadViewSet(viewsets.ModelViewSet):
     serializer_class = HourlyLoadSerializer
+    authentication_classes = []
+    permission_classes = [AllowAny]
 
     def get_queryset(self):
         feeders = get_filtered_feeders(self.request)
@@ -377,6 +382,8 @@ class HourlyLoadViewSet(viewsets.ModelViewSet):
 
 class FeederInterruptionViewSet(viewsets.ModelViewSet):
     serializer_class = FeederInterruptionSerializer
+    authentication_classes = []
+    permission_classes = [AllowAny]
 
     def get_queryset(self):
         feeders = get_filtered_feeders(self.request)
@@ -543,6 +550,8 @@ class FeederInterruptionViewSet(viewsets.ModelViewSet):
 
 class DailyHoursOfSupplyViewSet(viewsets.ModelViewSet):
     serializer_class = DailyHoursOfSupplySerializer
+    authentication_classes = []
+    permission_classes = [AllowAny]
 
     def get_queryset(self):
         feeders = get_filtered_feeders(self.request)
