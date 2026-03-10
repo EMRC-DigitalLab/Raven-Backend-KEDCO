@@ -21,6 +21,11 @@ def get_filtered_feeders(request):
         except State.DoesNotExist:
             return Feeder.objects.none()
 
+    # ✅ Voltage level filter — applies to ALL ViewSets that call this helper
+    feeder_type = request.GET.get('feeder_type', '')
+    if feeder_type in ('11kv', '33kv'):
+        filters['voltage_level'] = feeder_type
+
     return Feeder.objects.filter(**filters).distinct()
 
 

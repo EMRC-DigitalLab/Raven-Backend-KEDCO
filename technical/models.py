@@ -216,12 +216,18 @@ class FeederInterruption(UUIDModel, models.Model):
     def duration_hours(self):
         """Get duration in hours, including unresolved interruptions"""
         if self.restored_at and self.occurred_at:
-            return (self.restored_at - self.occurred_at).total_seconds() / 3600
+            # Make BOTH timezone-aware (not naive!)
+            occurred = self.occurred_at if timezone.is_aware(self.occurred_at) else timezone.make_aware(self.occurred_at)
+            restored = self.restored_at if timezone.is_aware(self.restored_at) else timezone.make_aware(self.restored_at)
+            
+            return (restored - occurred).total_seconds() / 3600
         elif self.occurred_at:
             # For unresolved interruptions, calculate duration from occurrence to now
-            return (timezone.now() - self.occurred_at).total_seconds() / 3600
-        return 0
-    
+            occurred = self.occurred_at if timezone.is_aware(self.occurred_at) else timezone.make_aware(self.occurred_at)
+            now = timezone.now()
+            
+            return (now - occurred).total_seconds() / 3600
+
     @property
     def is_resolved(self):
         """Check if the interruption has been resolved"""
@@ -231,32 +237,27 @@ class FeederInterruption(UUIDModel, models.Model):
     def is_load_shedding(self):
         """Check if this is a load shedding interruption"""
         return self.interruption_type and 'L/S' in self.interruption_type
-    
+
     def get_duration_hours_at_time(self, reference_time=None):
-        """Get duration in hours at a specific reference time
-        
-        Args:
-            reference_time: datetime to calculate duration to (defaults to now)
-            
-        Returns:
-            float: Duration in hours
-        """
+        """Get duration in hours at a specific reference time"""
         if reference_time is None:
             reference_time = timezone.now()
         
-        if self.restored_at and self.restored_at <= reference_time:
-            # Interruption was resolved before reference time
-            return (self.restored_at - self.occurred_at).total_seconds() / 3600
-        elif self.occurred_at <= reference_time:
-            # Interruption was ongoing at reference time
-            return (reference_time - self.occurred_at).total_seconds() / 3600
+        # Ensure consistency in timezone awareness
+        ref = reference_time
+        occ = self.occurred_at
+        res = self.restored_at
+
+        if timezone.is_aware(ref): ref = timezone.make_naive(ref)
+        if timezone.is_aware(occ): occ = timezone.make_naive(occ)
+        if res and timezone.is_aware(res): res = timezone.make_naive(res)
+
+        if res and res <= ref:
+            return (res - occ).total_seconds() / 3600
+        elif occ <= ref:
+            return (ref - occ).total_seconds() / 3600
         else:
-            # Interruption hadn't started yet at reference time
             return 0
-    
-    def __str__(self):
-        status = "Resolved" if self.is_resolved else "Ongoing"
-        return f"{self.feeder.name} - {self.interruption_type} - {status}"
 
 
 # Utility function for duration calculations

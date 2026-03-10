@@ -75,34 +75,39 @@ def get_date_range_and_mode_from_request(request):
 def calculate_feeder_hours_of_supply_sql(feeder_id, from_date, to_date):
     """
     Calculate average hours of supply per day for a single feeder using raw SQL.
-    Returns the average number of hours per day where load was supplied.
+
+    Formula: total_supplied_hours / period_days
+    Matches states/districts/overview: divide by ALL days in the period, not just
+    days that had supply. A day with no supply contributes 0, not a skipped average.
+
+    Single-day: returns total hours supplied that day (0-24).
+    Multi-day: returns average hours per day over the entire period.
     """
-    # ✨ CRITICAL: If querying future dates, return 0 (no data available yet)
     today = timezone.now().date()
     if from_date > today:
         return 0.0
-    
+
     query = """
         SELECT 
-            AVG(daily_hours) as avg_hours
-        FROM (
-            SELECT 
-                date,
-                COUNT(DISTINCT hour) as daily_hours
-            FROM technical_hourlyload
-            WHERE feeder_id = %s
-                AND date BETWEEN %s AND %s
-                AND load_mw > 0
-            GROUP BY date
-        ) daily_supply
+            COUNT(DISTINCT CONCAT(date, '-', hour)) as total_hours
+        FROM technical_hourlyload
+        WHERE feeder_id = %s
+            AND date BETWEEN %s AND %s
+            AND load_mw > 0
     """
-    
+
     with connection.cursor() as cursor:
         cursor.execute(query, [feeder_id, from_date, to_date])
         result = cursor.fetchone()
-        avg_hours = result[0] if result and result[0] else 0
-    
-    return round(min(float(avg_hours), 24.0), 2)
+        total_hours = result[0] if result and result[0] else 0
+
+    if from_date == to_date:
+        avg_hours = float(total_hours)
+    else:
+        period_days = (to_date - from_date).days + 1
+        avg_hours = total_hours / period_days if period_days > 0 else 0
+
+    return round(min(avg_hours, 24.0), 2)
 
 
 def calculate_feeder_interruption_metrics_sql(feeder_id, from_date, to_date, exclude_types=None):
@@ -220,6 +225,7 @@ def calculate_feeder_interruption_metrics_sql(feeder_id, from_date, to_date, exc
     return round(avg_hours_per_day, 2), int(total_interruptions)
 
 
+<<<<<<< HEAD
 def calculate_feeder_metrics_optimized(feeder, from_date, to_date, mode):
     """
     Calculate feeder metrics using optimized SQL queries.
@@ -391,46 +397,194 @@ def calculate_feeder_metrics_optimized(feeder, from_date, to_date, mode):
         "ftc": ftc_all,  # Total interruption count (occurred in period)
         "_source": f"optimized_sql_{mode}"
     }
+=======
+>>>>>>> 4545bb4c21f08f22d8ffb7d9ecae41dd28808bb4
 
+def _bulk_supply_hours(feeder_ids, from_date, to_date):
+    """
+    Bulk supply hours for all feeder_ids in ONE query.
+    Returns dict: {feeder_id: avg_hours_per_day}
+    """
+    if not feeder_ids:
+        return {}
 
-def get_feeder_availability_summary_optimized(from_date, to_date, mode, state=None, business_district=None):
+    placeholders = ','.join(['%s'] * len(feeder_ids))
+    query = f"""
+        SELECT
+            feeder_id,
+            COUNT(DISTINCT CONCAT(date, '-', hour)) as total_hours
+        FROM technical_hourlyload
+        WHERE feeder_id IN ({placeholders})
+            AND date BETWEEN %s AND %s
+            AND load_mw > 0
+        GROUP BY feeder_id
     """
-    Optimized feeder availability summary using SQL queries.
-    No caching, always calculates fresh data.
-    
-    UPDATED: Only considers ONBOARDED feeders.
-    """
-    # Filter feeders based on location parameters - ONLY ONBOARDED
-    feeders_query = Feeder.objects.filter(is_onboarded=True).select_related('business_district__state', 'substation')
-    
-    if business_district:
-        feeders_query = feeders_query.filter(business_district__name=business_district)
-    elif state:
-        feeders_query = feeders_query.filter(business_district__state__name=state)
-    
-    feeders = list(feeders_query)
-    
-    print(f"DEBUG: Processing {len(feeders)} onboarded feeders for mode: {mode}, dates: {from_date} to {to_date}")
-    
-    result = []
-    
-    for feeder in feeders:
-        try:
-            feeder_metrics = calculate_feeder_metrics_optimized(
-                feeder, 
-                from_date, 
-                to_date, 
-                mode
-            )
-            result.append(feeder_metrics)
-        except Exception as e:
-            print(f"ERROR: Error calculating metrics for feeder {feeder.name}: {str(e)}")
-            import traceback
-            traceback.print_exc()
-            continue
-    
-    print(f"DEBUG: Successfully calculated metrics for {len(result)} onboarded feeders")
+    params = list(feeder_ids) + [from_date, to_date]
+
+    is_single_day = (from_date == to_date)
+    period_days = 1 if is_single_day else (to_date - from_date).days + 1
+
+    with connection.cursor() as cursor:
+        cursor.execute(query, params)
+        rows = cursor.fetchall()
+
+    result = {}
+    for feeder_id, total_hours in rows:
+        avg = float(total_hours) if is_single_day else total_hours / period_days
+        result[feeder_id] = round(min(avg, 24.0), 2)
+
+    # feeders with no data at all default to 0
     return result
+
+
+def _bulk_interruption_metrics(feeder_ids, from_date, to_date, exclude_types=None):
+    """
+    Bulk interruption duration + count for all feeder_ids in ONE query.
+    Returns dict: {feeder_id: (avg_duration_per_day, ftc_count)}
+    """
+    if not feeder_ids:
+        return {}
+
+    now = timezone.now()
+    today = now.date()
+
+    start_of_period = timezone.make_aware(datetime.combine(from_date, datetime.min.time()))
+    end_of_period = now if to_date >= today else timezone.make_aware(
+        datetime.combine(to_date, datetime.max.time())
+    )
+
+    period_days = (to_date - from_date).days + 1
+    is_single_day = (from_date == to_date)
+
+    feeder_placeholders = ','.join(['%s'] * len(feeder_ids))
+
+    exclusion_clause = ""
+    extra_params = []
+    if exclude_types:
+        type_placeholders = ','.join(['%s'] * len(exclude_types))
+        exclusion_clause = f"AND interruption_type NOT IN ({type_placeholders})"
+        extra_params = list(exclude_types)
+
+    # Duration query — grouped by feeder_id
+    duration_query = f"""
+        SELECT
+            feeder_id,
+            COALESCE(SUM(
+                GREATEST(
+                    EXTRACT(EPOCH FROM (
+                        LEAST(COALESCE(restored_at, %s), %s) - GREATEST(occurred_at, %s)
+                    )) / 3600.0,
+                    0
+                )
+            ), 0) as total_hours
+        FROM technical_feederinterruption
+        WHERE feeder_id IN ({feeder_placeholders})
+            AND (
+                (occurred_at AT TIME ZONE 'Africa/Lagos')::date BETWEEN %s AND %s
+                OR (occurred_at < %s AND (restored_at IS NULL OR restored_at >= %s))
+            )
+            {exclusion_clause}
+        GROUP BY feeder_id
+    """
+    duration_params = (
+        [now, end_of_period, start_of_period]
+        + list(feeder_ids)
+        + [from_date, to_date, start_of_period, start_of_period]
+        + extra_params
+    )
+
+    # Count query — only interruptions that STARTED in period (FTC)
+    count_query = f"""
+        SELECT
+            feeder_id,
+            COUNT(*) as interruption_count
+        FROM technical_feederinterruption
+        WHERE feeder_id IN ({feeder_placeholders})
+            AND (occurred_at AT TIME ZONE 'Africa/Lagos')::date BETWEEN %s AND %s
+            {exclusion_clause}
+        GROUP BY feeder_id
+    """
+    count_params = list(feeder_ids) + [from_date, to_date] + extra_params
+
+    with connection.cursor() as cursor:
+        cursor.execute(duration_query, duration_params)
+        duration_rows = {row[0]: float(row[1]) for row in cursor.fetchall()}
+
+        cursor.execute(count_query, count_params)
+        count_rows = {row[0]: int(row[1]) for row in cursor.fetchall()}
+
+    result = {}
+    for fid in feeder_ids:
+        total_hours = duration_rows.get(fid, 0.0)
+        avg = total_hours / period_days if period_days > 0 else 0
+        avg = max(0, min(avg, 24.0))
+        result[fid] = (round(avg, 2), count_rows.get(fid, 0))
+
+    return result
+
+
+def get_feeder_availability_summary_optimized(from_date, to_date, mode, state=None, business_district=None, voltage_level=None):
+    """
+    HIGH-PERFORMANCE feeder availability summary.
+
+    BEFORE: N feeders × 5 queries = 500 queries for 100 feeders.
+    AFTER:  3 bulk queries total regardless of how many feeders.
+
+    Still returns the same per-feeder structure as before.
+    """
+    today = timezone.now().date()
+    if from_date > today:
+        return []
+
+    feeders_qs = (
+        Feeder.objects
+        .filter(is_onboarded=True)
+        .select_related('business_district__state', 'substation')
+    )
+    if voltage_level:
+        feeders_qs = feeders_qs.filter(voltage_level=voltage_level)
+    if business_district:
+        feeders_qs = feeders_qs.filter(business_district__name=business_district)
+    elif state:
+        feeders_qs = feeders_qs.filter(business_district__state__name=state)
+
+    feeders = list(feeders_qs)
+    if not feeders:
+        return []
+
+    feeder_ids = [f.id for f in feeders]
+
+    # ── 3 bulk queries ──────────────────────────────────────────────────────
+    supply_map = _bulk_supply_hours(feeder_ids, from_date, to_date)
+    interrupt_map = _bulk_interruption_metrics(feeder_ids, from_date, to_date)
+    turnaround_map = _bulk_interruption_metrics(
+        feeder_ids, from_date, to_date, exclude_types=list(TURNAROUND_EXCLUSIONS)
+    )
+    # ────────────────────────────────────────────────────────────────────────
+
+    result = []
+    for feeder in feeders:
+        fid = feeder.id
+        avg_supply = round(min(supply_map.get(fid, 0.0), 24.0), 2)
+        avg_duration = round(24.0 - avg_supply, 2)          # always sums to 24
+        _, ftc = interrupt_map.get(fid, (0.0, 0))           # ftc count only
+        turnaround, _ = turnaround_map.get(fid, (0.0, 0))
+
+        result.append({
+            "feeder_name": feeder.name,
+            "feeder_slug": feeder.slug,
+            "voltage_level": feeder.voltage_level,
+            "substation_name": feeder.substation.name if feeder.substation else "",
+            "avg_hours_of_supply": avg_supply,
+            "duration_of_interruptions": avg_duration,
+            "turnaround_time": round(min(turnaround, 24.0), 2),
+            "ftc": ftc,
+            "_source": f"bulk_sql_{mode}",
+        })
+
+    return result
+
+
 
 
 class FeederAvailabilityOverview(APIView):
@@ -530,13 +684,17 @@ class FeederAvailabilityOverview(APIView):
             except ValueError as e:
                 return Response({"error": str(e)}, status=400)
         
-        # Get feeder availability data using optimized method (ONBOARDED feeders only)
+        # Get feeder availability data using optimized method (ONBOARDED feeders only, voltage-filtered)
+        feeder_type_param = request.GET.get("feeder_type", "")
+        voltage_level = feeder_type_param if feeder_type_param in ("11kv", "33kv") else None
+        
         data = get_feeder_availability_summary_optimized(
             from_date=from_date,
             to_date=to_date,
             mode=mode,
             state=state,
             business_district=business_district,
+            voltage_level=voltage_level,
         )
         
         # Remove internal source field for response

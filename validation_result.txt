@@ -1,0 +1,19 @@
+--- Starting Validation for January 2026 ---
+Target Period: 2026-01-01 to 2026-01-31
+
+[Data Availability]
+DailyHoursOfSupply records found: 0
+HourlyLoad records found: 98710
+
+[Official Calculation via TechnicalCalculator]
+Official Avg Hours of Supply: 10.206829268292683
+Official Total Supply Hours:  31386
+
+[Manual Verification Breakdown]
+Method 1 (DailyHoursOfSupply) is inactive (no data).
+Method 2 (HourlyLoad) fallback check.
+  -> Derived from Load Avg: 10.206829268292683
+  -> Derived from Load Sum: 31386
+  -> Count of Feeder-Days with Load > 0: 3075
+
+--- Validation Complete ---

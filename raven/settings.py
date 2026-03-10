@@ -140,11 +140,11 @@ DATABASES = {
     },
     'external': {
         'ENGINE': 'django.db.backends.mysql',
-        'NAME': 'dataNestDB_KEDCO',
-        'USER': 'root',
-        'PASSWORD': config('DATANEST_DB_PASSWORD'),
-        'HOST': config('DATANEST_DB_HOST'),
-        'PORT': '3306',
+        'NAME': config('EX_DB_NAME', default='dataNestDB_KEDCO'),
+        'USER': config('EX_DB_USER', default='root'),
+        'PASSWORD': config('EX_DB_PASSWORD'),
+        'HOST': config('EX_DB_HOST'),
+        'PORT': config('EX_DB_PORT', default='3306'),
         'OPTIONS': {
             'charset': 'utf8mb4',
         },
@@ -203,13 +203,14 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 # }
 
 REST_FRAMEWORK = {
-    # 'DEFAULT_AUTHENTICATION_CLASSES': [
-    #     'rest_framework_simplejwt.authentication.JWTAuthentication',
-    #     'rest_framework.authentication.TokenAuthentication',
-    # ],
-    # 'DEFAULT_PERMISSION_CLASSES': [
-    #     'rest_framework.permissions.IsAuthenticated',
-    # ],
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
+        'rest_framework.authentication.TokenAuthentication',
+        'rest_framework.authentication.SessionAuthentication',
+    ],
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.AllowAny',
+    ],
 }
 
 SPECTACULAR_SETTINGS = {

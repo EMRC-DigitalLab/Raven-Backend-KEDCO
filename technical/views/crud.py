@@ -1,5 +1,6 @@
 # technical/views/crud.py
 from rest_framework import viewsets
+from rest_framework.permissions import AllowAny
 from technical.models import *
 from technical.serializers import *
 from commercial.date_filters import get_date_range_from_request
@@ -20,6 +21,8 @@ from datetime import datetime
 
 class EnergyDeliveredViewSet(viewsets.ModelViewSet):
     serializer_class = EnergyDeliveredSerializer
+    authentication_classes = []
+    permission_classes = [AllowAny]
     http_method_names = ['get', 'post', 'head', 'options']  # No PUT/PATCH/DELETE
 
     def get_queryset(self):
@@ -39,6 +42,8 @@ class EnergyDeliveredViewSet(viewsets.ModelViewSet):
 
     @transaction.atomic
     def _handle_cumulative_data(self, request, is_bulk=False):
+        from decimal import Decimal, InvalidOperation
+        
         print("🔍 _handle_cumulative_data called!")
         print(f"📦 Request data: {request.data}")
         
@@ -101,7 +106,20 @@ class EnergyDeliveredViewSet(viewsets.ModelViewSet):
                     errors.append(f"Record {i}: missing 'energy_mwh'")
                     continue
                 
-                print(f"✅ Energy value: {cumulative_mwh} MWh")
+                # ✅ FIX: Convert to Decimal to avoid type mismatch errors
+                try:
+                    if isinstance(cumulative_mwh, str):
+                        cumulative_mwh = Decimal(cumulative_mwh)
+                    elif isinstance(cumulative_mwh, (int, float)):
+                        cumulative_mwh = Decimal(str(cumulative_mwh))
+                    elif not isinstance(cumulative_mwh, Decimal):
+                        cumulative_mwh = Decimal(str(cumulative_mwh))
+                    
+                    print(f"✅ Energy value: {cumulative_mwh} MWh (type: {type(cumulative_mwh).__name__})")
+                except (InvalidOperation, ValueError, TypeError) as e:
+                    print(f"❌ Invalid energy_mwh value: {cumulative_mwh}")
+                    errors.append(f"Record {i}: Invalid energy_mwh '{cumulative_mwh}' - {str(e)}")
+                    continue
 
                 # --- Upsert into CumulativeMeterReading ---
                 print(f"💾 Creating/updating CumulativeMeterReading...")
@@ -169,6 +187,8 @@ class EnergyDeliveredViewSet(viewsets.ModelViewSet):
 
 class HourlyLoadViewSet(viewsets.ModelViewSet):
     serializer_class = HourlyLoadSerializer
+    authentication_classes = []
+    permission_classes = [AllowAny]
 
     def get_queryset(self):
         feeders = get_filtered_feeders(self.request)
@@ -243,10 +263,10 @@ class HourlyLoadViewSet(viewsets.ModelViewSet):
                         # Parse date
                         try:
                             if 'T' in date_str:
-                                date_obj = datetime.datetime.fromisoformat(date_str.replace('Z', '+00:00')).date()
+                                date_obj = datetime.fromisoformat(date_str.replace('Z', '+00:00')).date()
                                 date_obj = date_obj + timedelta(days=1)
                             else:
-                                date_obj = datetime.datetime.strptime(date_str, '%Y-%m-%d').date()
+                                date_obj = datetime.strptime(date_str, '%Y-%m-%d').date()
                         except ValueError:
                             errors.append(f"Record {i}: Invalid date format '{date_str}'")
                             continue
@@ -362,6 +382,8 @@ class HourlyLoadViewSet(viewsets.ModelViewSet):
 
 class FeederInterruptionViewSet(viewsets.ModelViewSet):
     serializer_class = FeederInterruptionSerializer
+    authentication_classes = []
+    permission_classes = [AllowAny]
 
     def get_queryset(self):
         feeders = get_filtered_feeders(self.request)
@@ -528,6 +550,8 @@ class FeederInterruptionViewSet(viewsets.ModelViewSet):
 
 class DailyHoursOfSupplyViewSet(viewsets.ModelViewSet):
     serializer_class = DailyHoursOfSupplySerializer
+    authentication_classes = []
+    permission_classes = [AllowAny]
 
     def get_queryset(self):
         feeders = get_filtered_feeders(self.request)

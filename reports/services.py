@@ -12,6 +12,7 @@ import logging
 from common.models import State, BusinessDistrict, InjectionSubstation, Feeder, Band
 from technical.models import HourlyLoad, FeederInterruption
 from technical.constants import TURNAROUND_EXCLUSIONS
+from technical.utils.energy_utils import calculate_energy_delivered
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,13 @@ SECTION_DEFINITIONS = {
             'show_logo': {'type': 'boolean', 'default': True},
             'show_subtitle': {'type': 'boolean', 'default': True},
         }
+    },
+    'table_of_contents': {
+        'display_name': 'Table of Contents',
+        'description': 'Auto-generated table of contents with section names and page numbers',
+        'category': 'general',
+        'supports_chart': False,
+        'config_options': {},
     },
     'infrastructure_overview': {
         'display_name': 'Infrastructure Overview',
@@ -286,39 +294,58 @@ class ReportDataService:
             self.period_days = (self.to_date - self.from_date).days + 1
     
     def _parse_date(self, date_val):
-        """Parse date from string or return as-is if already a date"""
+        """
+        Parse date from string or return as-is if already a date.
+
+        Always uses the YYYY-MM-DD portion of any ISO string, discarding time
+        and timezone parts.  This prevents off-by-N-day errors when the frontend
+        sends midnight-UTC strings for a date selected in a UTC+1 locale.
+        """
         if isinstance(date_val, str):
-            if 'T' in date_val:
-                return datetime.fromisoformat(date_val.replace('Z', '+00:00')).date()
-            return datetime.strptime(date_val, '%Y-%m-%d').date()
+            # Take only the date portion (first 10 chars) regardless of whether
+            # the string includes a time or timezone component.
+            date_str = date_val.split('T')[0].split(' ')[0].strip()
+            return datetime.strptime(date_str, '%Y-%m-%d').date()
         elif isinstance(date_val, datetime):
             return date_val.date()
         return date_val
     
     def _get_filtered_feeder_ids(self):
         """Get feeder IDs based on all filters"""
-        queryset = Feeder.objects.filter(is_onboarded=True)  # ✅ Only onboarded feeders
+        from django.db.models import Q
         
+        # ✅ Only onboarded feeders (SEASONALITY AWARE - just like overview_views)
+        queryset = Feeder.objects.filter(is_onboarded=True).filter(
+            Q(onboarded_at__lte=self.to_date) | Q(onboarded_at__isnull=True)
+        )
+        # Filter by voltage level: '11kv' or '33kv' (optional)
+        # Normalize to lowercase so '11kV', '11KV', etc. all work
+        voltage_level = self.filters.get('voltage_level')
+        if voltage_level:
+            voltage_level = str(voltage_level).lower().strip()
+        if voltage_level in ('11kv', '33kv'):
+            queryset = queryset.filter(voltage_level=voltage_level)
+
         # Filter by specific feeders (only if list is not empty)
         if self.filters.get('feeders') and len(self.filters['feeders']) > 0:
             queryset = queryset.filter(id__in=self.filters['feeders'])
-        
+
         # Filter by bands (only if list is not empty)
         if self.filters.get('bands') and len(self.filters['bands']) > 0:
             queryset = queryset.filter(band_id__in=self.filters['bands'])
-        
+
         # Filter by substations (only if list is not empty)
         if self.filters.get('substations') and len(self.filters['substations']) > 0:
             queryset = queryset.filter(substation_id__in=self.filters['substations'])
-        
+
         # Filter by districts (only if list is not empty)
         if self.filters.get('districts') and len(self.filters['districts']) > 0:
             queryset = queryset.filter(business_district_id__in=self.filters['districts'])
-        
+
         # Filter by states (only if list is not empty)
         if self.filters.get('states') and len(self.filters['states']) > 0:
             queryset = queryset.filter(business_district__state_id__in=self.filters['states'])
-        
+
         return list(queryset.values_list('id', flat=True))
     
     def get_infrastructure_data(self):
@@ -326,15 +353,20 @@ class ReportDataService:
         feeders = Feeder.objects.filter(id__in=self.feeder_ids).select_related(
             'band', 'substation', 'business_district', 'business_district__state'
         )
-        
+
+        feeders_11kv = feeders.filter(voltage_level='11kv').count()
+        feeders_33kv = feeders.filter(voltage_level='33kv').count()
+
         return {
             'total_feeders': feeders.count(),
+            'feeders_11kv': feeders_11kv,
+            'feeders_33kv': feeders_33kv,
             'total_substations': feeders.values('substation').distinct().count(),
             'total_transformers': sum(f.transformers.count() for f in feeders),
             'feeders': [
                 {
                     'name': f.name,
-                    'voltage': f.voltage_level,
+                    'voltage': f.get_voltage_level_display(),
                     'band': f.band.name if f.band else '-',
                     'district': f.business_district.name if f.business_district else '-',
                     'substation': f.substation.name if f.substation else '-',
@@ -429,106 +461,48 @@ class ReportDataService:
         placeholders = ','.join(['%s'] * len(self.feeder_ids))
         
         query = f"""
-            SELECT COUNT(DISTINCT CONCAT(feeder_id, '-', date, '-', hour)) as total_hours
+            SELECT 
+                COUNT(DISTINCT CONCAT(feeder_id, '-', date, '-', hour)) as total_hours
             FROM technical_hourlyload
-            WHERE feeder_id IN ({placeholders})
-                AND date BETWEEN %s AND %s
+            WHERE date BETWEEN %s AND %s
                 AND load_mw > 0
+                AND feeder_id IN ({placeholders})
         """
         
         with connection.cursor() as cursor:
-            cursor.execute(query, list(self.feeder_ids) + [self.from_date, self.to_date])
+            cursor.execute(query, [self.from_date, self.to_date] + list(self.feeder_ids))
             result = cursor.fetchone()
-            total_hours = result[0] if result else 0
+            total_hours_all_feeders = result[0] if result and result[0] else 0
         
         total_feeders = len(self.feeder_ids)
         
-        # ✅ CRITICAL: For single-day queries, return average hours per feeder (not daily average)
-        # For multi-day queries, return average hours per day per feeder
-        if self.is_single_day:
+        # ✅ CRITICAL: Same exact calculation as calculate_hours_of_supply_network in overview_views
+        if self.from_date == self.to_date:
             # Single day: Average hours per feeder
-            avg_hours = total_hours / total_feeders if total_feeders > 0 else 0
+            avg_hours = total_hours_all_feeders / total_feeders if total_feeders > 0 else 0
         else:
             # Multi-day: Average hours per day per feeder
-            avg_hours = total_hours / (total_feeders * self.period_days) if (total_feeders * self.period_days) > 0 else 0
+            period_days = (self.to_date - self.from_date).days + 1
+            avg_hours = total_hours_all_feeders / (total_feeders * period_days) if (total_feeders * period_days) > 0 else 0
         
-        return min(avg_hours, 24.0)
+        return round(min(avg_hours, 24.0), 2)
     
     def _calculate_energy_delivered_hybrid(self):
         """
-        ✅ NEW: Calculate energy delivered using hybrid approach.
-        
-        Priority:
-        1. EnergyDelivered table (primary source)
-        2. HourlyLoad table (fallback)
-        
+        Calculate energy delivered using the shared energy_utils function.
+
+        Delegates to calculate_energy_delivered() which applies per-feeder
+        hybrid logic (meter primary, HourlyLoad fallback) with a MAX-daily
+        balloon-limit check that guarantees:
+
+            monthly total = Σ daily totals
+
         Returns total energy in MWh across all feeders for the period.
         """
         if not self.feeder_ids:
             return 0.0
-        
-        placeholders = ','.join(['%s'] * len(self.feeder_ids))
-        
-        # Hybrid query: Use EnergyDelivered if available, fallback to HourlyLoad
-        query = f"""
-            WITH feeder_dates AS (
-                SELECT 
-                    f.id as feeder_id,
-                    d.date
-                FROM (
-                    SELECT DISTINCT id FROM common_feeder WHERE id IN ({placeholders})
-                ) f
-                CROSS JOIN (
-                    SELECT generate_series(
-                        %s::date,
-                        %s::date,
-                        '1 day'::interval
-                    )::date as date
-                ) d
-            ),
-            energy_delivered_data AS (
-                SELECT 
-                    fd.feeder_id,
-                    fd.date,
-                    ed.energy_mwh as delivered_energy
-                FROM feeder_dates fd
-                LEFT JOIN technical_energydelivered ed 
-                    ON ed.feeder_id = fd.feeder_id 
-                    AND ed.date = fd.date
-            ),
-            hourly_load_data AS (
-                SELECT 
-                    feeder_id,
-                    date,
-                    SUM(load_mw) as hourly_energy
-                FROM technical_hourlyload
-                WHERE feeder_id IN ({placeholders})
-                    AND date BETWEEN %s AND %s
-                GROUP BY feeder_id, date
-            )
-            SELECT 
-                COALESCE(SUM(
-                    COALESCE(ed.delivered_energy, hl.hourly_energy, 0)
-                ), 0) as total_energy
-            FROM energy_delivered_data ed
-            LEFT JOIN hourly_load_data hl 
-                ON hl.feeder_id = ed.feeder_id 
-                AND hl.date = ed.date
-        """
-        
-        params = (
-            list(self.feeder_ids) + 
-            [self.from_date, self.to_date] + 
-            list(self.feeder_ids) + 
-            [self.from_date, self.to_date]
-        )
-        
-        with connection.cursor() as cursor:
-            cursor.execute(query, params)
-            result = cursor.fetchone()
-            total_energy = float(result[0]) if result else 0.0
-        
-        return total_energy
+        result = calculate_energy_delivered(self.feeder_ids, self.from_date, self.to_date)
+        return result['total_mwh']
     
     def _empty_technical_metrics(self):
         """Return empty technical metrics"""
@@ -550,81 +524,43 @@ class ReportDataService:
                 'avg_duration_of_interruption': 0.0,
                 'avg_turnaround_time': 0.0,
             }
-        
+
         total_feeders = len(self.feeder_ids)
-        
-        # ✅ FIXED: Use proper max hours based on single-day vs multi-day
+
+        # avg_duration = 24 - hours_of_supply (same HourlyLoad source as Technical Overview
+        # so avg_supply + avg_duration always sums to exactly 24)
+        hours_of_supply = self._calculate_hours_of_supply()
+        avg_duration = round(max(0.0, min(24.0 - hours_of_supply, 24.0)), 2)
+
+        # Cumulative interruption hours = avg_duration × feeders × period_days
+        if self.is_single_day:
+            total_interruption_hours = avg_duration * total_feeders
+        else:
+            total_interruption_hours = avg_duration * total_feeders * self.period_days
+
+        # Turnaround time — LOCAL faults only (exclude L/S and TCN types)
+        # Same SQL approach as calculate_interruption_duration_network() in overview_views.py:
+        # per-feeder SUM capped at max_hours, then avg across feeders × period_days
         if self.is_single_day:
             max_hours_per_feeder = 24.0
         else:
             max_hours_per_feeder = self.period_days * 24.0
-        
+
         start_of_period = timezone.make_aware(
             datetime.combine(self.from_date, datetime.min.time())
         )
         end_of_period = timezone.make_aware(
             datetime.combine(self.to_date, datetime.max.time())
         )
-        
-        placeholders = ','.join(['%s'] * len(self.feeder_ids))
-        
-        # All interruptions (for duration)
-        duration_query = f"""
-            SELECT 
-                COALESCE(SUM(capped_hours), 0) as total_hours
-            FROM (
-                SELECT 
-                    fi.feeder_id,
-                    LEAST(
-                        SUM(
-                            GREATEST(
-                                EXTRACT(EPOCH FROM (
-                                    LEAST(COALESCE(restored_at, %s), %s) - GREATEST(occurred_at, %s)
-                                )) / 3600.0,
-                                0
-                            )
-                        ),
-                        %s
-                    ) as capped_hours
-                FROM technical_feederinterruption fi
-                WHERE fi.feeder_id IN ({placeholders})
-                    AND (
-                        fi.occurred_at >= %s AND fi.occurred_at <= %s
-                        OR (fi.occurred_at < %s AND (fi.restored_at IS NULL OR fi.restored_at >= %s))
-                    )
-                GROUP BY fi.feeder_id
-            ) per_feeder_totals
-        """
-        
-        duration_params = [
-            end_of_period, end_of_period, start_of_period, max_hours_per_feeder
-        ] + list(self.feeder_ids) + [
-            start_of_period, end_of_period, start_of_period, start_of_period
-        ]
-        
-        with connection.cursor() as cursor:
-            cursor.execute(duration_query, duration_params)
-            result = cursor.fetchone()
-            total_interruption_hours = float(result[0]) if result else 0
-        
-        # ✅ FIXED: Handle single-day vs multi-day
-        if self.is_single_day:
-            avg_duration = total_interruption_hours / total_feeders if total_feeders > 0 else 0
-        else:
-            avg_duration = total_interruption_hours / (total_feeders * self.period_days) if (total_feeders * self.period_days) > 0 else 0
-        
-        avg_duration = max(0, min(avg_duration, 24.0))
-        
-        # Local faults only (for turnaround time)
-        excluded_types = TURNAROUND_EXCLUSIONS
-        type_placeholders = ','.join(['%s'] * len(excluded_types))
-        
+
+        feeder_placeholders = ','.join(['%s'] * len(self.feeder_ids))
+        excl_placeholders = ','.join(['%s'] * len(TURNAROUND_EXCLUSIONS))
+
         turnaround_query = f"""
-            SELECT 
-                COALESCE(SUM(capped_hours), 0) as total_hours
+            SELECT COALESCE(SUM(capped_hours), 0)
             FROM (
-                SELECT 
-                    fi.feeder_id,
+                SELECT
+                    feeder_id,
                     LEAST(
                         SUM(
                             GREATEST(
@@ -636,41 +572,40 @@ class ReportDataService:
                         ),
                         %s
                     ) as capped_hours
-                FROM technical_feederinterruption fi
-                WHERE fi.feeder_id IN ({placeholders})
-                    AND (
-                        fi.occurred_at >= %s AND fi.occurred_at <= %s
-                        OR (fi.occurred_at < %s AND (fi.restored_at IS NULL OR fi.restored_at >= %s))
-                    )
-                    AND fi.interruption_type NOT IN ({type_placeholders})
-                GROUP BY fi.feeder_id
+                FROM technical_feederinterruption
+                WHERE (
+                    occurred_at >= %s AND occurred_at <= %s
+                    OR (occurred_at < %s AND (restored_at IS NULL OR restored_at >= %s))
+                )
+                AND feeder_id IN ({feeder_placeholders})
+                AND interruption_type NOT IN ({excl_placeholders})
+                GROUP BY feeder_id
             ) per_feeder_totals
         """
-        
-        turnaround_params = [
-            end_of_period, end_of_period, start_of_period, max_hours_per_feeder
-        ] + list(self.feeder_ids) + [
-            start_of_period, end_of_period, start_of_period, start_of_period
-        ] + list(excluded_types)
-        
+        turnaround_params = (
+            [end_of_period, end_of_period, start_of_period, max_hours_per_feeder,
+             start_of_period, end_of_period, start_of_period, start_of_period]
+            + list(self.feeder_ids)
+            + list(TURNAROUND_EXCLUSIONS)
+        )
         with connection.cursor() as cursor:
             cursor.execute(turnaround_query, turnaround_params)
             result = cursor.fetchone()
-            total_turnaround_hours = float(result[0]) if result else 0
-        
-        # ✅ FIXED: Handle single-day vs multi-day
+            total_turnaround_hours = float(result[0]) if result else 0.0
+
         if self.is_single_day:
-            avg_turnaround = total_turnaround_hours / total_feeders if total_feeders > 0 else 0
+            avg_turnaround = total_turnaround_hours / total_feeders if total_feeders > 0 else 0.0
         else:
-            avg_turnaround = total_turnaround_hours / (total_feeders * self.period_days) if (total_feeders * self.period_days) > 0 else 0
-        
-        avg_turnaround = max(0, min(avg_turnaround, 24.0))
-        
+            avg_turnaround = total_turnaround_hours / (total_feeders * self.period_days) if (total_feeders * self.period_days) > 0 else 0.0
+
+        avg_turnaround = round(max(0.0, min(avg_turnaround, 24.0)), 2)
+
         return {
             'cumulative_interruption_hours': round(total_interruption_hours, 2),
-            'avg_duration_of_interruption': round(avg_duration, 2),
-            'avg_turnaround_time': round(avg_turnaround, 2),
+            'avg_duration_of_interruption': avg_duration,
+            'avg_turnaround_time': avg_turnaround,
         }
+
     
     def get_interruption_breakdown(self, group_by='type'):
         """Get interruption breakdown data"""
@@ -723,18 +658,9 @@ class ReportDataService:
         
         result = []
         for feeder in feeders:
-            # Hours of supply for this feeder
-            hours_count = HourlyLoad.objects.filter(
-                feeder=feeder,
-                date__range=(self.from_date, self.to_date),
-                load_mw__gt=0
-            ).count()
-            
-            # ✅ FIXED: Handle single-day vs multi-day
-            if self.is_single_day:
-                avg_supply = float(hours_count)
-            else:
-                avg_supply = hours_count / self.period_days if self.period_days > 0 else 0
+            # ✅ FIXED: Use the exact same backend overview calculation for hours of supply
+            from technical.views.overview.overview_views import calculate_hours_of_supply_feeder
+            avg_supply_capped = calculate_hours_of_supply_feeder(feeder.id, self.from_date, self.to_date)
             
             # Peak load
             peak_load = HourlyLoad.objects.filter(
@@ -742,71 +668,35 @@ class ReportDataService:
                 date__range=(self.from_date, self.to_date)
             ).aggregate(max_load=Max('load_mw'))['max_load'] or 0
             
-            # Interruption count
-            interruption_count = FeederInterruption.objects.filter(
-                feeder=feeder,
-                occurred_at__date__range=(self.from_date, self.to_date)
-            ).count()
+            # Duration of interruptions = 24h minus avg supply hours per day
+            duration_hours = round(max(24.0 - avg_supply_capped, 0.0), 2)
+
+            # ✅ FIXED: Use hybrid energy calculation for single feeder, returning both value and source
+            energy_data = self._calculate_energy_for_feeder(feeder.id)
+            energy = energy_data['total_mwh']
             
-            # ✅ FIXED: Use hybrid energy calculation for single feeder
-            energy = self._calculate_energy_for_feeder(feeder.id)
-            
+            # Determine source: if meter_feeders > 0 it used the meter, otherwise it fell back to system
+            energy_source = 'meter' if energy_data.get('meter_feeders', 0) > 0 else 'system'
+
             result.append({
                 'id': str(feeder.id),
                 'name': feeder.name,
                 'band': feeder.band.name if feeder.band else '-',
                 'district': feeder.business_district.name if feeder.business_district else '-',
-                'hours_of_supply': round(min(avg_supply, 24.0), 2),
-                'availability_percentage': round((min(avg_supply, 24.0) / 24) * 100, 1),
-                'interruptions': interruption_count,
+                'hours_of_supply': round(avg_supply_capped, 2),
+                'availability_percentage': round((avg_supply_capped / 24) * 100, 1),
+                'duration_hours': duration_hours,
                 'peak_load': round(float(peak_load), 2),
                 'energy_delivered': round(float(energy), 2),
+                'energy_source': energy_source,
             })
-        
-        return result
-    
+        # Sort by band name (A→E) then feeder name within each band
+        return sorted(result, key=lambda x: (x['band'], x['name']))
+
     def _calculate_energy_for_feeder(self, feeder_id):
-        """Calculate energy for a single feeder using hybrid approach"""
-        query = """
-            WITH date_series AS (
-                SELECT generate_series(
-                    %s::date,
-                    %s::date,
-                    '1 day'::interval
-                )::date as date
-            ),
-            energy_data AS (
-                SELECT 
-                    ds.date,
-                    ed.energy_mwh as delivered_energy
-                FROM date_series ds
-                LEFT JOIN technical_energydelivered ed 
-                    ON ed.feeder_id = %s AND ed.date = ds.date
-            ),
-            load_data AS (
-                SELECT 
-                    date,
-                    SUM(load_mw) as hourly_energy
-                FROM technical_hourlyload
-                WHERE feeder_id = %s
-                    AND date BETWEEN %s AND %s
-                GROUP BY date
-            )
-            SELECT 
-                COALESCE(SUM(
-                    COALESCE(ed.delivered_energy, ld.hourly_energy, 0)
-                ), 0) as total_energy
-            FROM energy_data ed
-            LEFT JOIN load_data ld ON ld.date = ed.date
-        """
-        
-        with connection.cursor() as cursor:
-            cursor.execute(query, [
-                self.from_date, self.to_date, feeder_id,
-                feeder_id, self.from_date, self.to_date
-            ])
-            result = cursor.fetchone()
-            return float(result[0]) if result else 0.0
+        """Calculate energy for a single feeder using the shared energy_utils function."""
+        result = calculate_energy_delivered([feeder_id], self.from_date, self.to_date)
+        return result
     
     def get_hours_of_supply_trend(self, group_by='day'):
         """Get hours of supply trend data for charts"""
@@ -816,13 +706,17 @@ class ReportDataService:
         total_feeders = len(self.feeder_ids)
         
         if group_by == 'day':
-            # Group by date
+            # Group by date using a reliable distinct approach for hourly load
+            # Similar to technical_calculations.py
+            from django.db.models import Count, ExpressionWrapper, FloatField, F
+            
             daily_data = HourlyLoad.objects.filter(
                 feeder_id__in=self.feeder_ids,
                 date__range=(self.from_date, self.to_date),
                 load_mw__gt=0
             ).values('date').annotate(
-                total_hours=Count('id')
+                # We count distinct hour+feeder combinations and divide by total feeders
+                total_hours=Count('id') 
             ).order_by('date')
             
             return [
@@ -892,42 +786,55 @@ class ReportDataService:
     
     def get_service_band_summary(self):
         """Get summary by service band"""
-        bands = Band.objects.all().order_by('name')
-        
+        # Build band -> feeder_ids mapping in one shot to avoid N+1 queries
+        feeder_band_map = dict(
+            Feeder.objects.filter(id__in=self.feeder_ids)
+            .values_list('id', 'band_id')
+        )
+        # Group feeder_ids by band_id
+        from collections import defaultdict
+        band_feeder_map = defaultdict(list)
+        for fid, bid in feeder_band_map.items():
+            if bid is not None:
+                band_feeder_map[bid].append(fid)
+
+        bands = Band.objects.filter(id__in=band_feeder_map.keys()).order_by('name')
+
         result = []
         for band in bands:
-            band_feeder_ids = [
-                fid for fid in self.feeder_ids 
-                if Feeder.objects.filter(id=fid, band=band).exists()
-            ]
-            
+            band_feeder_ids = band_feeder_map[band.id]
+
             if not band_feeder_ids:
                 continue
-            
+
             feeder_count = len(band_feeder_ids)
-            
+
             # Hours of supply
             hours_count = HourlyLoad.objects.filter(
                 feeder_id__in=band_feeder_ids,
                 date__range=(self.from_date, self.to_date),
                 load_mw__gt=0
             ).count()
-            
-            avg_supply = hours_count / (feeder_count * self.period_days) if feeder_count > 0 else 0
-            
+
+            # Match main metrics: single-day vs multi-day
+            if self.is_single_day:
+                avg_supply = float(hours_count) / feeder_count if feeder_count > 0 else 0
+            else:
+                avg_supply = hours_count / (feeder_count * self.period_days) if feeder_count > 0 else 0
+
             # Interruptions
             interruption_count = FeederInterruption.objects.filter(
                 feeder_id__in=band_feeder_ids,
                 occurred_at__date__range=(self.from_date, self.to_date)
             ).count()
-            
+
             result.append({
                 'band': band.name,
                 'feeder_count': feeder_count,
                 'hours_of_supply': round(min(avg_supply, 24.0), 2),
                 'interruptions': interruption_count,
             })
-        
+
         return result
     
     def get_state_performance(self):
@@ -964,21 +871,22 @@ class ReportDataService:
                 date__range=(self.from_date, self.to_date),
                 load_mw__gt=0
             ).count()
-            
-            avg_supply = hours_count / (feeder_count * self.period_days) if feeder_count > 0 else 0
-            
+
+            # Match main metrics: single-day vs multi-day
+            if self.is_single_day:
+                avg_supply = float(hours_count) / feeder_count if feeder_count > 0 else 0
+            else:
+                avg_supply = hours_count / (feeder_count * self.period_days) if feeder_count > 0 else 0
+
             # Peak load
             peak_load = HourlyLoad.objects.filter(
                 feeder_id__in=feeder_ids,
                 date__range=(self.from_date, self.to_date)
             ).aggregate(max_load=Max('load_mw'))['max_load'] or 0
-            
-            # Energy
-            energy = HourlyLoad.objects.filter(
-                feeder_id__in=feeder_ids,
-                date__range=(self.from_date, self.to_date)
-            ).aggregate(total=Sum('load_mw'))['total'] or 0
-            
+
+            # Energy — use same hybrid function as main metrics for consistency
+            energy = calculate_energy_delivered(feeder_ids, self.from_date, self.to_date)['total_mwh']
+
             # Interruptions
             interruption_count = FeederInterruption.objects.filter(
                 feeder_id__in=feeder_ids,
@@ -1032,21 +940,22 @@ class ReportDataService:
                 date__range=(self.from_date, self.to_date),
                 load_mw__gt=0
             ).count()
-            
-            avg_supply = hours_count / (feeder_count * self.period_days) if feeder_count > 0 else 0
-            
+
+            # Match main metrics: single-day vs multi-day
+            if self.is_single_day:
+                avg_supply = float(hours_count) / feeder_count if feeder_count > 0 else 0
+            else:
+                avg_supply = hours_count / (feeder_count * self.period_days) if feeder_count > 0 else 0
+
             # Peak load
             peak_load = HourlyLoad.objects.filter(
                 feeder_id__in=feeder_ids,
                 date__range=(self.from_date, self.to_date)
             ).aggregate(max_load=Max('load_mw'))['max_load'] or 0
-            
-            # Energy
-            energy = HourlyLoad.objects.filter(
-                feeder_id__in=feeder_ids,
-                date__range=(self.from_date, self.to_date)
-            ).aggregate(total=Sum('load_mw'))['total'] or 0
-            
+
+            # Energy — use same hybrid function as main metrics for consistency
+            energy = calculate_energy_delivered(feeder_ids, self.from_date, self.to_date)['total_mwh']
+
             # Interruptions
             interruption_count = FeederInterruption.objects.filter(
                 feeder_id__in=feeder_ids,
@@ -1076,6 +985,7 @@ class ReportDataService:
                 'to_date': self.to_date.strftime('%Y-%m-%d'),
                 'period_days': self.period_days,
             },
+            'table_of_contents': lambda: {},  # Populated by PDFGenerator
             'infrastructure_overview': self.get_infrastructure_data,
             'technical_metrics': self.get_technical_metrics,
             'system_reliability': self.get_system_reliability,
