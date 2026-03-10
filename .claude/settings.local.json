@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 manage.py check:*)",
+      "Bash(ls:*)",
+      "Bash(source:*)",
+      "Bash(python manage.py:*)",
+      "Bash(./venv/Scripts/activate)",
+      "Bash(./venv/Scripts/python.exe manage.py check)",
+      "Bash(./venv/Scripts/python.exe manage.py import_legacy_data:*)",
+      "Bash(./venv/Scripts/python.exe manage.py migrate)",
+      "Bash(./venv/Scripts/python.exe manage.py showmigrations:*)",
+      "Bash(./venv/Scripts/python.exe manage.py shell:*)"
+    ],
+    "deny": []
+  }
+}

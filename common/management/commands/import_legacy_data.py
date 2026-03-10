@@ -35,9 +35,9 @@ class Command(BaseCommand):
         with conn:
             # self.import_states(conn)
             # self.import_districts(conn)
-            # self.import_injection_stations(conn)
+            self.import_injection_stations(conn)
             # self.import_feeders(conn)
-            self.import_feeder_interruptions(conn)
+            # self.import_feeder_interruptions(conn)
             # self.import_expenses_with_breakdowns(conn)
             # self.import_hourly_load(conn)
             # self.import_staff(conn)

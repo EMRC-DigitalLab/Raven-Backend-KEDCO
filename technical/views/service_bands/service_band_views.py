@@ -153,6 +153,8 @@ def calculate_band_interruption_metrics_sql(feeder_ids, from_date, to_date, excl
     Returns:
         tuple: (avg_duration_per_day, total_interruption_count)
     """
+
+    print('reachged')
     if not feeder_ids:
         return 0.0, 0
     
@@ -183,6 +185,9 @@ def calculate_band_interruption_metrics_sql(feeder_ids, from_date, to_date, excl
     end_of_period = timezone.make_aware(
         datetime.combine(to_date, datetime.max.time())
     )
+
+
+    print(start_op_period, end_of_period)
     
     placeholders = ','.join(['%s'] * len(feeder_ids))
     
@@ -438,8 +443,10 @@ def technical_service_band_summary(request):
     - average_peak_load: Average peak load across ONBOARDED feeders
     
     NOTE: Only ONBOARDED feeders are included in all calculations.
+    
     """
     
+
     # Parse state filter
     state_filter = _parse_state_filter(request)
     
@@ -491,7 +498,9 @@ def technical_service_band_summary(request):
     
     # Get all service bands
     bands = Band.objects.all().order_by('name')
-    
+
+
+
     band_data = []
     
     for band in bands:

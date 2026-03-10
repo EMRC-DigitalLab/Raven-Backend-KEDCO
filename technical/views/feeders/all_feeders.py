@@ -117,6 +117,7 @@ def calculate_feeder_interruption_metrics_sql(feeder_id, from_date, to_date, exc
     - Converts all timestamps to Lagos timezone before date comparison
     - SUMS all interruption durations (overlaps are counted separately)
     
+
     Returns:
         tuple: (avg_duration_per_day, total_interruption_count)
             - avg_duration_per_day: Average interruption hours per day
@@ -224,7 +225,7 @@ def calculate_feeder_metrics_optimized(feeder, from_date, to_date, mode):
     Calculate feeder metrics using optimized SQL queries.
     
     CORRECTED: Interruption duration includes all active interruptions,
-    but count only includes interruptions that occurred in period.
+    but count only includes interruptions that occurred in periodn.
     
     For individual feeders, we calculate:
     - Average hours per day of supply

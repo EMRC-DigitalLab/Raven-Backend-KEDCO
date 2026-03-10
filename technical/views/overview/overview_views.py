@@ -1242,16 +1242,22 @@ def technical_overview_view(request):
     end_date = date_info["end_date"]
     period_days = date_info["period_days"]
     mode = date_info["mode"]
+
     
     # Parse feeder filter (optional)
     feeder_slug = request.GET.get("feeder")
     feeder_filter = {}
     feeder_name = None
     feeder = None
+
+    print(f"THIS IS DEBUG INFO: {date_info}, {start_date}, {end_date}, {period_days}, {mode}")
+
     
     if feeder_slug:
         try:
             feeder = Feeder.objects.get(slug=feeder_slug)
+            print(f"DEBUG: FEEDERS: {feeder})")
+
             feeder_filter = {'feeder': feeder}
             feeder_name = feeder.name
             print(f"DEBUG: Filtering by feeder: {feeder_name} ({feeder_slug})")

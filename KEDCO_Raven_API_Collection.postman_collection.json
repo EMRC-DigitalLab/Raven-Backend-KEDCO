@@ -1,0 +1,1726 @@
+{
+	"info": {
+		"_postman_id": "kedco-raven-api-collection",
+		"name": "KEDCO Raven API Collection",
+		"description": "Complete API collection for KEDCO Raven Backend - Electricity Distribution Management System",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"variable": [
+		{
+			"key": "base_url",
+			"value": "http://localhost:8000",
+			"type": "string"
+		},
+		{
+			"key": "access_token",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "refresh_token",
+			"value": "",
+			"type": "string"
+		}
+	],
+	"auth": {
+		"type": "bearer",
+		"bearer": [
+			{
+				"key": "token",
+				"value": "{{access_token}}",
+				"type": "string"
+			}
+		]
+	},
+	"item": [
+		{
+			"name": "🔐 Authentication",
+			"item": [
+				{
+					"name": "Login",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 200) {",
+									"    var jsonData = pm.response.json();",
+									"    pm.collectionVariables.set('access_token', jsonData.access);",
+									"    pm.collectionVariables.set('refresh_token', jsonData.refresh);",
+									"    console.log('Tokens saved successfully');",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"auth": {
+							"type": "noauth"
+						},
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"username\": \"admin\",\n    \"password\": \"password123\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/auth/login/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"auth",
+								"login",
+								""
+							]
+						}
+					}
+				},
+				{
+					"name": "Get Token",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 200) {",
+									"    var jsonData = pm.response.json();",
+									"    pm.collectionVariables.set('access_token', jsonData.access);",
+									"    pm.collectionVariables.set('refresh_token', jsonData.refresh);",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"auth": {
+							"type": "noauth"
+						},
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"username\": \"admin\",\n    \"password\": \"password123\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/auth/token/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"auth",
+								"token",
+								""
+							]
+						}
+					}
+				},
+				{
+					"name": "Refresh Token",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 200) {",
+									"    var jsonData = pm.response.json();",
+									"    pm.collectionVariables.set('access_token', jsonData.access);",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"auth": {
+							"type": "noauth"
+						},
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"refresh\": \"{{refresh_token}}\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/auth/token/refresh/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"auth",
+								"token",
+								"refresh",
+								""
+							]
+						}
+					}
+				},
+				{
+					"name": "Get Current User",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/auth/current-user/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"auth",
+								"current-user",
+								""
+							]
+						}
+					}
+				},
+				{
+					"name": "Logout",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"refresh\": \"{{refresh_token}}\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/auth/logout/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"auth",
+								"logout",
+								""
+							]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "👥 User Management",
+			"item": [
+				{
+					"name": "List Users",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/users/users/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"users",
+								"users",
+								""
+							]
+						}
+					}
+				},
+				{
+					"name": "Create User",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"username\": \"newuser\",\n    \"email\": \"newuser@example.com\",\n    \"first_name\": \"John\",\n    \"last_name\": \"Doe\",\n    \"password\": \"newpassword123\",\n    \"role\": \"staff\",\n    \"department\": \"Technical\",\n    \"phone_number\": \"+2348012345678\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/users/users/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"users",
+								"users",
+								""
+							]
+						}
+					}
+				},
+				{
+					"name": "Get User Detail",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/users/users/1/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"users",
+								"users",
+								"1",
+								""
+							]
+						}
+					}
+				},
+				{
+					"name": "List Sections",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/users/sections/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"users",
+								"sections",
+								""
+							]
+						}
+					}
+				},
+				{
+					"name": "List Permissions",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/users/permissions/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"users",
+								"permissions",
+								""
+							]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "📊 Analytics",
+			"item": [
+				{
+					"name": "General Summary",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/analytics/summary/general/?month=12&year=2024",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"analytics",
+								"summary",
+								"general",
+								""
+							],
+							"query": [
+								{
+									"key": "month",
+									"value": "12"
+								},
+								{
+									"key": "year",
+									"value": "2024"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "General Health",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/analytics/summary/general/health/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"analytics",
+								"summary",
+								"general",
+								"health",
+								""
+							]
+						}
+					}
+				},
+				{
+					"name": "Technical Overview",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/analytics/summary/technical/overview/?year=2024&month=12",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"analytics",
+								"summary",
+								"technical",
+								"overview",
+								""
+							],
+							"query": [
+								{
+									"key": "year",
+									"value": "2024"
+								},
+								{
+									"key": "month",
+									"value": "12"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Technical Health",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/analytics/summary/technical/health/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"analytics",
+								"summary",
+								"technical",
+								"health",
+								""
+							]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "💰 Commercial",
+			"item": [
+				{
+					"name": "Commercial Overview",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/commercial/overview/?year=2024&month=12",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"commercial",
+								"overview",
+								""
+							],
+							"query": [
+								{
+									"key": "year",
+									"value": "2024"
+								},
+								{
+									"key": "month",
+									"value": "12"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "List Sales Representatives",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/commercial/sales-reps/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"commercial",
+								"sales-reps",
+								""
+							]
+						}
+					}
+				},
+				{
+					"name": "List Daily Collections",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/commercial/collections/?start_date=2024-01-01&end_date=2024-12-31",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"commercial",
+								"collections",
+								""
+							],
+							"query": [
+								{
+									"key": "start_date",
+									"value": "2024-01-01"
+								},
+								{
+									"key": "end_date",
+									"value": "2024-12-31"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "All States Commercial",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/commercial/states/all/?year=2024&month=12",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"commercial",
+								"states",
+								"all",
+								""
+							],
+							"query": [
+								{
+									"key": "year",
+									"value": "2024"
+								},
+								{
+									"key": "month",
+									"value": "12"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Single State Commercial",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/commercial/states/single/?state=kano&mode=monthly&year=2024&month=12",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"commercial",
+								"states",
+								"single",
+								""
+							],
+							"query": [
+								{
+									"key": "state",
+									"value": "kano"
+								},
+								{
+									"key": "mode",
+									"value": "monthly"
+								},
+								{
+									"key": "year",
+									"value": "2024"
+								},
+								{
+									"key": "month",
+									"value": "12"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "All Business Districts Commercial",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/commercial/business-districts/all/?year=2024&month=12",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"commercial",
+								"business-districts",
+								"all",
+								""
+							],
+							"query": [
+								{
+									"key": "year",
+									"value": "2024"
+								},
+								{
+									"key": "month",
+									"value": "12"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "All Feeders Commercial",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/commercial/feeders/all/?year=2024&month=12",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"commercial",
+								"feeders",
+								"all",
+								""
+							],
+							"query": [
+								{
+									"key": "year",
+									"value": "2024"
+								},
+								{
+									"key": "month",
+									"value": "12"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Top/Bottom Feeders",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/commercial/feeders/top-bottom/?year=2024&month=12&limit=10",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"commercial",
+								"feeders",
+								"top-bottom",
+								""
+							],
+							"query": [
+								{
+									"key": "year",
+									"value": "2024"
+								},
+								{
+									"key": "month",
+									"value": "12"
+								},
+								{
+									"key": "limit",
+									"value": "10"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Service Bands Commercial",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/commercial/service-bands/?year=2024&month=12",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"commercial",
+								"service-bands",
+								""
+							],
+							"query": [
+								{
+									"key": "year",
+									"value": "2024"
+								},
+								{
+									"key": "month",
+									"value": "12"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Transformers Commercial",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/commercial/transformers/?feeder_id=1&year=2024&month=12",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"commercial",
+								"transformers",
+								""
+							],
+							"query": [
+								{
+									"key": "feeder_id",
+									"value": "1"
+								},
+								{
+									"key": "year",
+									"value": "2024"
+								},
+								{
+									"key": "month",
+									"value": "12"
+								}
+							]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "💸 Financial",
+			"item": [
+				{
+					"name": "Financial Overview",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/financial/overview/?year=2024&month=12",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"financial",
+								"overview",
+								""
+							],
+							"query": [
+								{
+									"key": "year",
+									"value": "2024"
+								},
+								{
+									"key": "month",
+									"value": "12"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "List Expense Categories",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/financial/expense-categories/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"financial",
+								"expense-categories",
+								""
+							]
+						}
+					}
+				},
+				{
+					"name": "List Expenses",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/financial/expenses/?start_date=2024-01-01&end_date=2024-12-31",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"financial",
+								"expenses",
+								""
+							],
+							"query": [
+								{
+									"key": "start_date",
+									"value": "2024-01-01"
+								},
+								{
+									"key": "end_date",
+									"value": "2024-12-31"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Create Expense",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"district\": 1,\n    \"date\": \"2024-12-15\",\n    \"purpose\": \"Equipment maintenance\",\n    \"payee\": \"ABC Company\",\n    \"debit\": 500000.00,\n    \"credit\": 0.00,\n    \"gl_account_number\": \"1001\",\n    \"opex_category\": 1\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/financial/expenses/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"financial",
+								"expenses",
+								""
+							]
+						}
+					}
+				},
+				{
+					"name": "Monthly Collections",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/financial/collections/monthly/?year=2024",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"financial",
+								"collections",
+								"monthly",
+								""
+							],
+							"query": [
+								{
+									"key": "year",
+									"value": "2024"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "All States Financial",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/financial/states/all/?year=2024&month=12",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"financial",
+								"states",
+								"all",
+								""
+							],
+							"query": [
+								{
+									"key": "year",
+									"value": "2024"
+								},
+								{
+									"key": "month",
+									"value": "12"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Sales Representatives Financial",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/financial/sales-reps/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"financial",
+								"sales-reps",
+								""
+							]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "⚡ Technical",
+			"item": [
+				{
+					"name": "Technical Overview",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/technical/overview/?year=2024&month=12",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"technical",
+								"overview",
+								""
+							],
+							"query": [
+								{
+									"key": "year",
+									"value": "2024"
+								},
+								{
+									"key": "month",
+									"value": "12"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "List Energy Delivered",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/technical/energy-delivered/?start_date=2024-12-01&end_date=2024-12-31",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"technical",
+								"energy-delivered",
+								""
+							],
+							"query": [
+								{
+									"key": "start_date",
+									"value": "2024-12-01"
+								},
+								{
+									"key": "end_date",
+									"value": "2024-12-31"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "List Hourly Load Data",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/technical/hourly-load/?date=2024-12-15",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"technical",
+								"hourly-load",
+								""
+							],
+							"query": [
+								{
+									"key": "date",
+									"value": "2024-12-15"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "List Feeder Interruptions",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/technical/feeder-interruptions/?start_date=2024-12-01&end_date=2024-12-31",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"technical",
+								"feeder-interruptions",
+								""
+							],
+							"query": [
+								{
+									"key": "start_date",
+									"value": "2024-12-01"
+								},
+								{
+									"key": "end_date",
+									"value": "2024-12-31"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Create Feeder Interruption",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"feeder\": 1,\n    \"occurred_at\": \"2024-12-15T10:30:00Z\",\n    \"restored_at\": \"2024-12-15T12:30:00Z\",\n    \"interruption_type\": \"E/F\",\n    \"description\": \"Earth fault on main line\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/technical/feeder-interruptions/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"technical",
+								"feeder-interruptions",
+								""
+							]
+						}
+					}
+				},
+				{
+					"name": "All States Technical",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/technical/states/all/?year=2024&month=12",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"technical",
+								"states",
+								"all",
+								""
+							],
+							"query": [
+								{
+									"key": "year",
+									"value": "2024"
+								},
+								{
+									"key": "month",
+									"value": "12"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Single State Technical",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/technical/states/single/?state=kano&year=2024&month=12",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"technical",
+								"states",
+								"single",
+								""
+							],
+							"query": [
+								{
+									"key": "state",
+									"value": "kano"
+								},
+								{
+									"key": "year",
+									"value": "2024"
+								},
+								{
+									"key": "month",
+									"value": "12"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "All Feeders Technical",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/technical/feeders/all/?year=2024&month=12",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"technical",
+								"feeders",
+								"all",
+								""
+							],
+							"query": [
+								{
+									"key": "year",
+									"value": "2024"
+								},
+								{
+									"key": "month",
+									"value": "12"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Service Bands Technical",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/technical/service-bands/?year=2024&month=12",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"technical",
+								"service-bands",
+								""
+							],
+							"query": [
+								{
+									"key": "year",
+									"value": "2024"
+								},
+								{
+									"key": "month",
+									"value": "12"
+								}
+							]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "👤 Human Resources",
+			"item": [
+				{
+					"name": "HR Overview",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/hr/overview/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"hr",
+								"overview",
+								""
+							]
+						}
+					}
+				},
+				{
+					"name": "List Departments",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/hr/departments/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"hr",
+								"departments",
+								""
+							]
+						}
+					}
+				},
+				{
+					"name": "List Roles",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/hr/roles/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"hr",
+								"roles",
+								""
+							]
+						}
+					}
+				},
+				{
+					"name": "List Staff",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/hr/staff/?department=technical&is_active=true",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"hr",
+								"staff",
+								""
+							],
+							"query": [
+								{
+									"key": "department",
+									"value": "technical"
+								},
+								{
+									"key": "is_active",
+									"value": "true"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Create Staff Member",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"full_name\": \"Jane Smith\",\n    \"email\": \"jane.smith@kedco.com\",\n    \"phone_number\": \"+2348012345679\",\n    \"gender\": \"Female\",\n    \"birth_date\": \"1990-05-15\",\n    \"hire_date\": \"2024-01-15\",\n    \"salary\": 150000.00,\n    \"grade\": \"Engineer II\",\n    \"department\": 1,\n    \"role\": 1,\n    \"district\": 1\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/hr/staff/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"hr",
+								"staff",
+								""
+							]
+						}
+					}
+				},
+				{
+					"name": "Executive KPIs Overview",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/hr/executive-kpis/overview/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"hr",
+								"executive-kpis",
+								"overview",
+								""
+							]
+						}
+					}
+				},
+				{
+					"name": "CTO KPIs",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/hr/executive-kpis/cto/?year=2024&month=12",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"hr",
+								"executive-kpis",
+								"cto",
+								""
+							],
+							"query": [
+								{
+									"key": "year",
+									"value": "2024"
+								},
+								{
+									"key": "month",
+									"value": "12"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "CCO KPIs",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/hr/executive-kpis/cco/?year=2024&month=12",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"hr",
+								"executive-kpis",
+								"cco",
+								""
+							],
+							"query": [
+								{
+									"key": "year",
+									"value": "2024"
+								},
+								{
+									"key": "month",
+									"value": "12"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "CFO KPIs",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/hr/executive-kpis/cfo/?year=2024&month=12",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"hr",
+								"executive-kpis",
+								"cfo",
+								""
+							],
+							"query": [
+								{
+									"key": "year",
+									"value": "2024"
+								},
+								{
+									"key": "month",
+									"value": "12"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Update KPI Performance",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"kpi_id\": \"uuid-of-kpi\",\n    \"actual_value\": 85.5,\n    \"year\": 2024,\n    \"month\": 12,\n    \"notes\": \"Performance improved this month\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/hr/executive-kpis/performance/update/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"hr",
+								"executive-kpis",
+								"performance",
+								"update",
+								""
+							]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "📋 Regulatory",
+			"item": [
+				{
+					"name": "Energy Offtake Compliance",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/regulatory/energy-offtake/?year=2024",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"regulatory",
+								"energy-offtake",
+								""
+							],
+							"query": [
+								{
+									"key": "year",
+									"value": "2024"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Revenue Recovery Compliance",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/regulatory/revenue-recovery/?year=2024",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"regulatory",
+								"revenue-recovery",
+								""
+							],
+							"query": [
+								{
+									"key": "year",
+									"value": "2024"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Create Energy Offtake Record",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"month\": \"2024-12-01\",\n    \"energy_received\": 1500000.0,\n    \"energy_delivered\": 1350000.0,\n    \"technical_losses\": 150000.0,\n    \"compliance_percentage\": 90.0,\n    \"notes\": \"Monthly energy offtake compliance report\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/regulatory/energy-offtake/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"regulatory",
+								"energy-offtake",
+								""
+							]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "📄 Reports",
+			"item": [
+				{
+					"name": "List Report Templates",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/reports/templates/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"reports",
+								"templates",
+								""
+							]
+						}
+					}
+				},
+				{
+					"name": "Create Report Template",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"name\": \"Monthly Technical Report\",\n    \"description\": \"Comprehensive monthly technical performance report\",\n    \"category\": \"technical\",\n    \"is_active\": true\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/reports/templates/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"reports",
+								"templates",
+								""
+							]
+						}
+					}
+				},
+				{
+					"name": "Get Available Sections",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/reports/sections/available/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"reports",
+								"sections",
+								"available",
+								""
+							]
+						}
+					}
+				},
+				{
+					"name": "Preview Section Data",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"section_type\": \"technical_overview\",\n    \"filters\": {\n        \"year\": 2024,\n        \"month\": 12\n    }\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/reports/preview/section/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"reports",
+								"preview",
+								"section",
+								""
+							]
+						}
+					}
+				},
+				{
+					"name": "Generate PDF Report",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"template_id\": \"template-uuid-here\",\n    \"filters\": {\n        \"year\": 2024,\n        \"month\": 12,\n        \"state\": \"kano\"\n    },\n    \"title\": \"Monthly Performance Report - December 2024\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/reports/generate/pdf/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"reports",
+								"generate",
+								"pdf",
+								""
+							]
+						}
+					}
+				},
+				{
+					"name": "Report History",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/reports/history/?limit=20",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"reports",
+								"history",
+								""
+							],
+							"query": [
+								{
+									"key": "limit",
+									"value": "20"
+								}
+							]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "🏢 Common",
+			"item": [
+				{
+					"name": "Common Overview",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/common/overview/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"common",
+								"overview",
+								""
+							]
+						}
+					}
+				}
+			]
+		}
+	]
+}
