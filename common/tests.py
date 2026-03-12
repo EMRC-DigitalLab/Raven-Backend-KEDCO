@@ -1,5 +1,7 @@
 import pytest
+
 from common.models import *
+
 
 @pytest.mark.django_db
 def test_location_hierarchy():

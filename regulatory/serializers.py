@@ -1,5 +1,7 @@
 from rest_framework import serializers
+
 from .models import *
+
 
 class MonthlyEnergyOfftakeSerializer(serializers.ModelSerializer):
     class Meta:

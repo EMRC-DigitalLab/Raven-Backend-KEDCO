@@ -1,7 +1,9 @@
 # commercial/models.py
 from django.db import models
-from common.models import UUIDModel, DistributionTransformer, Band, Feeder
 from django.utils import timezone
+
+from common.models import Band, DistributionTransformer, Feeder, UUIDModel
+
 
 class Customer(UUIDModel, models.Model):
     METERING_TYPE_CHOICES = [

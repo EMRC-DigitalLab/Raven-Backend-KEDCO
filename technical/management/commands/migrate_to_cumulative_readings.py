@@ -1,12 +1,14 @@
 # technical/management/commands/migrate_to_cumulative_readings.py
 
+import logging
+from datetime import datetime, timedelta
+from decimal import Decimal
+
 from django.core.management.base import BaseCommand
 from django.db import transaction
-from decimal import Decimal
-from datetime import datetime, timedelta
-from technical.models import EnergyDelivered, CumulativeMeterReading
+
 from common.models import Feeder
-import logging
+from technical.models import CumulativeMeterReading, EnergyDelivered
 
 logger = logging.getLogger(__name__)
 
@@ -207,7 +209,7 @@ class Command(BaseCommand):
     def _migrate_all_feeders_bulk(self, feeders, cutoff_date, base_filter, options):
         """Migrate all feeders using bulk operations - OPTIMIZED"""
         import time
-        
+
         # Pre-fetch all existing readings in ONE query
         existing_readings = set()
         if not options['dry_run']:

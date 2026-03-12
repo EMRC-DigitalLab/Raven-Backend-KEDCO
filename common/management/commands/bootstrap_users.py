@@ -1,8 +1,9 @@
 # management/commands/bootstrap_users.py
+from django.contrib.auth.hashers import make_password
 from django.core.management.base import BaseCommand
 from django.db import connection, transaction
 from django.utils import timezone
-from django.contrib.auth.hashers import make_password
+
 
 class Command(BaseCommand):
     help = 'Bootstrap users app by creating tables and migration records'

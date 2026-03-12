@@ -2,13 +2,16 @@
 # ALTERNATIVE VERSION USING PyMySQL (if mysqlclient installation fails)
 
 import pymysql
+
 pymysql.install_as_MySQLdb()  # This makes pymysql work as MySQLdb
 
+from datetime import datetime
 from decimal import Decimal
+
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 from django.utils import timezone
-from datetime import datetime
+
 from common.models import Feeder
 from technical.models import CumulativeMeterReading
 

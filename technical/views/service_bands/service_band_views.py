@@ -1,16 +1,18 @@
 # technical/views/service_bands/service_band_views.py
+import logging
+from datetime import datetime, timedelta
+
+from dateutil.relativedelta import relativedelta
+from django.db import connection
+from django.db.models import Q
+from django.utils import timezone
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
-from django.db.models import Q
-from django.db import connection
-from datetime import datetime, timedelta
-from dateutil.relativedelta import relativedelta
-from django.utils import timezone
-import logging
-from common.models import State, Band, Feeder
-from technical.models import HourlyLoad, FeederInterruption
-from technical.utils.energy_utils import calculate_energy_delivered
+
+from common.models import Band, Feeder, State
 from technical.constants import TURNAROUND_EXCLUSIONS
+from technical.models import FeederInterruption, HourlyLoad
+from technical.utils.energy_utils import calculate_energy_delivered
 
 logger = logging.getLogger(__name__)
 

@@ -1,10 +1,12 @@
-from django.db.models import Sum
-from commercial.models import MonthlyCommercialSummary, SalesRepresentative
-from financial.models import Opex
-from common.models import Feeder
-from commercial.date_filters import get_date_range_from_request
-from datetime import date
 from calendar import monthrange
+from datetime import date
+
+from django.db.models import Sum
+
+from commercial.date_filters import get_date_range_from_request
+from commercial.models import MonthlyCommercialSummary, SalesRepresentative
+from common.models import Feeder
+from financial.models import Opex
 
 
 def get_financial_feeder_data(request):

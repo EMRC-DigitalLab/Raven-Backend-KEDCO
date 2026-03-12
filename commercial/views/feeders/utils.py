@@ -1,8 +1,10 @@
-from technical.models import EnergyDelivered, FeederEnergyMonthly, FeederEnergyDaily
-from commercial.models import MonthlyEnergyBilled, MonthlyCommercialSummary
-from decimal import Decimal, ROUND_HALF_UP
-from django.db.models import Sum
 from datetime import timedelta
+from decimal import ROUND_HALF_UP, Decimal
+
+from django.db.models import Sum
+
+from commercial.models import MonthlyCommercialSummary, MonthlyEnergyBilled
+from technical.models import EnergyDelivered, FeederEnergyDaily, FeederEnergyMonthly
 
 
 def safe_decimal(value):

@@ -1,15 +1,19 @@
 # hr/views/executive_kpis/overview_views.py
+from datetime import date, datetime, timedelta
+
+from django.db.models import Avg, Count, Max, Min, Q
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.decorators import api_view
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from django.db.models import Q, Avg, Max, Min, Count
-from django.utils import timezone
-from datetime import date, datetime, timedelta
 
-from ...models import ExecutiveKPIDefinition, ExecutivePerformance, ExecutiveKPIAlert
-from ...utils.kpi_utils import KPIDataService, KPICalculator
-from ...serializers import ExecutiveKPIDefinitionSerializer, ExecutivePerformanceSerializer
+from ...models import ExecutiveKPIAlert, ExecutiveKPIDefinition, ExecutivePerformance
+from ...serializers import (
+    ExecutiveKPIDefinitionSerializer,
+    ExecutivePerformanceSerializer,
+)
+from ...utils.kpi_utils import KPICalculator, KPIDataService
 
 
 @api_view(['GET'])

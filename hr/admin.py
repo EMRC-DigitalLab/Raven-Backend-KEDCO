@@ -1,11 +1,16 @@
 from django.contrib import admin
-from django.utils.html import format_html
 from django.db.models import Q
-from .models import (
-    Staff, Department, Role, 
-    ExecutiveKPIDefinition, ExecutivePerformance, ExecutiveKPIAlert
-)
 from django.utils import timezone
+from django.utils.html import format_html
+
+from .models import (
+    Department,
+    ExecutiveKPIAlert,
+    ExecutiveKPIDefinition,
+    ExecutivePerformance,
+    Role,
+    Staff,
+)
 
 
 @admin.register(Department)

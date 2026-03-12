@@ -1,10 +1,12 @@
 # hr/management/commands/create_sample_performance.py
-from django.core.management.base import BaseCommand
-from decimal import Decimal
+import random
 from datetime import date, timedelta
+from decimal import Decimal
+
+from django.core.management.base import BaseCommand
+
 from hr.models import ExecutiveKPIDefinition, ExecutivePerformance, ExecutiveRole
 from users.models import User
-import random
 
 
 class Command(BaseCommand):

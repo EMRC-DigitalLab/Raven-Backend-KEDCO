@@ -1,8 +1,9 @@
 # backend/financial/management/commands/populate_moinvoices.py
 
-from django.core.management.base import BaseCommand
 from datetime import date
 from decimal import Decimal
+
+from django.core.management.base import BaseCommand
 
 from financial.models import MOInvoice
 

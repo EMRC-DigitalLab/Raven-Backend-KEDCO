@@ -1,21 +1,15 @@
 from datetime import datetime, timedelta
+
 from dateutil.relativedelta import relativedelta  # type: ignore
 from django.db.models import Sum
 from rest_framework import status
-from rest_framework.response import Response
 from rest_framework.decorators import api_view
+from rest_framework.response import Response
+
+from commercial.models import MonthlyCommercialSummary, SalesRepresentative
+from common.models import DistributionTransformer
 from financial.models import *
 from financial.serializers import *
-from common.models import DistributionTransformer
-from commercial.models import MonthlyCommercialSummary, SalesRepresentative
-from django.db.models import Sum
-from rest_framework.decorators import api_view
-from rest_framework.response import Response
-from dateutil.relativedelta import relativedelta # type: ignore
-from commercial.models import MonthlyCommercialSummary
-from commercial.models import SalesRepresentative
-from datetime import datetime, timedelta
-from rest_framework import status
 
 
 def calculate_percentage_change(current_value, previous_value):

@@ -1,6 +1,8 @@
 # technical/serializers.py
 from rest_framework import serializers
+
 from .models import *
+
 
 class EnergyDeliveredSerializer(serializers.ModelSerializer):
     feeder = serializers.SlugRelatedField(

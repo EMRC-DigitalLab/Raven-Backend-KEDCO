@@ -1,8 +1,16 @@
 from django.contrib import admin
-from .models import (Customer,
-                     MonthlyEnergyBilled, MonthlyRevenueBilled, MonthlyCustomerStats,
-                     SalesRepresentative, SalesRepPerformance, DailyCollection,
-                     MonthlyCommercialSummary)
+
+from .models import (
+    Customer,
+    DailyCollection,
+    MonthlyCommercialSummary,
+    MonthlyCustomerStats,
+    MonthlyEnergyBilled,
+    MonthlyRevenueBilled,
+    SalesRepPerformance,
+    SalesRepresentative,
+)
+
 
 @admin.register(Customer)
 class CustomerAdmin(admin.ModelAdmin):

@@ -10,10 +10,12 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.1/ref/settings/
 """
 
-from pathlib import Path
-from decouple import config
 from datetime import timedelta
+from pathlib import Path
+
 import pymysql
+from decouple import config
+
 pymysql.install_as_MySQLdb()
 import os
 
@@ -104,6 +106,7 @@ WSGI_APPLICATION = 'raven.wsgi.application'
 
 # Log database configuration values
 import logging
+
 logger = logging.getLogger(__name__)
 
 LOGGING = {

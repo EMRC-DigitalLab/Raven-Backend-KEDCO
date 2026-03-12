@@ -1,14 +1,16 @@
 # technical/management/commands/rebuild_energy_aggregates.py
 
+import logging
+from datetime import datetime, timedelta
+from decimal import Decimal
+
+from dateutil.relativedelta import relativedelta
 from django.core.management.base import BaseCommand
 from django.db import transaction
 from django.db.models import Sum
-from datetime import datetime, timedelta
-from dateutil.relativedelta import relativedelta
-from decimal import Decimal
-from technical.models import EnergyDelivered, FeederEnergyDaily, FeederEnergyMonthly
+
 from common.models import Feeder
-import logging
+from technical.models import EnergyDelivered, FeederEnergyDaily, FeederEnergyMonthly
 
 logger = logging.getLogger(__name__)
 

@@ -1,17 +1,18 @@
-from django.core.management.base import BaseCommand
-from common.models import State, BusinessDistrict, InjectionSubstation, Feeder, Band
-from financial.models import Opex, OpexCategory, GLBreakdown
-from technical.models import HourlyLoad, FeederInterruption
-from hr.models import Staff, Department, Role
-from django.utils.dateparse import parse_date
+from datetime import date, datetime, time, timedelta
+
+import pymysql  # type: ignore
 from decouple import config
-from datetime import date, timedelta
+from django.conf import settings
+from django.core.management.base import BaseCommand
+from django.utils.dateparse import parse_date
 from django.utils.text import slugify
 from django.utils.timezone import make_aware
-from django.conf import settings
-from datetime import datetime, time
-import pymysql # type: ignore
-from tqdm import tqdm # type: ignore
+from tqdm import tqdm  # type: ignore
+
+from common.models import Band, BusinessDistrict, Feeder, InjectionSubstation, State
+from financial.models import GLBreakdown, Opex, OpexCategory
+from hr.models import Department, Role, Staff
+from technical.models import FeederInterruption, HourlyLoad
 
 
 def parse_nullable(value, fallback=None):
@@ -237,6 +238,7 @@ class Command(BaseCommand):
 
     def import_hourly_load(self, conn):
         from collections import defaultdict
+
         from django.db import transaction
 
         self.stdout.write(self.style.HTTP_INFO("\nImporting Hourly Load Data (optimized)..."))
@@ -352,7 +354,7 @@ class Command(BaseCommand):
 
 
     def import_staff(self, conn):
-        from tqdm import tqdm # type: ignore
+        from tqdm import tqdm  # type: ignore
         self.stdout.write(self.style.HTTP_INFO("\nImporting HR Staff..."))
 
         count = 0
@@ -655,8 +657,9 @@ class Command(BaseCommand):
 
 
     def import_distribution_transformers(self, conn):
-        from common.models import Feeder, DistributionTransformer
-        from tqdm import tqdm # type: ignore
+        from tqdm import tqdm  # type: ignore
+
+        from common.models import DistributionTransformer, Feeder
 
         self.stdout.write(self.style.HTTP_INFO("\nImporting Distribution Transformers..."))
 
@@ -719,9 +722,10 @@ class Command(BaseCommand):
 
 
     def import_sales_reps(self, conn):
+        from tqdm import tqdm  # type: ignore
+
         from commercial.models import SalesRepresentative
         from common.models import DistributionTransformer
-        from tqdm import tqdm # type: ignore
 
         self.stdout.write(self.style.HTTP_INFO("\nImporting Sales Representatives and assigning transformers..."))
 
@@ -863,9 +867,10 @@ class Command(BaseCommand):
 
 
     def import_energy_delivered(self, conn):
-        from technical.models import EnergyDelivered
+        from tqdm import tqdm  # type: ignore
+
         from common.models import Feeder
-        from tqdm import tqdm #type: ignore
+        from technical.models import EnergyDelivered
 
         self.stdout.write(self.style.HTTP_INFO("\nImporting Energy Delivered..."))
         count = 0
@@ -911,10 +916,12 @@ class Command(BaseCommand):
 
 
     def import_monthly_commercial_summary(self, conn):
+        from datetime import datetime
+
+        from tqdm import tqdm  # type: ignore
+
         from commercial.models import MonthlyCommercialSummary, SalesRepresentative
         from common.models import DistributionTransformer
-        from tqdm import tqdm #type: ignore
-        from datetime import datetime
 
         self.stdout.write(self.style.HTTP_INFO("\nImporting Monthly Commercial Summary..."))
         created_count = 0

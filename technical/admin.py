@@ -1,17 +1,20 @@
 # technical/admin.py
+from datetime import timedelta
+
 from django.contrib import admin
-from django.db.models import Max, Min, Avg, Sum
+from django.db.models import Avg, Max, Min, Sum
 from django.utils.html import format_html
+
 from .models import (
     CumulativeMeterReading,
-    EnergyDelivered,
-    HourlyLoad,
-    FeederInterruption,
     DailyHoursOfSupply,
+    EnergyDelivered,
     FeederEnergyDaily,
     FeederEnergyMonthly,
+    FeederInterruption,
+    HourlyLoad,
 )
-from datetime import timedelta
+
 
 # Custom filters
 class MeterReadingTypeFilter(admin.SimpleListFilter):
@@ -162,10 +165,10 @@ class DurationFilter(admin.SimpleListFilter):
         ]
 
     def queryset(self, request, queryset):
-        from django.db.models import F, ExpressionWrapper, fields
+        from django.db.models import ExpressionWrapper, F, fields
         from django.db.models.functions import Coalesce
         from django.utils import timezone
-        
+
         # Annotate with duration in seconds
         queryset = queryset.annotate(
             duration_seconds=ExpressionWrapper(
@@ -454,8 +457,8 @@ class CumulativeMeterReadingAdmin(admin.ModelAdmin):
             self.message_user(request, "No valid consumption data found", level='warning')
             return
         
-        from decimal import Decimal
         import statistics
+        from decimal import Decimal
         
         total = sum(consumptions)
         avg = statistics.mean(consumptions)
@@ -504,8 +507,9 @@ class CumulativeMeterReadingAdmin(admin.ModelAdmin):
     
     def export_meter_readings(self, request, queryset):
         """Export meter readings with consumption data to CSV"""
-        from django.http import HttpResponse
         import csv
+
+        from django.http import HttpResponse
         
         response = HttpResponse(content_type='text/csv')
         response['Content-Disposition'] = 'attachment; filename="meter_readings.csv"'
@@ -615,8 +619,9 @@ class EnergyDeliveredAdmin(admin.ModelAdmin):
     
     def export_energy_data(self, request, queryset):
         """Export energy data to CSV"""
-        from django.http import HttpResponse
         import csv
+
+        from django.http import HttpResponse
         
         response = HttpResponse(content_type='text/csv')
         response['Content-Disposition'] = 'attachment; filename="energy_delivered.csv"'
@@ -689,8 +694,9 @@ class HourlyLoadAdmin(admin.ModelAdmin):
     
     def export_peak_summary(self, request, queryset):
         """Export peak load summary by feeder"""
-        from django.http import HttpResponse
         import csv
+
+        from django.http import HttpResponse
         
         response = HttpResponse(content_type='text/csv')
         response['Content-Disposition'] = 'attachment; filename="peak_loads.csv"'

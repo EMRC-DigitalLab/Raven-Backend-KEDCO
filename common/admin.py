@@ -1,12 +1,18 @@
 # common/admin.py
-from django.contrib import admin
-from django.utils import timezone
-from django.contrib import messages
+from django.contrib import admin, messages
 from django.db.models import Count, Q
+from django.utils import timezone
+
 from .models import (
-    Band, State, BusinessDistrict, InjectionSubstation, Feeder,
-    DistributionTransformer, PowerTransformer, FeederTransformerMapping,
-    FeederSupplyRelationship
+    Band,
+    BusinessDistrict,
+    DistributionTransformer,
+    Feeder,
+    FeederSupplyRelationship,
+    FeederTransformerMapping,
+    InjectionSubstation,
+    PowerTransformer,
+    State,
 )
 
 

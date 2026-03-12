@@ -1,5 +1,6 @@
 from datetime import datetime
 
+
 def get_date_range_from_request(request, prefix='date'):
     from_str = request.GET.get(f'{prefix}_from')
     to_str = request.GET.get(f'{prefix}_to')

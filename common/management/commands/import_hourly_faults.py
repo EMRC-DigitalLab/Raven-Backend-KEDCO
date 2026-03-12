@@ -1,20 +1,21 @@
-from django.core.management.base import BaseCommand
-from common.models import State, BusinessDistrict, InjectionSubstation, Feeder, Band
-from financial.models import Opex, OpexCategory, GLBreakdown
-from technical.models import HourlyLoad, FeederInterruption
-from hr.models import Staff, Department, Role
-from django.utils.dateparse import parse_date
-from decouple import config
-from datetime import date, timedelta
-from django.utils.text import slugify
-from django.utils.timezone import make_aware
-from django.conf import settings
-from datetime import datetime, time
-import pymysql  # type: ignore
-from tqdm import tqdm  # type: ignore
-from collections import defaultdict
 import re
 import time as time_module
+from collections import defaultdict
+from datetime import date, datetime, time, timedelta
+
+import pymysql  # type: ignore
+from decouple import config
+from django.conf import settings
+from django.core.management.base import BaseCommand
+from django.utils.dateparse import parse_date
+from django.utils.text import slugify
+from django.utils.timezone import make_aware
+from tqdm import tqdm  # type: ignore
+
+from common.models import Band, BusinessDistrict, Feeder, InjectionSubstation, State
+from financial.models import GLBreakdown, Opex, OpexCategory
+from hr.models import Department, Role, Staff
+from technical.models import FeederInterruption, HourlyLoad
 
 
 def parse_nullable(value, fallback=None):

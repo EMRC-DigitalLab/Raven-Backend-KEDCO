@@ -1,13 +1,15 @@
 # technical/management/commands/recalculate_energy_delivered.py
 
-from django.core.management.base import BaseCommand
-from django.db import transaction
+import logging
 from datetime import timedelta
 from decimal import Decimal
-from technical.models import EnergyDelivered, CumulativeMeterReading
-from common.models import Feeder
+
 from django.core.cache import cache
-import logging
+from django.core.management.base import BaseCommand
+from django.db import transaction
+
+from common.models import Feeder
+from technical.models import CumulativeMeterReading, EnergyDelivered
 
 logger = logging.getLogger(__name__)
 
@@ -100,7 +102,7 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         from datetime import datetime
-        
+
         # Disable signals if requested for better performance
         if options['disable_signals']:
             cache.set('analytics_signals_disabled', True, timeout=None)
@@ -389,12 +391,13 @@ class Command(BaseCommand):
     
     def _update_summaries(self, reading_filter):
         """Update analytics summaries for affected date range"""
+        from datetime import datetime
+
         from analytics.signals import (
             update_daily_technical_summary_sync,
-            update_monthly_technical_summary_sync
+            update_monthly_technical_summary_sync,
         )
-        from datetime import datetime
-        
+
         # Get unique dates and months from filter
         dates = CumulativeMeterReading.objects.filter(
             **reading_filter

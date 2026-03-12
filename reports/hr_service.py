@@ -2,14 +2,19 @@
 """
 HR Data Service for fetching HR report data.
 """
-from datetime import datetime, date
-from django.db.models import Count, Sum, Avg, Q, F, ExpressionWrapper, DecimalField
-from django.utils import timezone
+from datetime import date, datetime
 from decimal import Decimal
 
+from django.db.models import Avg, Count, DecimalField, ExpressionWrapper, F, Q, Sum
+from django.utils import timezone
+
 from hr.models import (
-    Staff, Department, LeaveRequest, PerformanceReview,
-    ExecutiveKPIDefinition, ExecutivePerformance
+    Department,
+    ExecutiveKPIDefinition,
+    ExecutivePerformance,
+    LeaveRequest,
+    PerformanceReview,
+    Staff,
 )
 
 

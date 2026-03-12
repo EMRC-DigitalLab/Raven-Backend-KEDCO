@@ -1,8 +1,10 @@
 # common/models
+from uuid import uuid4
+
+from django.conf import settings
 from django.db import models
 from django.utils.text import slugify
-from django.conf import settings
-from uuid import uuid4
+
 
 class UUIDModel(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid4)

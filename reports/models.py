@@ -1,8 +1,9 @@
 # reports/models.py - UPDATED WITH HR AND EXECUTIVE CATEGORIES
-from django.db import models
-from django.contrib.auth import get_user_model
-from uuid import uuid4
 import json
+from uuid import uuid4
+
+from django.contrib.auth import get_user_model
+from django.db import models
 
 User = get_user_model()
 

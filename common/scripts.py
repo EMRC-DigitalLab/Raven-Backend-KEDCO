@@ -1,5 +1,7 @@
 from django.utils.text import slugify
-from .models import State, BusinessDistrict, InjectionSubstation, Feeder
+
+from .models import BusinessDistrict, Feeder, InjectionSubstation, State
+
 
 def update_slugs():
     # Update States

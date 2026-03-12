@@ -1,18 +1,19 @@
 # analytics/management/commands/populate_daily_technical_summary.py
-from django.core.management.base import BaseCommand, CommandError
-from django.db.models import Sum, Count, Avg, Q
-from django.db import transaction
-from datetime import datetime, date, timedelta
-from dateutil.relativedelta import relativedelta
-from decimal import Decimal
 import hashlib
 import time
+from datetime import date, datetime, timedelta
+from decimal import Decimal
+
+from dateutil.relativedelta import relativedelta
+from django.core.management.base import BaseCommand, CommandError
+from django.db import transaction
+from django.db.models import Avg, Count, Q, Sum
+from django.utils import timezone
+from django.utils.text import slugify
 
 from analytics.models import DailyTechnicalSummary
 from analytics.utils.daily_technical_calculations import DailyTechnicalCalculator
-from common.models import State, BusinessDistrict, Feeder
-from django.utils.text import slugify
-from django.utils import timezone
+from common.models import BusinessDistrict, Feeder, State
 
 
 class Command(BaseCommand):

@@ -1,14 +1,15 @@
 # management/commands/populate_hq_opex.py
-import pymysql
-from django.core.management.base import BaseCommand, CommandError
-from django.conf import settings
-from django.utils.text import slugify
-from decouple import config
-from datetime import datetime, date
-from decimal import Decimal, InvalidOperation
 import logging
+from datetime import date, datetime
+from decimal import Decimal, InvalidOperation
 
-from financial.models import HQOpex, OpexCategory, GLBreakdown
+import pymysql
+from decouple import config
+from django.conf import settings
+from django.core.management.base import BaseCommand, CommandError
+from django.utils.text import slugify
+
+from financial.models import GLBreakdown, HQOpex, OpexCategory
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)

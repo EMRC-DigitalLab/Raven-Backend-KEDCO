@@ -1,16 +1,21 @@
 # analytics/utils/technical_calculations.py
-from django.db.models import Sum, Avg, Count, Max, Q
-from django.utils import timezone
+import logging
 from datetime import datetime, timedelta
 from decimal import Decimal
-import logging
 
-from technical.models import (
-    FeederEnergyDaily, FeederEnergyMonthly, HourlyLoad, 
-    FeederInterruption, DailyHoursOfSupply, EnergyDelivered
-)
-from common.models import Feeder, BusinessDistrict, State
+from django.db.models import Avg, Count, Max, Q, Sum
+from django.utils import timezone
+
 from commercial.models import Customer
+from common.models import BusinessDistrict, Feeder, State
+from technical.models import (
+    DailyHoursOfSupply,
+    EnergyDelivered,
+    FeederEnergyDaily,
+    FeederEnergyMonthly,
+    FeederInterruption,
+    HourlyLoad,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -225,9 +230,10 @@ class TechnicalCalculator:
         - All interruptions (duration)
         - Local faults only (turnaround time - excludes L/S and TCN)
         """
-        from technical.models import calculate_interruption_metrics as calc_metrics
         import calendar
-        
+
+        from technical.models import calculate_interruption_metrics as calc_metrics
+
         # Get all interruptions for the month - use explicit datetime range
         start_of_month = datetime.combine(self.start_date, datetime.min.time())
         end_of_month_date = self.end_date

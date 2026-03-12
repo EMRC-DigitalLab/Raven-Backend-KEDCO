@@ -1,6 +1,6 @@
-from common.models import Feeder
 from commercial.models import Customer
-from common.models import BusinessDistrict, State
+from common.models import BusinessDistrict, Feeder, State
+
 
 def get_filtered_feeders(request):
     filters = {}

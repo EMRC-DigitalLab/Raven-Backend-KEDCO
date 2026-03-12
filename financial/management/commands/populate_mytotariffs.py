@@ -1,6 +1,7 @@
-from django.core.management.base import BaseCommand
 from datetime import date
 from decimal import Decimal
+
+from django.core.management.base import BaseCommand
 
 from common.models import Band
 from financial.models import MYTOTariff

@@ -1,15 +1,18 @@
 # hr/serializers.py
-from rest_framework import serializers
 from decimal import Decimal
+
+from rest_framework import serializers
+
 from .models import (
-    ExecutiveKPIDefinition, 
-    ExecutivePerformance, 
+    Department,
     ExecutiveKPIAlert,
-    Staff, 
-    Department, 
-    Role
+    ExecutiveKPIDefinition,
+    ExecutivePerformance,
+    Role,
+    Staff,
 )
 from .utils.kpi_utils import KPICalculator
+
 
 class DepartmentSerializer(serializers.ModelSerializer):
     class Meta:
@@ -298,6 +301,7 @@ class KPIPerformanceUpdateSerializer(serializers.Serializer):
     def validate(self, data):
         """Cross-field validation"""
         from django.utils import timezone
+
         # Validate period_date is not in the future
         if data['period_date'] > timezone.now().date():
             raise serializers.ValidationError({

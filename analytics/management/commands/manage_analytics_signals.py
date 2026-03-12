@@ -1,17 +1,14 @@
 # analytics/management/commands/manage_analytics_signals.py
-from django.core.management.base import BaseCommand, CommandError
-from django.core.cache import cache
-from django.conf import settings
-from datetime import datetime, date
-from dateutil.relativedelta import relativedelta
-from django.db import models
 import json
+from datetime import date, datetime
 
+from dateutil.relativedelta import relativedelta
+from django.conf import settings
+from django.core.cache import cache
+from django.core.management.base import BaseCommand, CommandError
+from django.db import models
 
-from analytics.signals import (
-    trigger_full_summary_refresh,
-    SummaryUpdateTracker
-)
+from analytics.signals import SummaryUpdateTracker, trigger_full_summary_refresh
 
 
 class Command(BaseCommand):
@@ -192,10 +189,16 @@ class Command(BaseCommand):
 
     def show_statistics(self):
         """Show analytics summary statistics"""
-        from analytics.models import MonthlyOverviewSummary, MonthlyTechnicalSummary, DailyTechnicalSummary
-        from django.db.models import Count, Min, Max, Avg
-        from django.utils import timezone
         from datetime import timedelta
+
+        from django.db.models import Avg, Count, Max, Min
+        from django.utils import timezone
+
+        from analytics.models import (
+            DailyTechnicalSummary,
+            MonthlyOverviewSummary,
+            MonthlyTechnicalSummary,
+        )
         
         self.stdout.write("Analytics Summary Statistics:")
         

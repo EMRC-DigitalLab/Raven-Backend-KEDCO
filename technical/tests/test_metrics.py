@@ -1,11 +1,13 @@
+from datetime import date, datetime, timedelta
+
 import pytest
-from datetime import datetime, timedelta, date
-from common.models import State, BusinessDistrict, InjectionSubstation, Feeder
+
+from common.models import BusinessDistrict, Feeder, InjectionSubstation, State
 from technical.models import (
-    EnergyDelivered,
-    HourlyLoad,
     DailyHoursOfSupply,
+    EnergyDelivered,
     FeederInterruption,
+    HourlyLoad,
 )
 
 

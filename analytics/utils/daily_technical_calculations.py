@@ -1,16 +1,19 @@
 # analytics/utils/daily_technical_calculations.py
-from django.db.models import Sum, Avg, Count, Max, Q
-from django.utils import timezone
+import logging
 from datetime import datetime, timedelta
 from decimal import Decimal
-import logging
 
-from technical.models import (
-    FeederEnergyDaily, HourlyLoad, 
-    FeederInterruption, DailyHoursOfSupply
-)
-from common.models import Feeder, BusinessDistrict, State
+from django.db.models import Avg, Count, Max, Q, Sum
+from django.utils import timezone
+
 from commercial.models import Customer
+from common.models import BusinessDistrict, Feeder, State
+from technical.models import (
+    DailyHoursOfSupply,
+    FeederEnergyDaily,
+    FeederInterruption,
+    HourlyLoad,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -153,7 +156,7 @@ class DailyTechnicalCalculator:
         consistent historical analysis.
         """
         from technical.models import calculate_interruption_metrics as calc_metrics
-        
+
         # Get interruptions that occurred on this specific day
         # Use explicit time range to handle timezone properly
         start_of_day = datetime.combine(self.target_date, datetime.min.time())

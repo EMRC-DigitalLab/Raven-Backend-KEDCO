@@ -1,9 +1,11 @@
-from django.core.management.base import BaseCommand
 from datetime import date, timedelta
-from dateutil.relativedelta import relativedelta # type: ignore
 
-from hr.models import Staff
+from dateutil.relativedelta import relativedelta  # type: ignore
+from django.core.management.base import BaseCommand
+
 from financial.models import SalaryPayment
+from hr.models import Staff
+
 
 def last_day_of_month(any_day):
     """

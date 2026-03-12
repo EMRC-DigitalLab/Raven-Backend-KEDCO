@@ -1,22 +1,23 @@
 # financial/urls.py
-from django.urls import path, include
+from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
-from .views.crud import (OpexCategoryViewSet,
-                         OpexViewSet,
-                         GLBreakdownViewSet,
-                         SalaryPaymentViewSet,
-                         HQOpexViewSet)
-
-from .views.states.all_states import FinancialAllStatesView
-from .views.overview.overview_views import financial_overview_view
+from .views.collections.monthly_views import DailyCollectionsByMonthView
+from .views.crud import (
+    GLBreakdownViewSet,
+    HQOpexViewSet,
+    OpexCategoryViewSet,
+    OpexViewSet,
+    SalaryPaymentViewSet,
+)
 from .views.districts.all_districts import FinancialAllBusinessDistrictsView
 from .views.feeders.all_feeders import financial_feeder_view
-from .views.transformers.transformer_views import financial_transformer_view
-from .views.service_bands.service_band_views import FinancialServiceBandMetricsView
+from .views.overview.overview_views import financial_overview_view
 from .views.sales_reps.all_sales_reps import list_sales_reps
 from .views.sales_reps.single_sales_rep import sales_rep_performance_view
-from .views.collections.monthly_views import DailyCollectionsByMonthView
+from .views.service_bands.service_band_views import FinancialServiceBandMetricsView
+from .views.states.all_states import FinancialAllStatesView
+from .views.transformers.transformer_views import financial_transformer_view
 
 router = DefaultRouter()
 router.register(r'expense-categories', OpexCategoryViewSet, basename='expense-category')

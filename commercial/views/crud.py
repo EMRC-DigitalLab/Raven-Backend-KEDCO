@@ -1,33 +1,23 @@
-from decimal import Decimal, ROUND_HALF_UP
 from datetime import datetime
-from django.db.models import (
-    Sum, Count, Avg
-)
-from rest_framework import viewsets, status
+from decimal import ROUND_HALF_UP, Decimal
+
+from django.db import transaction
+from django.db.models import Avg, Count, Sum
+from django_filters.rest_framework import DjangoFilterBackend
+from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from commercial.models import *
-from commercial.serializers import *
-from commercial.utils import get_filtered_feeders
-from common.models import DistributionTransformer
-from commercial.models import (
-    DailyCollection, MonthlyEnergyBilled
-)
-from technical.models import EnergyDelivered
+
 from commercial.date_filters import get_date_range_from_request
 from commercial.mixins import FeederFilteredQuerySetMixin
-from commercial.utils import get_filtered_customers
-from commercial.models import MonthlyRevenueBilled
-from django.db import transaction
-from rest_framework import viewsets, status
-from rest_framework.decorators import action
-from rest_framework.response import Response
-from django_filters.rest_framework import DjangoFilterBackend
+from commercial.models import *
+from commercial.models import DailyCollection, MonthlyEnergyBilled, MonthlyRevenueBilled
+from commercial.serializers import *
+from commercial.utils import get_filtered_customers, get_filtered_feeders
+from common.models import DistributionTransformer
+from technical.models import EnergyDelivered
 
-
-
-from decimal import Decimal, ROUND_HALF_UP
 
 def round_two_places(value):
     return Decimal(value).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
@@ -1027,6 +1017,7 @@ class MonthlyCustomerStatsViewSet(FeederFilteredQuerySetMixin, viewsets.ModelVie
 
 # Aggregated Metrics Endpoint
 from rest_framework.views import APIView
+
 
 class FeederMetricsView(APIView):
     def get(self, request):

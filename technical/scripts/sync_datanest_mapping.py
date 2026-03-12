@@ -1,5 +1,6 @@
 import os
 import sys
+
 import django
 from django.db import connections, transaction
 from django.utils.text import slugify
@@ -20,9 +21,15 @@ os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'raven.settings')
 django.setup()
 
 from common.models import (
-    State, BusinessDistrict, InjectionSubstation, Feeder, 
-    PowerTransformer, FeederTransformerMapping, FeederSupplyRelationship
+    BusinessDistrict,
+    Feeder,
+    FeederSupplyRelationship,
+    FeederTransformerMapping,
+    InjectionSubstation,
+    PowerTransformer,
+    State,
 )
+
 
 def get_or_update_by_mapping(model_class, slug, name, **defaults):
     """

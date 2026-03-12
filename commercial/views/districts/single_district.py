@@ -1,15 +1,16 @@
 # commercial/views/districts/single_district.py
-from decimal import Decimal, ROUND_HALF_UP
-from datetime import date
-from dateutil.relativedelta import relativedelta # type: ignore
+from datetime import date, timedelta
+from decimal import ROUND_HALF_UP, Decimal
+
+from dateutil.relativedelta import relativedelta  # type: ignore
 from django.db.models import Sum
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
+
 from commercial.models import MonthlyCommercialSummary, MonthlyEnergyBilled
-from technical.models import EnergyDelivered, FeederEnergyMonthly, FeederEnergyDaily
 from common.models import Feeder
-from datetime import timedelta
+from technical.models import EnergyDelivered, FeederEnergyDaily, FeederEnergyMonthly
 
 
 def safe_round(value, places=2):

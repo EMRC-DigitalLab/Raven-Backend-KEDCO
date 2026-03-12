@@ -1,5 +1,7 @@
 from datetime import datetime
+
 from dateutil.relativedelta import relativedelta
+
 
 def get_month_range_from_request(request):
     month = int(request.GET.get("month", 0))

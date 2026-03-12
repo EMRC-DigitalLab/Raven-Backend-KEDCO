@@ -2,8 +2,10 @@
 # Create this directory structure: hr/management/commands/
 # Run with: python manage.py seed_executive_kpis
 
-from django.core.management.base import BaseCommand
 from decimal import Decimal
+
+from django.core.management.base import BaseCommand
+
 from hr.models import ExecutiveKPIDefinition
 
 

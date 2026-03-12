@@ -9,12 +9,14 @@ Usage:
     python manage.py import_hourly_load --dry-run
 """
 
-import mysql.connector
-from django.core.management.base import BaseCommand
-from django.utils import timezone
-from django.db import transaction
 from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
+
+import mysql.connector
+from django.core.management.base import BaseCommand
+from django.db import transaction
+from django.utils import timezone
+
 from common.models import Feeder
 from technical.models import HourlyLoad
 

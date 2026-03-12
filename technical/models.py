@@ -1,7 +1,8 @@
 # technical/models.py
 from django.db import models
-from common.models import UUIDModel, Feeder
 from django.utils import timezone
+
+from common.models import Feeder, UUIDModel
 
 
 class CumulativeMeterReading(UUIDModel, models.Model):

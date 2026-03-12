@@ -1,31 +1,32 @@
 # reports/views.py
-from rest_framework.decorators import api_view
-from rest_framework.permissions import AllowAny
-from rest_framework.response import Response
-from rest_framework import status
-from rest_framework.generics import (
-    ListCreateAPIView, 
-    RetrieveUpdateDestroyAPIView,
-    ListAPIView,
-)
+import logging
+
 from django.db import models
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
-import logging
+from rest_framework import status
+from rest_framework.decorators import api_view
+from rest_framework.generics import (
+    ListAPIView,
+    ListCreateAPIView,
+    RetrieveUpdateDestroyAPIView,
+)
+from rest_framework.permissions import AllowAny
+from rest_framework.response import Response
 
-from .models import ReportTemplate, ReportSection, GeneratedReport
+from common.models import Band, BusinessDistrict, Feeder, InjectionSubstation, State
+
+from .models import GeneratedReport, ReportSection, ReportTemplate
+from .pdf_generator import PDFGenerator
 from .serializers import (
-    ReportTemplateListSerializer,
-    ReportTemplateDetailSerializer,
-    ReportTemplateCreateSerializer,
-    ReportSectionSerializer,
     GeneratedReportSerializer,
     ReportGenerateRequestSerializer,
+    ReportSectionSerializer,
+    ReportTemplateCreateSerializer,
+    ReportTemplateDetailSerializer,
+    ReportTemplateListSerializer,
 )
 from .services import ReportDataService, get_available_sections
-from .pdf_generator import PDFGenerator
-
-from common.models import State, BusinessDistrict, InjectionSubstation, Feeder, Band
 
 logger = logging.getLogger(__name__)
 

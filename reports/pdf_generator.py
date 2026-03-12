@@ -27,8 +27,8 @@ except (OSError, ImportError) as e:
     WEASYPRINT_AVAILABLE = False
     print(f"WARNING: WeasyPrint could not be imported. Error: {e}")
 
-import io
 import base64
+import io
 import logging
 
 logger = logging.getLogger(__name__)
@@ -1824,6 +1824,7 @@ class PDFGenerator:
         """Return image as a base64 data URI so it renders in both HTML preview
         and PDF regardless of whether the static-file server is reachable."""
         import os
+
         # Try each directory listed in STATICFILES_DIRS first
         static_dirs = getattr(settings, 'STATICFILES_DIRS', [])
         candidates = [os.path.join(d, path) for d in static_dirs]

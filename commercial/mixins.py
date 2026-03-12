@@ -1,6 +1,7 @@
 from commercial.utils import get_filtered_feeders
 from common.models import Feeder
 
+
 class FeederFilteredQuerySetMixin:
     feeder_lookup_field = 'feeder'
 

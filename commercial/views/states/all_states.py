@@ -1,15 +1,17 @@
 # commercial/views/states/all_states.py
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from datetime import date
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
+
 from dateutil.relativedelta import relativedelta  # type: ignore
 from django.db.models import Sum
 from django.utils.dateparse import parse_date
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
+
 from commercial.models import *
+from commercial.models import MonthlyCommercialSummary, MonthlyEnergyBilled
 from commercial.serializers import *
 from common.models import State
-from commercial.models import MonthlyCommercialSummary, MonthlyEnergyBilled
 from technical.models import EnergyDelivered
 
 

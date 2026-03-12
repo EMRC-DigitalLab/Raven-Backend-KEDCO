@@ -1,9 +1,11 @@
-from django.core.management.base import BaseCommand
-import mysql.connector
-from datetime import datetime
-from technical.models import HourlyLoad
-from common.models import Feeder
 from collections import defaultdict
+from datetime import datetime
+
+import mysql.connector
+from django.core.management.base import BaseCommand
+
+from common.models import Feeder
+from technical.models import HourlyLoad
 
 
 class Command(BaseCommand):

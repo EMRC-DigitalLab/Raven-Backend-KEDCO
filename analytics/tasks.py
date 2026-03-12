@@ -1,8 +1,9 @@
 # analytics/tasks.py
-from celery import shared_task # type: ignore
-from django.core.management import call_command
-from datetime import datetime, date
 import logging
+from datetime import date, datetime
+
+from celery import shared_task  # type: ignore
+from django.core.management import call_command
 
 logger = logging.getLogger(__name__)
 
@@ -97,7 +98,7 @@ def health_check_summaries():
     Identifies and fixes stale or missing summaries.
     """
     from .signals import check_summary_freshness, get_summary_health_status
-    
+
     # Get health status
     health_status = get_summary_health_status()
     logger.info(f"Summary health check: {health_status}")
@@ -150,7 +151,8 @@ def update_monthly_overview_summary_sync(month_date, priority='normal'):
 
 # Auto-detect Celery availability and use appropriate function
 try:
-    from celery import current_app # type: ignore
+    from celery import current_app  # type: ignore
+
     # If Celery is available, use async tasks
     update_monthly_overview_summary = update_monthly_overview_summary
 except ImportError:
@@ -331,8 +333,11 @@ def health_check_technical_summaries(filter_params=None):
     Args:
         filter_params: Optional filter to check specific summary levels
     """
-    from .signals import check_technical_summary_freshness, get_technical_summary_health_status
-    
+    from .signals import (
+        check_technical_summary_freshness,
+        get_technical_summary_health_status,
+    )
+
     # Get health status
     health_status = get_technical_summary_health_status(filter_params)
     logger.info(f"Technical summary health check: {health_status}")
@@ -369,7 +374,7 @@ def parse_filter_params(filter_params):
     Returns:
         Dict with actual model instances
     """
-    from common.models import State, BusinessDistrict, Feeder
+    from common.models import BusinessDistrict, Feeder, State
     
     parsed = {
         'state': None,
@@ -464,9 +469,10 @@ def calculate_and_save_technical_summary(month_date, filter_params):
     Returns:
         MonthlyTechnicalSummary instance
     """
+    from django.utils import timezone
+
     from .models import MonthlyTechnicalSummary
     from .utils.technical_calculations import TechnicalCalculator
-    from django.utils import timezone
 
     
     start_time = timezone.now()
@@ -538,7 +544,8 @@ def update_monthly_technical_summary_sync(month_date_str, filter_params, priorit
 
 # Auto-detect Celery and use appropriate function
 try:
-    from celery import current_app # type: ignore
+    from celery import current_app  # type: ignore
+
     # Celery is available, use async tasks
     pass
 except ImportError:

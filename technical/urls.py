@@ -1,20 +1,21 @@
 # technical/urls.py
-from django.urls import path, include
+from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
-from .views.crud import (EnergyDeliveredViewSet,
-                         HourlyLoadViewSet,
-                         FeederInterruptionViewSet,
-                         DailyHoursOfSupplyViewSet)
-
-from .views.states.all_states import all_states_technical_summary
-from .views.states.single_state import state_technical_summary
-from .views.overview.overview_views import technical_overview_view
+from .views.crud import (
+    DailyHoursOfSupplyViewSet,
+    EnergyDeliveredViewSet,
+    FeederInterruptionViewSet,
+    HourlyLoadViewSet,
+)
 from .views.districts.all_districts import all_business_districts_technical_summary
 from .views.districts.single_district import business_district_technical_summary
 from .views.feeders.all_feeders import FeederAvailabilityOverview
-from .views.transformers.transformer_views import TransformerAvailabilityOverview
+from .views.overview.overview_views import technical_overview_view
 from .views.service_bands.service_band_views import technical_service_band_summary
+from .views.states.all_states import all_states_technical_summary
+from .views.states.single_state import state_technical_summary
+from .views.transformers.transformer_views import TransformerAvailabilityOverview
 
 router = DefaultRouter()
 
