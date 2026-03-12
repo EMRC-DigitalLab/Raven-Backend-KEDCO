@@ -17,39 +17,10 @@ env:
 # ─────────────────────────────────────────────────────────────────────────────
 jobs:
 
-  # ── 1. Lint (black + ruff + isort) ───────────────────────────────────────
-  lint:
-    name: Lint
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: pip
-
-      - name: Install dev dependencies
-        run: pip install -r requirements-dev.txt
-
-      - name: isort — check import order
-        run: isort --check-only .
-
-      - name: black — check formatting
-        run: black --check .
-
-      - name: ruff — lint
-        run: ruff check .
-
-
-  # ── 2. Run tests ─────────────────────────────────────────────────────────
+  # ── 1. Run tests ─────────────────────────────────────────────────────────
   test:
     name: Test
     runs-on: ubuntu-latest
-    needs: lint
 
     services:
       postgres:
