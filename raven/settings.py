@@ -25,12 +25,15 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # See https://docs.djangoproject.com/en/5.1/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-yi0c+o@)5!9sz$kg2rys_1&fib-az-*2tdj@iq=qtt%txick*^'
+SECRET_KEY = config('SECRET_KEY', default='django-insecure-yi0c+o@)5!9sz$kg2rys_1&fib-az-*2tdj@iq=qtt%txick*^')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = config('DEBUG', default=False, cast=bool)
 
-ALLOWED_HOSTS = ['localhost', '127.0.0.1', '31.97.56.29', 'kedco-raven-backend-updated.onrender.com']
+ALLOWED_HOSTS = config(
+    'ALLOWED_HOSTS',
+    default='localhost,127.0.0.1,31.97.56.29,kedco-raven-backend-updated.onrender.com'
+).split(',')
 
 
 # Application definition
@@ -120,23 +123,27 @@ LOGGING = {
     },
 }
 
-db_name = config('DB_NAME')
-db_user = config('DB_USER')
-db_password = config('DB_PASSWORD')
-db_host = config('DB_HOST', default='localhost')
-db_port = config('DB_PORT', default='5432')
+# APP_ENV selects which DB variable set to use: "staging" or "production"
+APP_ENV = config('APP_ENV', default='production')
+_DB = 'STAGING' if APP_ENV == 'staging' else 'PRODUCTION'
 
-logger.info(f"Database configuration - NAME: {db_name}, USER: {db_user}, HOST: {db_host}, PORT: {db_port}")
-logger.info(f"Database PASSWORD: {'*' * len(db_password) if db_password else 'NOT_SET'}")
+db_name = config(f'{_DB}_DB_NAME')
+db_user = config(f'{_DB}_DB_USER')
+db_password = config(f'{_DB}_DB_PASSWORD')
+db_host = config(f'{_DB}_DB_HOST', default='localhost')
+db_port = config(f'{_DB}_DB_PORT', default='5432')
+
+logger.info(f"[{APP_ENV}] DB: {db_name} @ {db_host}:{db_port} (user={db_user})")
+logger.info(f"[{APP_ENV}] DB PASSWORD: {'*' * len(db_password) if db_password else 'NOT_SET'}")
 
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql',
-        'NAME': config('DB_NAME'),
-        'USER': config('DB_USER'),
-        'PASSWORD': config('DB_PASSWORD'),
-        'HOST': config('DB_HOST', default='localhost'),
-        'PORT': config('DB_PORT', default='5432'),
+        'NAME': db_name,
+        'USER': db_user,
+        'PASSWORD': db_password,
+        'HOST': db_host,
+        'PORT': db_port,
     },
     'external': {
         'ENGINE': 'django.db.backends.mysql',
@@ -186,7 +193,7 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/5.1/howto/static-files/
 
 STATIC_URL = 'static/'
-# STATIC_ROOT = config('STATIC_ROOT')
+STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 STATICFILES_DIRS = [
     os.path.join(BASE_DIR, 'static'),
 ]

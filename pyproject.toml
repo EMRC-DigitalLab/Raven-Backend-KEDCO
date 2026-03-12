@@ -1,0 +1,49 @@
+[tool.black]
+line-length = 88
+target-version = ["py311"]
+exclude = '''
+/(
+    \.git
+  | \.venv
+  | venv
+  | migrations
+  | staticfiles
+)/
+'''
+
+[tool.isort]
+profile = "black"
+line_length = 88
+skip = ["migrations", "venv", ".venv", "staticfiles"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+exclude = [
+    ".git",
+    "venv",
+    ".venv",
+    "migrations",
+    "staticfiles",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "UP",  # pyupgrade
+]
+ignore = [
+    "E501",  # line too long (black handles this)
+    "B008",  # do not perform function calls in default arguments (Django uses this)
+]
+
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "raven.settings"
+python_files = ["test_*.py", "*_test.py", "tests.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "--tb=short -q"
