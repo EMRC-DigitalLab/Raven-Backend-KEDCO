@@ -2,11 +2,7 @@ from datetime import datetime
 from decimal import Decimal
 
 from dateutil.relativedelta import relativedelta  # type: ignore
-from django.db.models import (
-    Avg,
-    Count,
-    Sum,
-)
+from django.db.models import Avg, Count, Sum
 from rest_framework import viewsets
 from rest_framework.response import Response
 from rest_framework.views import APIView

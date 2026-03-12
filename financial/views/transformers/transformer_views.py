@@ -6,10 +6,7 @@ from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
 from commercial.date_filters import get_date_range_from_request
-from commercial.models import (
-    MonthlyCommercialSummary,
-    SalesRepresentative,
-)
+from commercial.models import MonthlyCommercialSummary, SalesRepresentative
 from common.models import Feeder
 from financial.models import *
 from financial.models import Opex
