@@ -2,6 +2,7 @@
 import os
 import sys
 from pathlib import Path
+
 import django
 
 # Add project root to path (3 levels up from this script: technical/scripts/onboard_kano_feeders.py)
@@ -13,9 +14,10 @@ if str(PROJECT_ROOT) not in sys.path:
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'raven.settings')
 django.setup()
 
+import csv
+
 from common.models import Feeder
 
-import csv
 
 def onboard_kano_feeders():
     """

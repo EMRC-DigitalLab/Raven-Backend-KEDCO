@@ -1,17 +1,17 @@
 # commercial/views/districts/all_districts.py
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
-from datetime import date
+from datetime import date, timedelta
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
+
 from dateutil.relativedelta import relativedelta  # type: ignore
 from django.db.models import Sum
-from rest_framework.decorators import  api_view
+from rest_framework.decorators import api_view
 from rest_framework.response import Response
-from commercial.models import *
-from commercial.serializers import *
-from common.models import Feeder, BusinessDistrict
-from commercial.models import MonthlyCommercialSummary, MonthlyEnergyBilled
-from technical.models import FeederEnergyDaily, FeederEnergyMonthly
-from datetime import timedelta
 
+from commercial.models import *
+from commercial.models import MonthlyCommercialSummary, MonthlyEnergyBilled
+from commercial.serializers import *
+from common.models import BusinessDistrict, Feeder
+from technical.models import FeederEnergyDaily, FeederEnergyMonthly
 
 
 @api_view(["GET"])

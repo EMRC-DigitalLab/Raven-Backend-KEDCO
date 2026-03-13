@@ -8,12 +8,14 @@ Usage:
     python manage.py import_fault_data --feeder-slug feeder-name-slug
 """
 
+from collections import defaultdict
+from datetime import datetime, timedelta
+
 import mysql.connector
 from django.core.management.base import BaseCommand
-from django.utils import timezone
 from django.db import transaction
-from datetime import datetime, timedelta
-from collections import defaultdict
+from django.utils import timezone
+
 from common.models import Feeder
 from technical.models import FeederInterruption
 

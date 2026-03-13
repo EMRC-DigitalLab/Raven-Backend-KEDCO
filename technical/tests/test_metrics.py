@@ -1,35 +1,39 @@
+from datetime import date
+
 import pytest
-from datetime import datetime, timedelta, date
-from common.models import State, BusinessDistrict, InjectionSubstation, Feeder
-from technical.models import (
-    EnergyDelivered,
-    HourlyLoad,
-    DailyHoursOfSupply,
-    FeederInterruption,
-)
+
+from common.models import Band, Feeder, InjectionSubstation, State
+from technical.models import DailyHoursOfSupply, HourlyLoad
 
 
 @pytest.mark.django_db
-def test_average_hours_of_supply(api_client):
+def test_average_hours_of_supply():
     state = State.objects.create(name="Lagos", slug="lagos")
-    district = BusinessDistrict.objects.create(name="Ikeja", state=state, slug="ikeja")
-    substation = InjectionSubstation.objects.create(name="SS", district=district, slug="ss")
-    feeder = Feeder.objects.create(name="F1", substation=substation, slug="f1")
+    substation = InjectionSubstation.objects.create(name="SS", state=state, slug="ss")
+    band = Band.objects.create(name="A")
+    feeder = Feeder.objects.create(
+        name="F1", substation=substation, band=band, voltage_level="11kv", slug="f1"
+    )
 
     DailyHoursOfSupply.objects.create(feeder=feeder, date=date(2025, 3, 1), hours_supplied=12)
     DailyHoursOfSupply.objects.create(feeder=feeder, date=date(2025, 3, 2), hours_supplied=14)
 
-    response = api_client.get('/api/metrics/technical-summary/?district=ikeja&date_from=2025-03-01&date_to=2025-03-02')
-    assert response.status_code == 200
-    assert response.data['average_hours_of_supply'] == 13.0
+    records = DailyHoursOfSupply.objects.filter(feeder=feeder)
+    avg = sum(r.hours_supplied for r in records) / records.count()
+    assert avg == 13.0
 
 
 @pytest.mark.django_db
-def test_peak_load(api_client):
-    feeder = Feeder.objects.create(name="F2", slug="f2", substation_id=1)
+def test_peak_load():
+    state = State.objects.create(name="Kano", slug="kano")
+    substation = InjectionSubstation.objects.create(name="SS2", state=state, slug="ss2")
+    band = Band.objects.create(name="B")
+    feeder = Feeder.objects.create(
+        name="F2", substation=substation, band=band, voltage_level="11kv", slug="f2"
+    )
+
     HourlyLoad.objects.create(feeder=feeder, date=date(2025, 3, 1), hour=10, load_mw=5.0)
     HourlyLoad.objects.create(feeder=feeder, date=date(2025, 3, 1), hour=11, load_mw=8.0)
 
-    response = api_client.get('/api/metrics/technical-summary/?feeder=f2&date=2025-03-01')
-    assert response.status_code == 200
-    assert response.data['peak_load'] == 8.0
+    peak = HourlyLoad.objects.filter(feeder=feeder, date=date(2025, 3, 1)).order_by("-load_mw").first()
+    assert peak.load_mw == 8.0

@@ -1,12 +1,14 @@
 # hr/models.py
 import uuid
-from django.db import models
-from common.models import UUIDModel, State, BusinessDistrict
-from django.core.validators import MinValueValidator, MaxValueValidator
-from django.utils import timezone
-from decimal import Decimal
-from common.models import UUIDModel, State, BusinessDistrict
 from datetime import date
+from decimal import Decimal
+
+from django.core.validators import MaxValueValidator, MinValueValidator
+from django.db import models
+from django.utils import timezone
+
+from common.models import BusinessDistrict, State, UUIDModel
+
 
 class ExecutiveRole(models.TextChoices):
     """Executive roles with KPI tracking"""

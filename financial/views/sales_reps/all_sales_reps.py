@@ -1,7 +1,8 @@
 from rest_framework.decorators import api_view
+from rest_framework.response import Response
+
 from commercial.models import SalesRepresentative
 from commercial.serializers import SalesRepresentativeSerializer
-from rest_framework.response import Response
 
 
 @api_view(["GET"])

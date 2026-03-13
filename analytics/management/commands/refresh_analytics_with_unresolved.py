@@ -1,13 +1,14 @@
 # analytics/management/commands/refresh_analytics_with_unresolved.py
+from datetime import date, datetime, timedelta
+
+from dateutil.relativedelta import relativedelta
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 from django.utils import timezone
-from datetime import datetime, date, timedelta
-from dateutil.relativedelta import relativedelta
 
-from analytics.models import MonthlyTechnicalSummary, DailyTechnicalSummary
+from analytics.models import DailyTechnicalSummary, MonthlyTechnicalSummary
+from common.models import BusinessDistrict, Feeder, State
 from technical.models import FeederInterruption, calculate_interruption_metrics
-from common.models import State, BusinessDistrict, Feeder
 
 
 class Command(BaseCommand):
@@ -183,7 +184,7 @@ class Command(BaseCommand):
     def show_unresolved_summary(self, start_date, end_date, filter_params):
         """Show summary of unresolved interruptions in date range"""
         from django.db.models import Q
-        
+
         # Build filter
         interruption_filter = Q(
             occurred_at__date__range=[start_date, end_date],

@@ -1,15 +1,24 @@
-from datetime import date, datetime
-from decimal import Decimal, ROUND_HALF_UP
-from dateutil.relativedelta import relativedelta
 import calendar
-from django.db.models import Sum, Q
+from datetime import date, datetime
+from decimal import ROUND_HALF_UP, Decimal
+
+from dateutil.relativedelta import relativedelta
+from django.db.models import Q, Sum
 from django.utils.dateparse import parse_datetime
-from rest_framework.response import Response
 from rest_framework.decorators import api_view
-from financial.models import Opex, HQOpex, SalaryPayment, NBETInvoice, MOInvoice, MYTOTariff
-from common.models import Feeder, DistributionTransformer
-from commercial.models import MonthlyCommercialSummary, DailyCollection
-from technical.models import EnergyDelivered, FeederEnergyMonthly, FeederEnergyDaily
+from rest_framework.response import Response
+
+from commercial.models import DailyCollection, MonthlyCommercialSummary
+from common.models import DistributionTransformer, Feeder
+from financial.models import (
+    HQOpex,
+    MOInvoice,
+    MYTOTariff,
+    NBETInvoice,
+    Opex,
+    SalaryPayment,
+)
+from technical.models import EnergyDelivered, FeederEnergyDaily, FeederEnergyMonthly
 
 
 def safe_decimal(value):

@@ -1,7 +1,9 @@
 # analytics/admin.py
 from django.contrib import admin
-from .models import MonthlyOverviewSummary
 from django.utils import timezone
+
+from .models import MonthlyOverviewSummary
+
 
 @admin.register(MonthlyOverviewSummary)
 class MonthlyOverviewSummaryAdmin(admin.ModelAdmin):
@@ -95,10 +97,12 @@ admin.site.index_title = "Analytics Dashboard"
 
 
 from django.contrib import admin
-from django.utils.html import format_html
 from django.urls import reverse
+from django.utils.html import format_html
 from django.utils.safestring import mark_safe
+
 from .models import MonthlyTechnicalSummary
+
 
 @admin.register(MonthlyTechnicalSummary)
 class MonthlyTechnicalSummaryAdmin(admin.ModelAdmin):
@@ -325,11 +329,13 @@ class MonthlyTechnicalSummaryAdmin(admin.ModelAdmin):
 # analytics/admin.py (add this to your existing admin.py)
 
 from django.contrib import admin
-from django.utils.html import format_html
 from django.db.models import Count
 from django.urls import reverse
+from django.utils.html import format_html
 from django.utils.safestring import mark_safe
+
 from .models import DailyTechnicalSummary
+
 
 @admin.register(DailyTechnicalSummary)
 class DailyTechnicalSummaryAdmin(admin.ModelAdmin):
@@ -626,7 +632,7 @@ class DailyTechnicalSummaryAdmin(admin.ModelAdmin):
     def changelist_view(self, request, extra_context=None):
         """Add summary statistics to the changelist view"""
         from django.utils import timezone
-        
+
         # Get some basic stats
         queryset = self.get_queryset(request)
         

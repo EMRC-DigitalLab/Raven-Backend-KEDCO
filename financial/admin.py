@@ -1,17 +1,19 @@
 # backend/financial/admin.py
 
 from django.contrib import admin
+
 from .models import (
-    OpexCategory,
     GLBreakdown,
-    Opex,
     HQOpex,
-    MonthlyRevenueBilled,
-    SalaryPayment,
-    NBETInvoice,
     MOInvoice,
+    MonthlyRevenueBilled,
     MYTOTariff,
+    NBETInvoice,
+    Opex,
+    OpexCategory,
+    SalaryPayment,
 )
+
 
 @admin.register(OpexCategory)
 class ExpenseCategoryAdmin(admin.ModelAdmin):

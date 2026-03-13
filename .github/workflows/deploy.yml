@@ -1,0 +1,330 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - main
+      - development
+  pull_request:
+    branches:
+      - main
+      - development
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}/raven
+
+# ─────────────────────────────────────────────────────────────────────────────
+jobs:
+
+  # ── 1. Run tests ─────────────────────────────────────────────────────────
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_DB: raven_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres_test
+        ports:
+          - "5432:5432"
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_DATABASE: dataNestDB_KEDCO
+          MYSQL_ROOT_PASSWORD: mysql_test
+        ports:
+          - "3306:3306"
+        options: >-
+          --health-cmd "mysqladmin ping -h localhost"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      APP_ENV: staging
+      SECRET_KEY: ci-test-secret-key-not-for-production
+      DEBUG: "True"
+      ALLOWED_HOSTS: "localhost,127.0.0.1"
+      STAGING_DB_NAME: raven_test
+      STAGING_DB_USER: postgres
+      STAGING_DB_PASSWORD: postgres_test
+      STAGING_DB_HOST: localhost
+      STAGING_DB_PORT: "5432"
+      PRODUCTION_DB_NAME: raven_test
+      PRODUCTION_DB_USER: postgres
+      PRODUCTION_DB_PASSWORD: postgres_test
+      PRODUCTION_DB_HOST: localhost
+      PRODUCTION_DB_PORT: "5432"
+      EX_DB_NAME: dataNestDB_KEDCO
+      EX_DB_USER: root
+      EX_DB_PASSWORD: mysql_test
+      EX_DB_HOST: localhost
+      EX_DB_PORT: "3306"
+      BASE_URL: "http://localhost:8000"
+      VISUALIZATION_API_URL: "http://localhost:8000"
+      KEYCLOAK_REALM_URL: "http://localhost:8091/realms/KEDCO"
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run migrations
+        run: python manage.py migrate --noinput
+
+      - name: Run tests
+        run: pytest
+
+
+  # ── 3. Build & push Docker image ─────────────────────────────────────────
+  build-and-push:
+    name: Build & Push Image
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.event_name == 'push'
+
+    permissions:
+      contents: read
+      packages: write
+
+    outputs:
+      image_digest: ${{ steps.build.outputs.digest }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=staging,enable=${{ github.ref == 'refs/heads/development' }}
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            type=sha,prefix=sha-,enable=${{ github.ref == 'refs/heads/main' }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+
+  # ── 4. Deploy → Staging ───────────────────────────────────────────────────
+  deploy-staging:
+    name: Deploy → Staging
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: github.ref == 'refs/heads/development'
+    environment:
+      name: staging
+
+    steps:
+      - name: Deploy + health-check + auto-rollback via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          E_SECRET_KEY: ${{ secrets.SECRET_KEY }}
+          E_DEBUG: ${{ secrets.DEBUG }}
+          E_ALLOWED_HOSTS: ${{ secrets.ALLOWED_HOSTS }}
+          E_STAGING_DB_NAME: ${{ secrets.STAGING_DB_NAME }}
+          E_STAGING_DB_USER: ${{ secrets.STAGING_DB_USER }}
+          E_STAGING_DB_PASSWORD: ${{ secrets.STAGING_DB_PASSWORD }}
+          E_STAGING_DB_HOST: ${{ secrets.STAGING_DB_HOST }}
+          E_STAGING_DB_PORT: ${{ secrets.STAGING_DB_PORT }}
+          E_PRODUCTION_DB_NAME: ${{ secrets.PRODUCTION_DB_NAME }}
+          E_PRODUCTION_DB_USER: ${{ secrets.PRODUCTION_DB_USER }}
+          E_PRODUCTION_DB_PASSWORD: ${{ secrets.PRODUCTION_DB_PASSWORD }}
+          E_PRODUCTION_DB_HOST: ${{ secrets.PRODUCTION_DB_HOST }}
+          E_PRODUCTION_DB_PORT: ${{ secrets.PRODUCTION_DB_PORT }}
+          E_KEYCLOAK_REALM_URL: ${{ secrets.KEYCLOAK_REALM_URL }}
+          E_BASE_URL: ${{ secrets.BASE_URL }}
+          E_VISUALIZATION_API_URL: ${{ secrets.VISUALIZATION_API_URL }}
+          E_GUNICORN_WORKERS: ${{ secrets.GUNICORN_WORKERS }}
+          E_GUNICORN_TIMEOUT: ${{ secrets.GUNICORN_TIMEOUT }}
+          E_KC_ADMIN_PASSWORD: ${{ secrets.KC_ADMIN_PASSWORD_STAGING }}
+          E_EX_DB_NAME: ${{ secrets.EX_DB_NAME }}
+          E_EX_DB_USER: ${{ secrets.EX_DB_USER }}
+          E_EX_DB_PASSWORD: ${{ secrets.EX_DB_PASSWORD }}
+          E_EX_DB_HOST: ${{ secrets.EX_DB_HOST }}
+          E_EX_DB_PORT: ${{ secrets.EX_DB_PORT }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT || 22 }}
+          envs: E_SECRET_KEY,E_DEBUG,E_ALLOWED_HOSTS,E_STAGING_DB_NAME,E_STAGING_DB_USER,E_STAGING_DB_PASSWORD,E_STAGING_DB_HOST,E_STAGING_DB_PORT,E_PRODUCTION_DB_NAME,E_PRODUCTION_DB_USER,E_PRODUCTION_DB_PASSWORD,E_PRODUCTION_DB_HOST,E_PRODUCTION_DB_PORT,E_KEYCLOAK_REALM_URL,E_BASE_URL,E_VISUALIZATION_API_URL,E_GUNICORN_WORKERS,E_GUNICORN_TIMEOUT,E_KC_ADMIN_PASSWORD,E_EX_DB_NAME,E_EX_DB_USER,E_EX_DB_PASSWORD,E_EX_DB_HOST,E_EX_DB_PORT
+          script: |
+            set -euo pipefail
+            cd /srv/raven/staging
+
+            git fetch origin development
+            git checkout development
+            git reset --hard origin/development
+
+            # Write .env from env vars (passed securely via envs:)
+            {
+              echo "APP_ENV=staging"
+              echo "SECRET_KEY=${E_SECRET_KEY}"
+              echo "DEBUG=${E_DEBUG}"
+              echo "ALLOWED_HOSTS=${E_ALLOWED_HOSTS}"
+              echo "STAGING_DB_NAME=${E_STAGING_DB_NAME}"
+              echo "STAGING_DB_USER=${E_STAGING_DB_USER}"
+              echo "STAGING_DB_PASSWORD=${E_STAGING_DB_PASSWORD}"
+              echo "STAGING_DB_HOST=${E_STAGING_DB_HOST}"
+              echo "STAGING_DB_PORT=${E_STAGING_DB_PORT}"
+              echo "PRODUCTION_DB_NAME=${E_PRODUCTION_DB_NAME}"
+              echo "PRODUCTION_DB_USER=${E_PRODUCTION_DB_USER}"
+              echo "PRODUCTION_DB_PASSWORD=${E_PRODUCTION_DB_PASSWORD}"
+              echo "PRODUCTION_DB_HOST=${E_PRODUCTION_DB_HOST}"
+              echo "PRODUCTION_DB_PORT=${E_PRODUCTION_DB_PORT}"
+              echo "EX_DB_NAME=${E_EX_DB_NAME}"
+              echo "EX_DB_USER=${E_EX_DB_USER}"
+              echo "EX_DB_PASSWORD=${E_EX_DB_PASSWORD}"
+              echo "EX_DB_HOST=${E_EX_DB_HOST}"
+              echo "EX_DB_PORT=${E_EX_DB_PORT}"
+              echo "KEYCLOAK_REALM_URL=${E_KEYCLOAK_REALM_URL}"
+              echo "BASE_URL=${E_BASE_URL}"
+              echo "VISUALIZATION_API_URL=${E_VISUALIZATION_API_URL}"
+              echo "GUNICORN_WORKERS=${E_GUNICORN_WORKERS}"
+              echo "GUNICORN_TIMEOUT=${E_GUNICORN_TIMEOUT}"
+              echo "KC_ADMIN=admin"
+              echo "KC_ADMIN_PASSWORD=${E_KC_ADMIN_PASSWORD}"
+            } > .env
+
+            find . -name "*.sh" -o -name "*.yml" -o -name "*.conf" | xargs sed -i 's/\r//'
+            chmod +x scripts/deploy-staging.sh
+
+            GITHUB_ACTOR="${{ github.actor }}" \
+            GITHUB_TOKEN="${{ secrets.GITHUB_TOKEN }}" \
+            GITHUB_REPOSITORY="${{ github.repository }}" \
+              bash scripts/deploy-staging.sh
+
+
+  # ── 5. Deploy → Production (with rollback) ────────────────────────────────
+  deploy-prod:
+    name: Deploy → Production
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: github.ref == 'refs/heads/main'
+    environment:
+      name: production             # ← requires manual approval in GitHub settings
+
+    steps:
+      - name: Deploy + health-check + auto-rollback via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          E_SECRET_KEY: ${{ secrets.SECRET_KEY }}
+          E_DEBUG: ${{ secrets.DEBUG }}
+          E_ALLOWED_HOSTS: ${{ secrets.ALLOWED_HOSTS }}
+          E_STAGING_DB_NAME: ${{ secrets.STAGING_DB_NAME }}
+          E_STAGING_DB_USER: ${{ secrets.STAGING_DB_USER }}
+          E_STAGING_DB_PASSWORD: ${{ secrets.STAGING_DB_PASSWORD }}
+          E_STAGING_DB_HOST: ${{ secrets.STAGING_DB_HOST }}
+          E_STAGING_DB_PORT: ${{ secrets.STAGING_DB_PORT }}
+          E_PRODUCTION_DB_NAME: ${{ secrets.PRODUCTION_DB_NAME }}
+          E_PRODUCTION_DB_USER: ${{ secrets.PRODUCTION_DB_USER }}
+          E_PRODUCTION_DB_PASSWORD: ${{ secrets.PRODUCTION_DB_PASSWORD }}
+          E_PRODUCTION_DB_HOST: ${{ secrets.PRODUCTION_DB_HOST }}
+          E_PRODUCTION_DB_PORT: ${{ secrets.PRODUCTION_DB_PORT }}
+          E_KEYCLOAK_REALM_URL: ${{ secrets.KEYCLOAK_REALM_URL }}
+          E_BASE_URL: ${{ secrets.BASE_URL }}
+          E_VISUALIZATION_API_URL: ${{ secrets.VISUALIZATION_API_URL }}
+          E_GUNICORN_WORKERS: ${{ secrets.GUNICORN_WORKERS }}
+          E_GUNICORN_TIMEOUT: ${{ secrets.GUNICORN_TIMEOUT }}
+          E_KC_ADMIN_PASSWORD: ${{ secrets.KC_ADMIN_PASSWORD_PROD }}
+          E_KC_HOSTNAME: ${{ secrets.KC_HOSTNAME_PROD }}
+          E_KC_DB_USER: ${{ secrets.KC_DB_USER_PROD }}
+          E_KC_DB_PASSWORD: ${{ secrets.KC_DB_PASSWORD_PROD }}
+          E_EX_DB_NAME: ${{ secrets.EX_DB_NAME }}
+          E_EX_DB_USER: ${{ secrets.EX_DB_USER }}
+          E_EX_DB_PASSWORD: ${{ secrets.EX_DB_PASSWORD }}
+          E_EX_DB_HOST: ${{ secrets.EX_DB_HOST }}
+          E_EX_DB_PORT: ${{ secrets.EX_DB_PORT }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT || 22 }}
+          envs: E_SECRET_KEY,E_DEBUG,E_ALLOWED_HOSTS,E_STAGING_DB_NAME,E_STAGING_DB_USER,E_STAGING_DB_PASSWORD,E_STAGING_DB_HOST,E_STAGING_DB_PORT,E_PRODUCTION_DB_NAME,E_PRODUCTION_DB_USER,E_PRODUCTION_DB_PASSWORD,E_PRODUCTION_DB_HOST,E_PRODUCTION_DB_PORT,E_KEYCLOAK_REALM_URL,E_BASE_URL,E_VISUALIZATION_API_URL,E_GUNICORN_WORKERS,E_GUNICORN_TIMEOUT,E_KC_ADMIN_PASSWORD,E_KC_HOSTNAME,E_KC_DB_USER,E_KC_DB_PASSWORD,E_EX_DB_NAME,E_EX_DB_USER,E_EX_DB_PASSWORD,E_EX_DB_HOST,E_EX_DB_PORT
+          script: |
+            set -euo pipefail
+            cd /srv/raven/prod
+
+            git fetch origin main
+            git checkout main
+            git reset --hard origin/main
+
+            # Write .env from env vars (passed securely via envs:)
+            {
+              echo "APP_ENV=production"
+              echo "SECRET_KEY=${E_SECRET_KEY}"
+              echo "DEBUG=${E_DEBUG}"
+              echo "ALLOWED_HOSTS=${E_ALLOWED_HOSTS}"
+              echo "STAGING_DB_NAME=${E_STAGING_DB_NAME}"
+              echo "STAGING_DB_USER=${E_STAGING_DB_USER}"
+              echo "STAGING_DB_PASSWORD=${E_STAGING_DB_PASSWORD}"
+              echo "STAGING_DB_HOST=${E_STAGING_DB_HOST}"
+              echo "STAGING_DB_PORT=${E_STAGING_DB_PORT}"
+              echo "PRODUCTION_DB_NAME=${E_PRODUCTION_DB_NAME}"
+              echo "PRODUCTION_DB_USER=${E_PRODUCTION_DB_USER}"
+              echo "PRODUCTION_DB_PASSWORD=${E_PRODUCTION_DB_PASSWORD}"
+              echo "PRODUCTION_DB_HOST=${E_PRODUCTION_DB_HOST}"
+              echo "PRODUCTION_DB_PORT=${E_PRODUCTION_DB_PORT}"
+              echo "EX_DB_NAME=${E_EX_DB_NAME}"
+              echo "EX_DB_USER=${E_EX_DB_USER}"
+              echo "EX_DB_PASSWORD=${E_EX_DB_PASSWORD}"
+              echo "EX_DB_HOST=${E_EX_DB_HOST}"
+              echo "EX_DB_PORT=${E_EX_DB_PORT}"
+              echo "KEYCLOAK_REALM_URL=${E_KEYCLOAK_REALM_URL}"
+              echo "BASE_URL=${E_BASE_URL}"
+              echo "VISUALIZATION_API_URL=${E_VISUALIZATION_API_URL}"
+              echo "GUNICORN_WORKERS=${E_GUNICORN_WORKERS}"
+              echo "GUNICORN_TIMEOUT=${E_GUNICORN_TIMEOUT}"
+              echo "KC_ADMIN=admin"
+              echo "KC_ADMIN_PASSWORD=${E_KC_ADMIN_PASSWORD}"
+              echo "KC_HOSTNAME=${E_KC_HOSTNAME}"
+              echo "KC_DB_USER=${E_KC_DB_USER}"
+              echo "KC_DB_PASSWORD=${E_KC_DB_PASSWORD}"
+            } > .env
+
+            find . -name "*.sh" -o -name "*.yml" -o -name "*.conf" | xargs sed -i 's/\r//'
+            chmod +x scripts/deploy-prod.sh
+
+            GITHUB_ACTOR="${{ github.actor }}" \
+            GITHUB_TOKEN="${{ secrets.GITHUB_TOKEN }}" \
+            GITHUB_REPOSITORY="${{ github.repository }}" \
+              bash scripts/deploy-prod.sh

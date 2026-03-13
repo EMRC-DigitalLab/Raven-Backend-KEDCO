@@ -1,20 +1,20 @@
 # hr/views/overview/overview_views.py
-from hr.models import Staff
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from common.utils.filters import get_month_range_from_request
-from django.db.models import Avg, Count, Sum, Q
-from datetime import date
-from common.models import State
-from commercial.models import DailyCollection
-from common.utils.filters import get_month_range_from_request
-from commercial.models import MonthlyCommercialSummary
 from datetime import date, datetime
-from dateutil.relativedelta import relativedelta # type: ignore
+
+from dateutil.relativedelta import relativedelta  # type: ignore
+from django.db.models import Avg, Count, Q, Sum
+from rest_framework.response import Response
+from rest_framework.views import APIView
+
+from commercial.models import (
+    DailyCollection,
+    MonthlyCommercialSummary,
+    SalesRepresentative,
+)
+from common.models import BusinessDistrict, State
+from common.utils.filters import get_month_range_from_request
 from hr.models import Staff
-from common.models import BusinessDistrict
-from commercial.models import SalesRepresentative, DailyCollection, MonthlyCommercialSummary
-from common.models import State
+
 
 class StaffSummaryView(APIView):
 

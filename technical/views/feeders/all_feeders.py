@@ -1,14 +1,17 @@
 # technical/views/feeders/all_feeders.py
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from django.db.models import Q, Avg, Count, Max
-from django.db import connection
 from datetime import datetime, timedelta
+
 from dateutil.relativedelta import relativedelta
+from django.db import connection
+from django.db.models import Avg, Count, Max, Q
 from django.utils import timezone
+from rest_framework.response import Response
+from rest_framework.views import APIView
+
 from common.models import Feeder
-from technical.models import HourlyLoad, FeederInterruption
 from technical.constants import TURNAROUND_EXCLUSIONS
+from technical.models import FeederInterruption, HourlyLoad
+
 
 def _parse_iso_date(date_str):
     """Parse ISO datetime string to date"""

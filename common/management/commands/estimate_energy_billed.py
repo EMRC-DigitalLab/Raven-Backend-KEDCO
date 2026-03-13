@@ -1,13 +1,14 @@
-from django.core.management.base import BaseCommand, CommandError
-from django.db.models import Sum
-from django.db import transaction
-from decimal import Decimal, ROUND_HALF_UP
 from datetime import date
-from dateutil.relativedelta import relativedelta # type: ignore
-from tqdm import tqdm # type: ignore
+from decimal import ROUND_HALF_UP, Decimal
 
+from dateutil.relativedelta import relativedelta  # type: ignore
+from django.core.management.base import BaseCommand, CommandError
+from django.db import transaction
+from django.db.models import Sum
+from tqdm import tqdm  # type: ignore
+
+from commercial.models import MonthlyCommercialSummary, MonthlyEnergyBilled
 from common.models import Feeder
-from commercial.models import MonthlyEnergyBilled, MonthlyCommercialSummary
 
 
 class Command(BaseCommand):

@@ -1,24 +1,25 @@
 # commercial/urls.py
-from django.urls import path, include
+from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
-from .views.crud import (CustomerViewSet,
-                         SalesRepresentativeViewSet,
-                         SalesRepPerformanceViewSet,
-                         MonthlyRevenueBilledViewSet,
-                         DailyCollectionViewSet,
-                         MonthlyEnergyBilledViewSet,
-                         MonthlyCustomerStatsViewSet)
-
-from .views.states.all_states import commercial_all_states_view
-from .views.states.single_state import commercial_state_metrics_view
-from .views.overview.overview_views import CommercialOverviewAPIView
+from .views.crud import (
+    CustomerViewSet,
+    DailyCollectionViewSet,
+    MonthlyCustomerStatsViewSet,
+    MonthlyEnergyBilledViewSet,
+    MonthlyRevenueBilledViewSet,
+    SalesRepPerformanceViewSet,
+    SalesRepresentativeViewSet,
+)
 from .views.districts.all_districts import commercial_all_business_districts_view
 from .views.districts.single_district import CustomerBusinessMetricsView
 from .views.feeders.all_feeders import feeders_by_location_view
 from .views.feeders.top_bottom import feeder_performance_view
-from .views.transformers.transformer_views import transformer_metrics_by_feeder_view
+from .views.overview.overview_views import CommercialOverviewAPIView
 from .views.service_bands.service_band_views import ServiceBandMetricsView
+from .views.states.all_states import commercial_all_states_view
+from .views.states.single_state import commercial_state_metrics_view
+from .views.transformers.transformer_views import transformer_metrics_by_feeder_view
 
 router = DefaultRouter()
 router.register(r'sales-reps', SalesRepresentativeViewSet, basename='sales-representative')

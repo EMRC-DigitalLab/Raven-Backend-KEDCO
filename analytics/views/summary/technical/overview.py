@@ -1,19 +1,20 @@
-from rest_framework.views import APIView
-from rest_framework.response import Response
+import hashlib
+import logging
+from calendar import monthrange
+from datetime import date, datetime, timedelta
+
+from dateutil.relativedelta import relativedelta
 from django.core.cache import cache
-from django.db.models import Sum, Avg, Max, Count
+from django.db.models import Avg, Count, Max, Sum
 from django.db.models.functions import Extract
 from django.utils import timezone
-from datetime import datetime, date, timedelta
-from dateutil.relativedelta import relativedelta
-import logging
-import hashlib
-from calendar import monthrange
+from rest_framework.response import Response
+from rest_framework.views import APIView
 
-from analytics.models import MonthlyTechnicalSummary, DailyTechnicalSummary
-from common.models import State, BusinessDistrict, Feeder
-from technical.models import HourlyLoad
+from analytics.models import DailyTechnicalSummary, MonthlyTechnicalSummary
+from common.models import BusinessDistrict, Feeder, State
 from technical.constants import LOAD_SHEDDING_TYPES, TCN_TYPES
+from technical.models import HourlyLoad
 
 logger = logging.getLogger(__name__)
 
@@ -1659,9 +1660,9 @@ class OptimizedTechnicalOverviewAPIView(APIView):
 # Add this helper function for yearly calculations that might be used elsewhere
 def _calculate_single_period_metrics(feeder_ids, period_start, period_end):
     """Calculate metrics for a single period (used by yearly and other modes)"""
-    from technical.models import HourlyLoad, FeederInterruption
     from commercial.models import Customer
-    
+    from technical.models import FeederInterruption, HourlyLoad
+
     # Average supply hours across the period
     hourly_supply = HourlyLoad.objects.filter(
         feeder_id__in=feeder_ids,

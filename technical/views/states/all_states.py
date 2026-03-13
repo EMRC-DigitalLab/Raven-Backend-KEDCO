@@ -1,16 +1,19 @@
 # technical/views/states/all_states.py
+from datetime import datetime, timedelta
+
+from dateutil.relativedelta import relativedelta
+from django.db import connection
+from django.db.models import Avg, Count, Max, Q, Sum
+from django.utils import timezone
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
-from django.db.models import Count, Sum, Avg, Max, Q
-from django.db import connection
-from datetime import datetime, timedelta
-from common.models import State, Feeder
-from technical.models import HourlyLoad, FeederInterruption, EnergyDelivered
-from technical.utils.energy_utils import calculate_energy_delivered
+
 from commercial.models import Customer
-from dateutil.relativedelta import relativedelta
-from django.utils import timezone
+from common.models import Feeder, State
 from technical.constants import TURNAROUND_EXCLUSIONS
+from technical.models import EnergyDelivered, FeederInterruption, HourlyLoad
+from technical.utils.energy_utils import calculate_energy_delivered
+
 
 def get_date_range_from_request(request):
     """Enhanced date range parsing with support for multiple modes"""

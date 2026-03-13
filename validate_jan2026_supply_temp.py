@@ -1,18 +1,20 @@
 import os
 import sys
-import django
-from decimal import Decimal
-from django.db.models import Avg, Sum, Count
 from datetime import datetime
+from decimal import Decimal
+
+import django
 from django.conf import settings
+from django.db.models import Avg, Count, Sum
 
 # Setup Django environment
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'raven.settings')
 django.setup()
 
-from technical.models import DailyHoursOfSupply, HourlyLoad, FeederInterruption
 from analytics.utils.technical_calculations import TechnicalCalculator
+from technical.models import DailyHoursOfSupply, FeederInterruption, HourlyLoad
+
 
 def validate_jan2026_supply():
     print("--- Starting Validation for January 2026 ---")

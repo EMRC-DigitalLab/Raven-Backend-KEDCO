@@ -1,9 +1,11 @@
 # technical/views/transformers/transformer_views.py
-from common.models import DistributionTransformer, Feeder
-from technical.models import HourlyLoad, FeederInterruption
 from django.db.models import Q
-from rest_framework.views import APIView
 from rest_framework.response import Response
+from rest_framework.views import APIView
+
+from common.models import DistributionTransformer, Feeder
+from technical.models import FeederInterruption, HourlyLoad
+
 
 def get_transformer_availability_summary(feeder_slug=None, month=None, year=None, from_date=None, to_date=None):
     if not feeder_slug:

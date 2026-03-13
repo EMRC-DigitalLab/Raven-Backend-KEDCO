@@ -3,10 +3,12 @@
 Management command to sync Board KPIs with official targets from presentation
 This will add missing KPIs, update targets, and mark obsolete ones as inactive
 """
+from decimal import Decimal
+
 from django.core.management.base import BaseCommand
 from django.db import transaction
+
 from hr.models import ExecutiveKPIDefinition
-from decimal import Decimal
 
 
 class Command(BaseCommand):

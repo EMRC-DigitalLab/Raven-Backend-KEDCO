@@ -1,14 +1,15 @@
 
-from rest_framework import viewsets, status
-from rest_framework import viewsets
-from hr.models import Department, Role, Staff
-from hr.serializers import DepartmentSerializer, RoleSerializer, StaffSerializer
+from django.db import transaction
 from django_filters.rest_framework import DjangoFilterBackend
+from rest_framework import status, viewsets
+from rest_framework.decorators import action
 from rest_framework.filters import SearchFilter
 from rest_framework.response import Response
-from rest_framework.decorators import action
-from django.db import transaction
+
 from common.models import BusinessDistrict as District
+from hr.models import Department, Role, Staff
+from hr.serializers import DepartmentSerializer, RoleSerializer, StaffSerializer
+
 
 class DepartmentViewSet(viewsets.ModelViewSet):
     queryset = Department.objects.all()

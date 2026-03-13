@@ -1,7 +1,9 @@
 # analytics/models.py
+from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
+
 from common.models import UUIDModel
-from django.core.validators import MinValueValidator, MaxValueValidator
+
 
 class MonthlyOverviewSummary(UUIDModel, models.Model):
     """
@@ -484,9 +486,11 @@ class MonthlyTechnicalSummary(UUIDModel, models.Model):
 
 # analytics/models.py (add this to your existing models)
 
+from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
-from django.core.validators import MinValueValidator, MaxValueValidator
+
 from common.models import UUIDModel
+
 
 class DailyTechnicalSummary(UUIDModel, models.Model):
     """

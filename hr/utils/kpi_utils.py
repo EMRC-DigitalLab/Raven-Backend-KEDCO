@@ -1,12 +1,13 @@
 # hr/utils/kpi_utils.py
-from decimal import Decimal, ROUND_HALF_UP
-from datetime import date, datetime, timedelta
-from django.db.models import Q, Avg, Sum, Max, Min, Count
-from django.utils import timezone
-from typing import Dict, List, Optional, Tuple, Union
 import calendar
+from datetime import date, datetime, timedelta
+from decimal import ROUND_HALF_UP, Decimal
+from typing import Dict, List, Optional, Tuple, Union
 
-from ..models import ExecutiveKPIDefinition, ExecutivePerformance, ExecutiveKPIAlert
+from django.db.models import Avg, Count, Max, Min, Q, Sum
+from django.utils import timezone
+
+from ..models import ExecutiveKPIAlert, ExecutiveKPIDefinition, ExecutivePerformance
 
 
 class KPICalculator:

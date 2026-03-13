@@ -1,11 +1,13 @@
 from datetime import date, timedelta
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import ROUND_HALF_UP, Decimal
+
 from django.db.models import Sum
 from rest_framework import status
-from rest_framework.views import APIView
 from rest_framework.response import Response
-from commercial.models import MonthlyCommercialSummary, DailyCollection
-from common.models import State, BusinessDistrict, DistributionTransformer, Feeder
+from rest_framework.views import APIView
+
+from commercial.models import DailyCollection, MonthlyCommercialSummary
+from common.models import BusinessDistrict, DistributionTransformer, Feeder, State
 
 
 def safe_round(value, places=2):

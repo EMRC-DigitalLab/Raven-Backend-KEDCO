@@ -1,6 +1,7 @@
 # reports/serializers.py
 from rest_framework import serializers
-from .models import ReportTemplate, ReportSection, GeneratedReport
+
+from .models import GeneratedReport, ReportSection, ReportTemplate
 
 
 class ReportSectionSerializer(serializers.ModelSerializer):

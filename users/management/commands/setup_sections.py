@@ -1,6 +1,7 @@
 # users/management/commands/setup_sections.py
 from django.core.management.base import BaseCommand
-from users.models import Section, Permission
+
+from users.models import Permission, Section
 
 
 class Command(BaseCommand):

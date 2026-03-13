@@ -1,24 +1,16 @@
-from datetime import date
 from calendar import monthrange
-from django.db.models import Sum
-from rest_framework.response import Response
-from rest_framework.decorators import api_view
-from financial.models import *
-from financial.serializers import *
-from common.models import Feeder
-from commercial.models import (
-    MonthlyCommercialSummary,
-    SalesRepresentative,
-)
-from commercial.date_filters import get_date_range_from_request
-from financial.models import Opex
-from django.db.models import Sum
-from rest_framework.decorators import api_view
-from rest_framework.response import Response
 from datetime import date
-from commercial.models import MonthlyCommercialSummary
-from commercial.models import SalesRepresentative
 
+from django.db.models import Sum
+from rest_framework.decorators import api_view
+from rest_framework.response import Response
+
+from commercial.date_filters import get_date_range_from_request
+from commercial.models import MonthlyCommercialSummary, SalesRepresentative
+from common.models import Feeder
+from financial.models import *
+from financial.models import Opex
+from financial.serializers import *
 
 
 @api_view(['GET'])

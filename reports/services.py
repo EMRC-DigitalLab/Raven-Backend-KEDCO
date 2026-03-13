@@ -2,16 +2,17 @@
 """
 Services for fetching report data and generating PDFs.
 """
-from datetime import datetime, date, timedelta
-from django.db import connection
-from django.db.models import Sum, Avg, Max, Count, Q
-from django.utils import timezone
-from django.conf import settings
 import logging
+from datetime import date, datetime, timedelta
 
-from common.models import State, BusinessDistrict, InjectionSubstation, Feeder, Band
-from technical.models import HourlyLoad, FeederInterruption
+from django.conf import settings
+from django.db import connection
+from django.db.models import Avg, Count, Max, Q, Sum
+from django.utils import timezone
+
+from common.models import Band, BusinessDistrict, Feeder, InjectionSubstation, State
 from technical.constants import TURNAROUND_EXCLUSIONS
+from technical.models import FeederInterruption, HourlyLoad
 from technical.utils.energy_utils import calculate_energy_delivered
 
 logger = logging.getLogger(__name__)
@@ -313,7 +314,7 @@ class ReportDataService:
     def _get_filtered_feeder_ids(self):
         """Get feeder IDs based on all filters"""
         from django.db.models import Q
-        
+
         # ✅ Only onboarded feeders (SEASONALITY AWARE - just like overview_views)
         queryset = Feeder.objects.filter(is_onboarded=True).filter(
             Q(onboarded_at__lte=self.to_date) | Q(onboarded_at__isnull=True)
@@ -659,7 +660,9 @@ class ReportDataService:
         result = []
         for feeder in feeders:
             # ✅ FIXED: Use the exact same backend overview calculation for hours of supply
-            from technical.views.overview.overview_views import calculate_hours_of_supply_feeder
+            from technical.views.overview.overview_views import (
+                calculate_hours_of_supply_feeder,
+            )
             avg_supply_capped = calculate_hours_of_supply_feeder(feeder.id, self.from_date, self.to_date)
             
             # Peak load
@@ -708,7 +711,7 @@ class ReportDataService:
         if group_by == 'day':
             # Group by date using a reliable distinct approach for hourly load
             # Similar to technical_calculations.py
-            from django.db.models import Count, ExpressionWrapper, FloatField, F
+            from django.db.models import Count, ExpressionWrapper, F, FloatField
             
             daily_data = HourlyLoad.objects.filter(
                 feeder_id__in=self.feeder_ids,

@@ -1,6 +1,7 @@
+import os
 import sys
 from pathlib import Path
-import os
+
 import django
 
 # Fix path to include project root
@@ -12,6 +13,7 @@ os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'raven.settings')
 django.setup()
 
 from common.models import Feeder, InjectionSubstation
+
 
 def disonboard_stations():
     TARGET_STATIONS = [

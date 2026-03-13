@@ -1,5 +1,7 @@
 from rest_framework import serializers
+
 from .models import *
+
 
 class OpexCategorySerializer(serializers.ModelSerializer):
     class Meta:

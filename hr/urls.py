@@ -1,29 +1,20 @@
 # hr/urls.py
 
-from django.urls import path, include
+from django.urls import include, path
 from rest_framework.routers import DefaultRouter
-from .views.crud import (DepartmentViewSet,
-                         RoleViewSet,
-                         StaffViewSet)
-from .views.overview.overview_views import StaffSummaryView
+
+from .views.crud import DepartmentViewSet, RoleViewSet, StaffViewSet
 
 # Import from the correct subdirectories
-from .views.executive_kpis.overview_views import (
-    executive_kpi_overview,
-    kpi_alerts
-)
-from .views.executive_kpis.role_views import (
-    cto_kpis,
-    cco_kpis,
-    cfo_kpis,
-    chro_kpis
-)
+from .views.executive_kpis.overview_views import executive_kpi_overview, kpi_alerts
 from .views.executive_kpis.performance_views import (
-    update_kpi_performance,
-    kpi_performance_history,
+    bulk_update_performance,
     delete_kpi_performance,
-    bulk_update_performance
+    kpi_performance_history,
+    update_kpi_performance,
 )
+from .views.executive_kpis.role_views import cco_kpis, cfo_kpis, chro_kpis, cto_kpis
+from .views.overview.overview_views import StaffSummaryView
 
 router = DefaultRouter()
 router.register(r'departments', DepartmentViewSet, basename='hr-department')

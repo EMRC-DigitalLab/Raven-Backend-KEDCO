@@ -1,7 +1,15 @@
 # financial/models.py
 from django.db import models
-from common.models import UUIDModel, Feeder, BusinessDistrict, DistributionTransformer, Band
+
+from common.models import (
+    Band,
+    BusinessDistrict,
+    DistributionTransformer,
+    Feeder,
+    UUIDModel,
+)
 from hr.models import Staff
+
 
 class OpexCategory(UUIDModel, models.Model):
     name = models.CharField(max_length=100, unique=True)
@@ -166,7 +174,9 @@ class MonthlyRevenueBilled(UUIDModel, models.Model):
 
 
 from django.db import models
-from common.models import UUIDModel, BusinessDistrict, Band
+
+from common.models import Band, BusinessDistrict, UUIDModel
+
 
 class SalaryPayment(UUIDModel, models.Model):
     """

@@ -17,7 +17,8 @@ Usage:
     system = result['system_feeders']     # int
 """
 
-from django.db.models import Sum, Avg, Count, Max
+from django.db.models import Avg, Count, Max, Sum
+
 from technical.models import EnergyDelivered, HourlyLoad
 
 # Max acceptable daily energy per feeder (MWh).

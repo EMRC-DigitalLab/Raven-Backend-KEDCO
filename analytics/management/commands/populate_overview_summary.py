@@ -1,18 +1,19 @@
 # analytics/management/commands/populate_overview_summary.py
-from django.core.management.base import BaseCommand, CommandError
-from django.db.models import Sum, Count, Avg
-from django.db import transaction
-from datetime import datetime, date, timedelta
-from dateutil.relativedelta import relativedelta # type: ignore
-from decimal import Decimal
-from django.utils import timezone
 import hashlib
 import time
+from datetime import date, datetime, timedelta
+from decimal import Decimal
+
+from dateutil.relativedelta import relativedelta  # type: ignore
+from django.core.management.base import BaseCommand, CommandError
+from django.db import transaction
+from django.db.models import Avg, Count, Sum
+from django.utils import timezone
 
 from analytics.models import MonthlyOverviewSummary
 from commercial.models import MonthlyCommercialSummary, MonthlyEnergyBilled
-from technical.models import EnergyDelivered, HourlyLoad, FeederInterruption
-from financial.models import Opex, SalaryPayment, NBETInvoice, MOInvoice
+from financial.models import MOInvoice, NBETInvoice, Opex, SalaryPayment
+from technical.models import EnergyDelivered, FeederInterruption, HourlyLoad
 
 
 class Command(BaseCommand):

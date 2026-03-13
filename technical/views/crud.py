@@ -1,22 +1,21 @@
 # technical/views/crud.py
-from rest_framework import viewsets
-from rest_framework.permissions import AllowAny
-from technical.models import *
-from technical.serializers import *
-from commercial.date_filters import get_date_range_from_request
-from rest_framework.response import Response
-from commercial.utils import get_filtered_feeders
-from rest_framework.decorators import action
-from rest_framework.response import Response
-from rest_framework import status
-from django.shortcuts import get_object_or_404
+from datetime import datetime, timedelta
+
+import pytz  # type: ignore
 from django.db import transaction
 from django.db.models import Q
-from django.utils.dateparse import parse_datetime
-from datetime import timedelta
 from django.http import Http404
-import pytz # type: ignore
-from datetime import datetime
+from django.shortcuts import get_object_or_404
+from django.utils.dateparse import parse_datetime
+from rest_framework import status, viewsets
+from rest_framework.decorators import action
+from rest_framework.permissions import AllowAny
+from rest_framework.response import Response
+
+from commercial.date_filters import get_date_range_from_request
+from commercial.utils import get_filtered_feeders
+from technical.models import *
+from technical.serializers import *
 
 
 class EnergyDeliveredViewSet(viewsets.ModelViewSet):

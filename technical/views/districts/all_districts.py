@@ -1,16 +1,18 @@
 # technical/views/districts/all_districts.py
+from datetime import datetime, timedelta
+
+from dateutil.relativedelta import relativedelta
+from django.db import connection
+from django.db.models import Avg, Count, Max, Sum
+from django.utils import timezone
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
-from django.db.models import Count, Sum, Avg, Max
-from django.db import connection
-from datetime import datetime, timedelta
-from dateutil.relativedelta import relativedelta
-from django.utils import timezone
-from common.models import Feeder, BusinessDistrict
-from technical.models import HourlyLoad, FeederInterruption, EnergyDelivered
-from technical.utils.energy_utils import calculate_energy_delivered
+
 from commercial.models import Customer
+from common.models import BusinessDistrict, Feeder
 from technical.constants import TURNAROUND_EXCLUSIONS
+from technical.models import EnergyDelivered, FeederInterruption, HourlyLoad
+from technical.utils.energy_utils import calculate_energy_delivered
 
 
 def _parse_iso_date(date_str):

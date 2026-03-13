@@ -1,9 +1,17 @@
 # users/serializers.py
-from rest_framework import serializers
 from django.contrib.auth import authenticate
 from django.utils import timezone
-from .models import User, Section, Permission, UserSectionAccess, TemporaryAccess, AccessLog
+from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
+
+from .models import (
+    AccessLog,
+    Permission,
+    Section,
+    TemporaryAccess,
+    User,
+    UserSectionAccess,
+)
 
 
 class UserSerializer(serializers.ModelSerializer):

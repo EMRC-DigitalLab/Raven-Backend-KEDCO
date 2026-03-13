@@ -1,7 +1,15 @@
 # users/admin.py
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
-from .models import User, Section, Permission, UserSectionAccess, TemporaryAccess, AccessLog
+
+from .models import (
+    AccessLog,
+    Permission,
+    Section,
+    TemporaryAccess,
+    User,
+    UserSectionAccess,
+)
 
 
 @admin.register(User)

@@ -23,8 +23,8 @@ import pandas as pd
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
-from technical.models import CumulativeMeterReading
 from common.models import Feeder
+from technical.models import CumulativeMeterReading
 
 
 class Command(BaseCommand):

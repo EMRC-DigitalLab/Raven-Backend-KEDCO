@@ -1,6 +1,7 @@
 # reports/admin.py
 from django.contrib import admin
-from .models import ReportTemplate, ReportSection, GeneratedReport
+
+from .models import GeneratedReport, ReportSection, ReportTemplate
 
 
 class ReportSectionInline(admin.TabularInline):

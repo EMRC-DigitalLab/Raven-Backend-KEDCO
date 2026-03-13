@@ -1,6 +1,7 @@
 # regulatory/models.py
 from django.db import models
-from common.models import UUIDModel, Feeder
+
+from common.models import Feeder, UUIDModel
 
 
 class MonthlyEnergyOfftake(UUIDModel, models.Model):

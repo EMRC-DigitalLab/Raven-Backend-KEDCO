@@ -1,14 +1,15 @@
 # analytics/management/commands/populate_technical_summary.py
-from django.core.management.base import BaseCommand, CommandError
-from django.utils import timezone
-from django.db import transaction, connection
-from datetime import datetime, date, timedelta
-from dateutil.relativedelta import relativedelta #type: ignore
 import time
+from datetime import date, datetime, timedelta
+
+from dateutil.relativedelta import relativedelta  # type: ignore
+from django.core.management.base import BaseCommand, CommandError
+from django.db import connection, transaction
+from django.utils import timezone
 
 from analytics.models import MonthlyTechnicalSummary
 from analytics.utils.technical_calculations import TechnicalCalculator
-from common.models import State, BusinessDistrict, Feeder
+from common.models import BusinessDistrict, Feeder, State
 
 
 class Command(BaseCommand):
@@ -325,7 +326,7 @@ class Command(BaseCommand):
     def _count_existing_summaries_bulk(self, months, filter_configs):
         """Count existing summaries using a single optimized query"""
         from django.db.models import Q
-        
+
         # Build Q object for all combinations
         q_objects = Q()
         for month in months:

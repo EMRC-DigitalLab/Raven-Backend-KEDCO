@@ -2,10 +2,11 @@
 """
 Executive Performance Data Service for fetching executive KPI report data.
 """
-from datetime import datetime, date
+from datetime import date, datetime
+from decimal import Decimal
+
 from django.db.models import Avg, Count, Q
 from django.utils import timezone
-from decimal import Decimal
 
 from hr.models import ExecutiveKPIDefinition, ExecutivePerformance
 

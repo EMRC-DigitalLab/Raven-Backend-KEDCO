@@ -4,27 +4,32 @@ Django Management Command for CLUB Substation Report Generation
 Usage: python manage.py generate_club_report
 """
 
-from django.core.management.base import BaseCommand, CommandError
-from django.db.models import Avg, Count, Max, Min, Sum, F, Q
-from django.utils import timezone
-from datetime import datetime, timedelta, date
-from dateutil.relativedelta import relativedelta
 import json
 import os
+from datetime import date, datetime, timedelta
 
-from common.models import InjectionSubstation, Feeder
-from technical.models import (
-    HourlyLoad, FeederInterruption, DailyHoursOfSupply, 
-    FeederEnergyDaily, FeederEnergyMonthly, calculate_interruption_metrics
-)
+from dateutil.relativedelta import relativedelta
+from django.core.management.base import BaseCommand, CommandError
+from django.db.models import Avg, Count, F, Max, Min, Q, Sum
+from django.utils import timezone
+
+from analytics.models import DailyTechnicalSummary, MonthlyTechnicalSummary
 from commercial.models import Customer
-from analytics.models import MonthlyTechnicalSummary, DailyTechnicalSummary
+from common.models import Feeder, InjectionSubstation
+from technical.models import (
+    DailyHoursOfSupply,
+    FeederEnergyDaily,
+    FeederEnergyMonthly,
+    FeederInterruption,
+    HourlyLoad,
+    calculate_interruption_metrics,
+)
 
 try:
     from docx import Document
-    from docx.shared import Inches, Pt, RGBColor
-    from docx.enum.text import WD_ALIGN_PARAGRAPH
     from docx.enum.style import WD_STYLE_TYPE
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.shared import Inches, Pt, RGBColor
     DOCX_AVAILABLE = True
 except ImportError:
     DOCX_AVAILABLE = False

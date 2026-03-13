@@ -1,6 +1,8 @@
-from rest_framework.response import Response
 from rest_framework.decorators import api_view
+from rest_framework.response import Response
+
 from financial.utils import get_financial_feeder_data
+
 
 @api_view(['GET'])
 def financial_feeder_view(request):

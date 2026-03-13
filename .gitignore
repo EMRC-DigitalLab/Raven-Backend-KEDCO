@@ -87,6 +87,8 @@ __pycache__/
 local_settings.py
 
 .env
+.env.staging
+.env.prod
 db.sqlite3
 
 media

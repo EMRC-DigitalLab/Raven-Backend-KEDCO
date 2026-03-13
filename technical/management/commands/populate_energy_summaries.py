@@ -1,12 +1,12 @@
 # technical/management/commands/populate_energy_summaries.py
 import logging
 from datetime import date
-from django.core.management.base import BaseCommand
-from django.db import transaction
-from django.db.models import Sum
-from technical.models import EnergyDelivered, FeederEnergyDaily, FeederEnergyMonthly
-from django.db import models
 
+from django.core.management.base import BaseCommand
+from django.db import models, transaction
+from django.db.models import Sum
+
+from technical.models import EnergyDelivered, FeederEnergyDaily, FeederEnergyMonthly
 
 logger = logging.getLogger(__name__)
 

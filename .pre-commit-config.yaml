@@ -1,0 +1,48 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Pre-commit hooks — Python equivalent of Husky + Prettier
+#
+# Setup (one-time per developer):
+#   pip install -r requirements-dev.txt
+#   pre-commit install
+#
+# Run manually:
+#   pre-commit run --all-files
+#   bash scripts/lint.sh --fix    ← auto-fix everything
+# ─────────────────────────────────────────────────────────────────────────────
+
+repos:
+
+  # ── General file hygiene ───────────────────────────────────────────────────
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-json
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: ["--maxkb=1000"]
+      - id: no-commit-to-branch
+        args: ["--branch", "main"]   # prevent direct commits to main
+
+  # ── isort — import order (like Prettier for imports) ──────────────────────
+  - repo: https://github.com/PyCQA/isort
+    rev: 5.13.2
+    hooks:
+      - id: isort
+        args: ["--profile", "black"]
+
+  # ── black — code formatter (like Prettier for Python) ─────────────────────
+  - repo: https://github.com/psf/black
+    rev: 24.4.2
+    hooks:
+      - id: black
+        language_version: python3.11
+
+  # ── ruff — fast linter (like ESLint for Python) ───────────────────────────
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.4.9
+    hooks:
+      - id: ruff
+        args: ["--fix"]

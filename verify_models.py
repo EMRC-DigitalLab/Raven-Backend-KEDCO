@@ -1,14 +1,21 @@
 import os
+
 import django
 
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'raven.settings')
 django.setup()
 
 from common.models import (
-    State, BusinessDistrict, InjectionSubstation, Feeder, 
-    DistributionTransformer, PowerTransformer, 
-    FeederTransformerMapping, FeederSupplyRelationship
+    BusinessDistrict,
+    DistributionTransformer,
+    Feeder,
+    FeederSupplyRelationship,
+    FeederTransformerMapping,
+    InjectionSubstation,
+    PowerTransformer,
+    State,
 )
+
 
 def verify():
     print("=== Model Verification ===")

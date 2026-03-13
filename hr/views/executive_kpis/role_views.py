@@ -3,12 +3,13 @@
 Executive KPI Role Views - ALIGNED WITH BOARD PRESENTATION IMAGES
 Real-time calculations where possible, manual entry for others
 """
+from datetime import date
+from decimal import Decimal
+
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
-from django.utils import timezone
-from datetime import date
-from decimal import Decimal
 
 from ...models import ExecutiveKPIDefinition, ExecutivePerformance
 from ...utils.kpi_calculator import UnifiedKPICalculator

@@ -4,14 +4,15 @@ Management Report Generator for CLUB Injection Substation (KEDCO)
 Generates comprehensive technical performance data and insights for management reporting
 """
 
+import json
 import os
 import sys
-import django
 from datetime import datetime, timedelta
+
+import django
 from dateutil.relativedelta import relativedelta
-from django.db.models import Avg, Count, Max, Min, Sum, F, Q
+from django.db.models import Avg, Count, F, Max, Min, Q, Sum
 from django.utils import timezone
-import json
 
 # Add the parent directory to sys.path to import Django modules
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -20,13 +21,17 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'raven.settings')
 django.setup()
 
-from common.models import InjectionSubstation, Feeder
-from technical.models import (
-    HourlyLoad, FeederInterruption, DailyHoursOfSupply, 
-    FeederEnergyDaily, FeederEnergyMonthly, calculate_interruption_metrics
-)
+from analytics.models import DailyTechnicalSummary, MonthlyTechnicalSummary
 from commercial.models import Customer
-from analytics.models import MonthlyTechnicalSummary, DailyTechnicalSummary
+from common.models import Feeder, InjectionSubstation
+from technical.models import (
+    DailyHoursOfSupply,
+    FeederEnergyDaily,
+    FeederEnergyMonthly,
+    FeederInterruption,
+    HourlyLoad,
+    calculate_interruption_metrics,
+)
 
 
 class CLUBSubstationReportGenerator:

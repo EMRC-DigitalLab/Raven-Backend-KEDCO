@@ -1,0 +1,12 @@
+# Development & code quality tools
+# Install with: pip install -r requirements-dev.txt
+# Then run: pre-commit install
+
+pre-commit==3.7.1
+black==24.4.2
+isort==5.13.2
+ruff==0.4.9
+pytest==8.3.5
+pytest-django==4.10.0
+factory-boy==3.3.3
+Faker==37.1.0

@@ -1,24 +1,18 @@
 from datetime import date
 from decimal import Decimal
+
 from dateutil.relativedelta import relativedelta  # type: ignore
 from django.db.models import Sum
-from rest_framework import  status
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from financial.models import *
-from financial.serializers import *
-from common.models import Feeder, Band
-from commercial.models import MonthlyCommercialSummary, SalesRepresentative
-from financial.models import Opex
-from django.db.models import Sum
-from rest_framework.response import Response
-from datetime import date
-from dateutil.relativedelta import relativedelta # type: ignore
-from commercial.models import MonthlyCommercialSummary
-from commercial.models import SalesRepresentative
 from rest_framework import status
-from technical.models import EnergyDelivered
+from rest_framework.response import Response
+from rest_framework.views import APIView
 
+from commercial.models import MonthlyCommercialSummary, SalesRepresentative
+from common.models import Band, Feeder
+from financial.models import *
+from financial.models import Opex
+from financial.serializers import *
+from technical.models import EnergyDelivered
 
 
 class FinancialServiceBandMetricsView(APIView):

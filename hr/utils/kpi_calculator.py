@@ -4,36 +4,31 @@ Executive KPI Auto-Calculator Service
 Calculates KPI values from existing data using SQL queries for performance
 Follows same patterns as technical views (all_feeders.py, overview_views.py)
 """
-from decimal import Decimal, ROUND_HALF_UP
 from datetime import date, timedelta
+from decimal import ROUND_HALF_UP, Decimal
+
 from dateutil.relativedelta import relativedelta
-from django.db.models import Sum, Avg, Max, Min, Count, Q, F
 from django.db import connection
+from django.db.models import Avg, Count, F, Max, Min, Q, Sum
 from django.utils import timezone
 
 from commercial.models import (
-    MonthlyCommercialSummary, 
-    MonthlyEnergyBilled,
-    DailyCollection,
     Customer,
-    MonthlyRevenueBilled
+    DailyCollection,
+    MonthlyCommercialSummary,
+    MonthlyEnergyBilled,
+    MonthlyRevenueBilled,
 )
-from technical.models import (
-    FeederEnergyMonthly,
-    FeederEnergyDaily,
-    FeederInterruption,
-    HourlyLoad
-)
-from financial.models import (
-    Opex,
-    HQOpex,
-    SalaryPayment,
-    NBETInvoice,
-    MOInvoice
-)
+from common.models import Band, BusinessDistrict, Feeder, State
+from financial.models import HQOpex, MOInvoice, NBETInvoice, Opex, SalaryPayment
 from hr.models import Staff
-from common.models import Feeder, State, BusinessDistrict, Band
 from technical.constants import TURNAROUND_EXCLUSIONS
+from technical.models import (
+    FeederEnergyDaily,
+    FeederEnergyMonthly,
+    FeederInterruption,
+    HourlyLoad,
+)
 
 
 class KPICalculationService:
