@@ -230,7 +230,7 @@ SPECTACULAR_SETTINGS = {
 
 
 CORS_ALLOW_CREDENTIALS = True
-CSRF_TRUSTED_ORIGINS = ['http://localhost:8000', 'http://31.97.56.29', 'https://api.raven-emrc.com', 'https://kedco-raven-backend-updated.onrender.com']
+CSRF_TRUSTED_ORIGINS = ['http://localhost:8000', 'https://staging.apiraven.raven-emrc.com', 'https://live.apiraven.raven-emrc.com', 'http://31.97.56.29', 'https://api.raven-emrc.com', 'https://kedco-raven-backend-updated.onrender.com']
 
 
 # MIDDLEWARE = [
@@ -241,6 +241,9 @@ CSRF_TRUSTED_ORIGINS = ['http://localhost:8000', 'http://31.97.56.29', 'https://
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
     "https://kedco-raven-backend-updated.onrender.com",
+    "https://kedco.raven-emrc.com",
+    "https://staging.apiraven.raven-emrc.com",
+    "https://live.apiraven.raven-emrc.com",
 ]
 
 
