@@ -16,7 +16,8 @@
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
-IMAGE="ghcr.io/${GITHUB_REPOSITORY}/raven:latest"
+REPO_LOWER=$(echo "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')
+IMAGE="ghcr.io/${REPO_LOWER}/raven:latest"
 COMPOSE_FILE="docker-compose.prod.yml"
 CONTAINER="raven_prod"
 HEALTH_URL="http://localhost:8082/api/auth/token/"
@@ -28,7 +29,7 @@ echo "[deploy-prod] Saving current image for rollback..."
 ROLLBACK_IMAGE=$(docker inspect --format='{{.Image}}' "${CONTAINER}" 2>/dev/null || echo "")
 
 if [[ -n "${ROLLBACK_IMAGE}" ]]; then
-  docker tag "${ROLLBACK_IMAGE}" "ghcr.io/${GITHUB_REPOSITORY}/raven:rollback-prod" || true
+  docker tag "${ROLLBACK_IMAGE}" "ghcr.io/${REPO_LOWER}/raven:rollback-prod" || true
   echo "[deploy-prod] Rollback image tagged: rollback-prod"
 else
   echo "[deploy-prod] No running container found — fresh deploy."
@@ -43,7 +44,7 @@ docker pull "${IMAGE}"
 
 # ── 3. Start new containers ───────────────────────────────────────────────────
 echo "[deploy-prod] Starting containers..."
-GITHUB_REPOSITORY="${GITHUB_REPOSITORY}" \
+GITHUB_REPOSITORY="${REPO_LOWER}" \
 KC_ADMIN_PASSWORD="${KC_ADMIN_PASSWORD}" \
 KC_HOSTNAME="${KC_HOSTNAME}" \
 KC_DB_USER="${KC_DB_USER}" \
@@ -69,8 +70,8 @@ if [[ "${PASSED}" == "false" ]]; then
   echo "[deploy-prod] !! HEALTH CHECK FAILED — initiating ROLLBACK !!"
 
   if [[ -n "${ROLLBACK_IMAGE}" ]]; then
-    docker tag "ghcr.io/${GITHUB_REPOSITORY}/raven:rollback-prod" "${IMAGE}"
-    GITHUB_REPOSITORY="${GITHUB_REPOSITORY}" \
+    docker tag "ghcr.io/${REPO_LOWER}/raven:rollback-prod" "${IMAGE}"
+    GITHUB_REPOSITORY="${REPO_LOWER}" \
     KC_ADMIN_PASSWORD="${KC_ADMIN_PASSWORD}" \
     KC_HOSTNAME="${KC_HOSTNAME}" \
     KC_DB_USER="${KC_DB_USER}" \

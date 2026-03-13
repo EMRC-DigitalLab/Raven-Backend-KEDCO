@@ -12,7 +12,8 @@
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
-IMAGE="ghcr.io/${GITHUB_REPOSITORY}/raven:staging"
+REPO_LOWER=$(echo "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')
+IMAGE="ghcr.io/${REPO_LOWER}/raven:staging"
 COMPOSE_FILE="docker-compose.staging.yml"
 CONTAINER="raven_staging"
 HEALTH_URL="http://localhost:8090/api/auth/token/"
@@ -24,7 +25,7 @@ echo "[deploy-staging] Saving current image for rollback..."
 ROLLBACK_IMAGE=$(docker inspect --format='{{.Image}}' "${CONTAINER}" 2>/dev/null || echo "")
 
 if [[ -n "${ROLLBACK_IMAGE}" ]]; then
-  docker tag "${ROLLBACK_IMAGE}" "ghcr.io/${GITHUB_REPOSITORY}/raven:rollback-staging" || true
+  docker tag "${ROLLBACK_IMAGE}" "ghcr.io/${REPO_LOWER}/raven:rollback-staging" || true
   echo "[deploy-staging] Rollback image tagged: rollback-staging"
 else
   echo "[deploy-staging] No running container found — fresh deploy."
@@ -39,7 +40,7 @@ docker pull "${IMAGE}"
 
 # ── 3. Start new containers ───────────────────────────────────────────────────
 echo "[deploy-staging] Starting containers..."
-GITHUB_REPOSITORY="${GITHUB_REPOSITORY}" \
+GITHUB_REPOSITORY="${REPO_LOWER}" \
   docker compose -f "${COMPOSE_FILE}" up -d --remove-orphans
 
 # ── 4. Health check ───────────────────────────────────────────────────────────
@@ -62,8 +63,8 @@ if [[ "${PASSED}" == "false" ]]; then
 
   if [[ -n "${ROLLBACK_IMAGE}" ]]; then
     # Retag rollback image back to :staging so compose pulls it
-    docker tag "ghcr.io/${GITHUB_REPOSITORY}/raven:rollback-staging" "${IMAGE}"
-    GITHUB_REPOSITORY="${GITHUB_REPOSITORY}" \
+    docker tag "ghcr.io/${REPO_LOWER}/raven:rollback-staging" "${IMAGE}"
+    GITHUB_REPOSITORY="${REPO_LOWER}" \
       docker compose -f "${COMPOSE_FILE}" up -d --remove-orphans
     echo "[deploy-staging] Rolled back to previous image."
   else
