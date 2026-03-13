@@ -44,12 +44,13 @@ docker pull "${IMAGE}"
 
 # ── 3. Start new containers ───────────────────────────────────────────────────
 echo "[deploy-prod] Starting containers..."
+docker compose -f "${COMPOSE_FILE}" down --remove-orphans 2>/dev/null || true
 GITHUB_REPOSITORY="${REPO_LOWER}" \
 KC_ADMIN_PASSWORD="${KC_ADMIN_PASSWORD}" \
 KC_HOSTNAME="${KC_HOSTNAME}" \
 KC_DB_USER="${KC_DB_USER}" \
 KC_DB_PASSWORD="${KC_DB_PASSWORD}" \
-  docker compose -f "${COMPOSE_FILE}" up -d --remove-orphans
+  docker compose -f "${COMPOSE_FILE}" up -d
 
 # ── 4. Health check ───────────────────────────────────────────────────────────
 echo "[deploy-prod] Waiting for health check on ${HEALTH_URL}..."

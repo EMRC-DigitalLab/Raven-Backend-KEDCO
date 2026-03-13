@@ -40,8 +40,9 @@ docker pull "${IMAGE}"
 
 # ── 3. Start new containers ───────────────────────────────────────────────────
 echo "[deploy-staging] Starting containers..."
+docker compose -f "${COMPOSE_FILE}" down --remove-orphans 2>/dev/null || true
 GITHUB_REPOSITORY="${REPO_LOWER}" \
-  docker compose -f "${COMPOSE_FILE}" up -d --remove-orphans
+  docker compose -f "${COMPOSE_FILE}" up -d
 
 # ── 4. Health check ───────────────────────────────────────────────────────────
 echo "[deploy-staging] Waiting for health check on ${HEALTH_URL}..."
