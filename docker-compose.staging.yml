@@ -28,7 +28,7 @@ services:
       - keycloak
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/auth/token/')"]
+      test: ["CMD-SHELL", "curl -s -o /dev/null http://localhost:8000/api/auth/token/"]
       interval: 30s
       timeout: 10s
       retries: 3

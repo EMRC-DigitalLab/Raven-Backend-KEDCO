@@ -57,7 +57,7 @@ echo "[deploy-prod] Waiting for health check on ${HEALTH_URL}..."
 PASSED=false
 
 for i in $(seq 1 "${MAX_RETRIES}"); do
-  if curl -sf "${HEALTH_URL}" > /dev/null 2>&1; then
+  if curl -s -o /dev/null "${HEALTH_URL}"; then
     echo "[deploy-prod] Health check passed (attempt ${i})."
     PASSED=true
     break
