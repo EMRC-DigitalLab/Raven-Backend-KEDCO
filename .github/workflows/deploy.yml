@@ -167,7 +167,7 @@ jobs:
 
             git fetch origin development
             git checkout development
-            git pull origin development
+            git reset --hard origin/development
 
             chmod +x scripts/deploy-staging.sh
 
@@ -200,7 +200,7 @@ jobs:
 
             git fetch origin main
             git checkout main
-            git pull origin main
+            git reset --hard origin/main
 
             chmod +x scripts/deploy-prod.sh
 
