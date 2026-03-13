@@ -156,11 +156,32 @@ jobs:
     steps:
       - name: Deploy + health-check + auto-rollback via SSH
         uses: appleboy/ssh-action@v1.0.3
+        env:
+          E_SECRET_KEY: ${{ secrets.SECRET_KEY }}
+          E_DEBUG: ${{ secrets.DEBUG }}
+          E_ALLOWED_HOSTS: ${{ secrets.ALLOWED_HOSTS }}
+          E_STAGING_DB_NAME: ${{ secrets.STAGING_DB_NAME }}
+          E_STAGING_DB_USER: ${{ secrets.STAGING_DB_USER }}
+          E_STAGING_DB_PASSWORD: ${{ secrets.STAGING_DB_PASSWORD }}
+          E_STAGING_DB_HOST: ${{ secrets.STAGING_DB_HOST }}
+          E_STAGING_DB_PORT: ${{ secrets.STAGING_DB_PORT }}
+          E_PRODUCTION_DB_NAME: ${{ secrets.PRODUCTION_DB_NAME }}
+          E_PRODUCTION_DB_USER: ${{ secrets.PRODUCTION_DB_USER }}
+          E_PRODUCTION_DB_PASSWORD: ${{ secrets.PRODUCTION_DB_PASSWORD }}
+          E_PRODUCTION_DB_HOST: ${{ secrets.PRODUCTION_DB_HOST }}
+          E_PRODUCTION_DB_PORT: ${{ secrets.PRODUCTION_DB_PORT }}
+          E_KEYCLOAK_REALM_URL: ${{ secrets.KEYCLOAK_REALM_URL }}
+          E_BASE_URL: ${{ secrets.BASE_URL }}
+          E_VISUALIZATION_API_URL: ${{ secrets.VISUALIZATION_API_URL }}
+          E_GUNICORN_WORKERS: ${{ secrets.GUNICORN_WORKERS }}
+          E_GUNICORN_TIMEOUT: ${{ secrets.GUNICORN_TIMEOUT }}
+          E_KC_ADMIN_PASSWORD: ${{ secrets.KC_ADMIN_PASSWORD_STAGING }}
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           port: ${{ secrets.VPS_PORT || 22 }}
+          envs: E_SECRET_KEY,E_DEBUG,E_ALLOWED_HOSTS,E_STAGING_DB_NAME,E_STAGING_DB_USER,E_STAGING_DB_PASSWORD,E_STAGING_DB_HOST,E_STAGING_DB_PORT,E_PRODUCTION_DB_NAME,E_PRODUCTION_DB_USER,E_PRODUCTION_DB_PASSWORD,E_PRODUCTION_DB_HOST,E_PRODUCTION_DB_PORT,E_KEYCLOAK_REALM_URL,E_BASE_URL,E_VISUALIZATION_API_URL,E_GUNICORN_WORKERS,E_GUNICORN_TIMEOUT,E_KC_ADMIN_PASSWORD
           script: |
             set -euo pipefail
             cd /srv/raven/staging
@@ -169,29 +190,29 @@ jobs:
             git checkout development
             git reset --hard origin/development
 
-            # Write .env from individual GitHub secrets
+            # Write .env from env vars (passed securely via envs:)
             {
               echo "APP_ENV=staging"
-              echo "SECRET_KEY=${{ secrets.SECRET_KEY }}"
-              echo "DEBUG=${{ secrets.DEBUG }}"
-              echo "ALLOWED_HOSTS=${{ secrets.ALLOWED_HOSTS }}"
-              echo "STAGING_DB_NAME=${{ secrets.STAGING_DB_NAME }}"
-              echo "STAGING_DB_USER=${{ secrets.STAGING_DB_USER }}"
-              echo "STAGING_DB_PASSWORD=${{ secrets.STAGING_DB_PASSWORD }}"
-              echo "STAGING_DB_HOST=${{ secrets.STAGING_DB_HOST }}"
-              echo "STAGING_DB_PORT=${{ secrets.STAGING_DB_PORT }}"
-              echo "PRODUCTION_DB_NAME=${{ secrets.PRODUCTION_DB_NAME }}"
-              echo "PRODUCTION_DB_USER=${{ secrets.PRODUCTION_DB_USER }}"
-              echo "PRODUCTION_DB_PASSWORD=${{ secrets.PRODUCTION_DB_PASSWORD }}"
-              echo "PRODUCTION_DB_HOST=${{ secrets.PRODUCTION_DB_HOST }}"
-              echo "PRODUCTION_DB_PORT=${{ secrets.PRODUCTION_DB_PORT }}"
-              echo "KEYCLOAK_REALM_URL=${{ secrets.KEYCLOAK_REALM_URL }}"
-              echo "BASE_URL=${{ secrets.BASE_URL }}"
-              echo "VISUALIZATION_API_URL=${{ secrets.VISUALIZATION_API_URL }}"
-              echo "GUNICORN_WORKERS=${{ secrets.GUNICORN_WORKERS }}"
-              echo "GUNICORN_TIMEOUT=${{ secrets.GUNICORN_TIMEOUT }}"
+              echo "SECRET_KEY=${E_SECRET_KEY}"
+              echo "DEBUG=${E_DEBUG}"
+              echo "ALLOWED_HOSTS=${E_ALLOWED_HOSTS}"
+              echo "STAGING_DB_NAME=${E_STAGING_DB_NAME}"
+              echo "STAGING_DB_USER=${E_STAGING_DB_USER}"
+              echo "STAGING_DB_PASSWORD=${E_STAGING_DB_PASSWORD}"
+              echo "STAGING_DB_HOST=${E_STAGING_DB_HOST}"
+              echo "STAGING_DB_PORT=${E_STAGING_DB_PORT}"
+              echo "PRODUCTION_DB_NAME=${E_PRODUCTION_DB_NAME}"
+              echo "PRODUCTION_DB_USER=${E_PRODUCTION_DB_USER}"
+              echo "PRODUCTION_DB_PASSWORD=${E_PRODUCTION_DB_PASSWORD}"
+              echo "PRODUCTION_DB_HOST=${E_PRODUCTION_DB_HOST}"
+              echo "PRODUCTION_DB_PORT=${E_PRODUCTION_DB_PORT}"
+              echo "KEYCLOAK_REALM_URL=${E_KEYCLOAK_REALM_URL}"
+              echo "BASE_URL=${E_BASE_URL}"
+              echo "VISUALIZATION_API_URL=${E_VISUALIZATION_API_URL}"
+              echo "GUNICORN_WORKERS=${E_GUNICORN_WORKERS}"
+              echo "GUNICORN_TIMEOUT=${E_GUNICORN_TIMEOUT}"
               echo "KC_ADMIN=admin"
-              echo "KC_ADMIN_PASSWORD=${{ secrets.KC_ADMIN_PASSWORD_STAGING }}"
+              echo "KC_ADMIN_PASSWORD=${E_KC_ADMIN_PASSWORD}"
             } > .env
 
             sed -i 's/\r//' scripts/deploy-staging.sh
@@ -215,11 +236,35 @@ jobs:
     steps:
       - name: Deploy + health-check + auto-rollback via SSH
         uses: appleboy/ssh-action@v1.0.3
+        env:
+          E_SECRET_KEY: ${{ secrets.SECRET_KEY }}
+          E_DEBUG: ${{ secrets.DEBUG }}
+          E_ALLOWED_HOSTS: ${{ secrets.ALLOWED_HOSTS }}
+          E_STAGING_DB_NAME: ${{ secrets.STAGING_DB_NAME }}
+          E_STAGING_DB_USER: ${{ secrets.STAGING_DB_USER }}
+          E_STAGING_DB_PASSWORD: ${{ secrets.STAGING_DB_PASSWORD }}
+          E_STAGING_DB_HOST: ${{ secrets.STAGING_DB_HOST }}
+          E_STAGING_DB_PORT: ${{ secrets.STAGING_DB_PORT }}
+          E_PRODUCTION_DB_NAME: ${{ secrets.PRODUCTION_DB_NAME }}
+          E_PRODUCTION_DB_USER: ${{ secrets.PRODUCTION_DB_USER }}
+          E_PRODUCTION_DB_PASSWORD: ${{ secrets.PRODUCTION_DB_PASSWORD }}
+          E_PRODUCTION_DB_HOST: ${{ secrets.PRODUCTION_DB_HOST }}
+          E_PRODUCTION_DB_PORT: ${{ secrets.PRODUCTION_DB_PORT }}
+          E_KEYCLOAK_REALM_URL: ${{ secrets.KEYCLOAK_REALM_URL }}
+          E_BASE_URL: ${{ secrets.BASE_URL }}
+          E_VISUALIZATION_API_URL: ${{ secrets.VISUALIZATION_API_URL }}
+          E_GUNICORN_WORKERS: ${{ secrets.GUNICORN_WORKERS }}
+          E_GUNICORN_TIMEOUT: ${{ secrets.GUNICORN_TIMEOUT }}
+          E_KC_ADMIN_PASSWORD: ${{ secrets.KC_ADMIN_PASSWORD_PROD }}
+          E_KC_HOSTNAME: ${{ secrets.KC_HOSTNAME_PROD }}
+          E_KC_DB_USER: ${{ secrets.KC_DB_USER_PROD }}
+          E_KC_DB_PASSWORD: ${{ secrets.KC_DB_PASSWORD_PROD }}
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           port: ${{ secrets.VPS_PORT || 22 }}
+          envs: E_SECRET_KEY,E_DEBUG,E_ALLOWED_HOSTS,E_STAGING_DB_NAME,E_STAGING_DB_USER,E_STAGING_DB_PASSWORD,E_STAGING_DB_HOST,E_STAGING_DB_PORT,E_PRODUCTION_DB_NAME,E_PRODUCTION_DB_USER,E_PRODUCTION_DB_PASSWORD,E_PRODUCTION_DB_HOST,E_PRODUCTION_DB_PORT,E_KEYCLOAK_REALM_URL,E_BASE_URL,E_VISUALIZATION_API_URL,E_GUNICORN_WORKERS,E_GUNICORN_TIMEOUT,E_KC_ADMIN_PASSWORD,E_KC_HOSTNAME,E_KC_DB_USER,E_KC_DB_PASSWORD
           script: |
             set -euo pipefail
             cd /srv/raven/prod
@@ -228,32 +273,32 @@ jobs:
             git checkout main
             git reset --hard origin/main
 
-            # Write .env from individual GitHub secrets
+            # Write .env from env vars (passed securely via envs:)
             {
               echo "APP_ENV=production"
-              echo "SECRET_KEY=${{ secrets.SECRET_KEY }}"
-              echo "DEBUG=${{ secrets.DEBUG }}"
-              echo "ALLOWED_HOSTS=${{ secrets.ALLOWED_HOSTS }}"
-              echo "STAGING_DB_NAME=${{ secrets.STAGING_DB_NAME }}"
-              echo "STAGING_DB_USER=${{ secrets.STAGING_DB_USER }}"
-              echo "STAGING_DB_PASSWORD=${{ secrets.STAGING_DB_PASSWORD }}"
-              echo "STAGING_DB_HOST=${{ secrets.STAGING_DB_HOST }}"
-              echo "STAGING_DB_PORT=${{ secrets.STAGING_DB_PORT }}"
-              echo "PRODUCTION_DB_NAME=${{ secrets.PRODUCTION_DB_NAME }}"
-              echo "PRODUCTION_DB_USER=${{ secrets.PRODUCTION_DB_USER }}"
-              echo "PRODUCTION_DB_PASSWORD=${{ secrets.PRODUCTION_DB_PASSWORD }}"
-              echo "PRODUCTION_DB_HOST=${{ secrets.PRODUCTION_DB_HOST }}"
-              echo "PRODUCTION_DB_PORT=${{ secrets.PRODUCTION_DB_PORT }}"
-              echo "KEYCLOAK_REALM_URL=${{ secrets.KEYCLOAK_REALM_URL }}"
-              echo "BASE_URL=${{ secrets.BASE_URL }}"
-              echo "VISUALIZATION_API_URL=${{ secrets.VISUALIZATION_API_URL }}"
-              echo "GUNICORN_WORKERS=${{ secrets.GUNICORN_WORKERS }}"
-              echo "GUNICORN_TIMEOUT=${{ secrets.GUNICORN_TIMEOUT }}"
+              echo "SECRET_KEY=${E_SECRET_KEY}"
+              echo "DEBUG=${E_DEBUG}"
+              echo "ALLOWED_HOSTS=${E_ALLOWED_HOSTS}"
+              echo "STAGING_DB_NAME=${E_STAGING_DB_NAME}"
+              echo "STAGING_DB_USER=${E_STAGING_DB_USER}"
+              echo "STAGING_DB_PASSWORD=${E_STAGING_DB_PASSWORD}"
+              echo "STAGING_DB_HOST=${E_STAGING_DB_HOST}"
+              echo "STAGING_DB_PORT=${E_STAGING_DB_PORT}"
+              echo "PRODUCTION_DB_NAME=${E_PRODUCTION_DB_NAME}"
+              echo "PRODUCTION_DB_USER=${E_PRODUCTION_DB_USER}"
+              echo "PRODUCTION_DB_PASSWORD=${E_PRODUCTION_DB_PASSWORD}"
+              echo "PRODUCTION_DB_HOST=${E_PRODUCTION_DB_HOST}"
+              echo "PRODUCTION_DB_PORT=${E_PRODUCTION_DB_PORT}"
+              echo "KEYCLOAK_REALM_URL=${E_KEYCLOAK_REALM_URL}"
+              echo "BASE_URL=${E_BASE_URL}"
+              echo "VISUALIZATION_API_URL=${E_VISUALIZATION_API_URL}"
+              echo "GUNICORN_WORKERS=${E_GUNICORN_WORKERS}"
+              echo "GUNICORN_TIMEOUT=${E_GUNICORN_TIMEOUT}"
               echo "KC_ADMIN=admin"
-              echo "KC_ADMIN_PASSWORD=${{ secrets.KC_ADMIN_PASSWORD_PROD }}"
-              echo "KC_HOSTNAME=${{ secrets.KC_HOSTNAME_PROD }}"
-              echo "KC_DB_USER=${{ secrets.KC_DB_USER_PROD }}"
-              echo "KC_DB_PASSWORD=${{ secrets.KC_DB_PASSWORD_PROD }}"
+              echo "KC_ADMIN_PASSWORD=${E_KC_ADMIN_PASSWORD}"
+              echo "KC_HOSTNAME=${E_KC_HOSTNAME}"
+              echo "KC_DB_USER=${E_KC_DB_USER}"
+              echo "KC_DB_PASSWORD=${E_KC_DB_PASSWORD}"
             } > .env
 
             sed -i 's/\r//' scripts/deploy-prod.sh
