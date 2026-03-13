@@ -327,4 +327,8 @@ jobs:
             GITHUB_ACTOR="${{ github.actor }}" \
             GITHUB_TOKEN="${{ secrets.GITHUB_TOKEN }}" \
             GITHUB_REPOSITORY="${{ github.repository }}" \
+            KC_ADMIN_PASSWORD="${E_KC_ADMIN_PASSWORD}" \
+            KC_HOSTNAME="${E_KC_HOSTNAME}" \
+            KC_DB_USER="${E_KC_DB_USER}" \
+            KC_DB_PASSWORD="${E_KC_DB_PASSWORD}" \
               bash scripts/deploy-prod.sh
