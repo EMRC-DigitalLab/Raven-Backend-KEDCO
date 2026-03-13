@@ -194,6 +194,7 @@ jobs:
               echo "KC_ADMIN_PASSWORD=${{ secrets.KC_ADMIN_PASSWORD_STAGING }}"
             } > .env
 
+            sed -i 's/\r//' scripts/deploy-staging.sh
             chmod +x scripts/deploy-staging.sh
 
             GITHUB_ACTOR="${{ github.actor }}" \
@@ -255,6 +256,7 @@ jobs:
               echo "KC_DB_PASSWORD=${{ secrets.KC_DB_PASSWORD_PROD }}"
             } > .env
 
+            sed -i 's/\r//' scripts/deploy-prod.sh
             chmod +x scripts/deploy-prod.sh
 
             GITHUB_ACTOR="${{ github.actor }}" \
