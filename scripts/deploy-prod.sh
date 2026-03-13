@@ -20,7 +20,7 @@ REPO_LOWER=$(echo "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')
 IMAGE="ghcr.io/${REPO_LOWER}/raven:latest"
 COMPOSE_FILE="docker-compose.prod.yml"
 CONTAINER="raven_prod"
-HEALTH_URL="http://localhost:8082/api/auth/token/"
+HEALTH_URL="http://localhost:8096/api/auth/token/"
 MAX_RETRIES=18        # 18 × 5s = 90 seconds (prod gets more time)
 RETRY_INTERVAL=5
 
