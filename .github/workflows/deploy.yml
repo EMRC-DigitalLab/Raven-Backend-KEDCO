@@ -215,7 +215,7 @@ jobs:
               echo "KC_ADMIN_PASSWORD=${E_KC_ADMIN_PASSWORD}"
             } > .env
 
-            sed -i 's/\r//' scripts/deploy-staging.sh
+            find . -name "*.sh" -o -name "*.yml" -o -name "*.conf" | xargs sed -i 's/\r//'
             chmod +x scripts/deploy-staging.sh
 
             GITHUB_ACTOR="${{ github.actor }}" \
@@ -301,7 +301,7 @@ jobs:
               echo "KC_DB_PASSWORD=${E_KC_DB_PASSWORD}"
             } > .env
 
-            sed -i 's/\r//' scripts/deploy-prod.sh
+            find . -name "*.sh" -o -name "*.yml" -o -name "*.conf" | xargs sed -i 's/\r//'
             chmod +x scripts/deploy-prod.sh
 
             GITHUB_ACTOR="${{ github.actor }}" \
