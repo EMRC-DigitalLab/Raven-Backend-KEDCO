@@ -169,12 +169,36 @@ jobs:
             git checkout development
             git reset --hard origin/development
 
+            # Write .env from individual GitHub secrets
+            {
+              echo "APP_ENV=staging"
+              echo "SECRET_KEY=${{ secrets.SECRET_KEY }}"
+              echo "DEBUG=${{ secrets.DEBUG }}"
+              echo "ALLOWED_HOSTS=${{ secrets.ALLOWED_HOSTS }}"
+              echo "STAGING_DB_NAME=${{ secrets.STAGING_DB_NAME }}"
+              echo "STAGING_DB_USER=${{ secrets.STAGING_DB_USER }}"
+              echo "STAGING_DB_PASSWORD=${{ secrets.STAGING_DB_PASSWORD }}"
+              echo "STAGING_DB_HOST=${{ secrets.STAGING_DB_HOST }}"
+              echo "STAGING_DB_PORT=${{ secrets.STAGING_DB_PORT }}"
+              echo "PRODUCTION_DB_NAME=${{ secrets.PRODUCTION_DB_NAME }}"
+              echo "PRODUCTION_DB_USER=${{ secrets.PRODUCTION_DB_USER }}"
+              echo "PRODUCTION_DB_PASSWORD=${{ secrets.PRODUCTION_DB_PASSWORD }}"
+              echo "PRODUCTION_DB_HOST=${{ secrets.PRODUCTION_DB_HOST }}"
+              echo "PRODUCTION_DB_PORT=${{ secrets.PRODUCTION_DB_PORT }}"
+              echo "KEYCLOAK_REALM_URL=${{ secrets.KEYCLOAK_REALM_URL }}"
+              echo "BASE_URL=${{ secrets.BASE_URL }}"
+              echo "VISUALIZATION_API_URL=${{ secrets.VISUALIZATION_API_URL }}"
+              echo "GUNICORN_WORKERS=${{ secrets.GUNICORN_WORKERS }}"
+              echo "GUNICORN_TIMEOUT=${{ secrets.GUNICORN_TIMEOUT }}"
+              echo "KC_ADMIN=admin"
+              echo "KC_ADMIN_PASSWORD=${{ secrets.KC_ADMIN_PASSWORD_STAGING }}"
+            } > .env
+
             chmod +x scripts/deploy-staging.sh
 
             GITHUB_ACTOR="${{ github.actor }}" \
             GITHUB_TOKEN="${{ secrets.GITHUB_TOKEN }}" \
             GITHUB_REPOSITORY="${{ github.repository }}" \
-            ENV_FILE_CONTENT="${{ secrets.STAGING_ENV_FILE }}" \
               bash scripts/deploy-staging.sh
 
 
@@ -203,14 +227,37 @@ jobs:
             git checkout main
             git reset --hard origin/main
 
+            # Write .env from individual GitHub secrets
+            {
+              echo "APP_ENV=production"
+              echo "SECRET_KEY=${{ secrets.SECRET_KEY }}"
+              echo "DEBUG=${{ secrets.DEBUG }}"
+              echo "ALLOWED_HOSTS=${{ secrets.ALLOWED_HOSTS }}"
+              echo "STAGING_DB_NAME=${{ secrets.STAGING_DB_NAME }}"
+              echo "STAGING_DB_USER=${{ secrets.STAGING_DB_USER }}"
+              echo "STAGING_DB_PASSWORD=${{ secrets.STAGING_DB_PASSWORD }}"
+              echo "STAGING_DB_HOST=${{ secrets.STAGING_DB_HOST }}"
+              echo "STAGING_DB_PORT=${{ secrets.STAGING_DB_PORT }}"
+              echo "PRODUCTION_DB_NAME=${{ secrets.PRODUCTION_DB_NAME }}"
+              echo "PRODUCTION_DB_USER=${{ secrets.PRODUCTION_DB_USER }}"
+              echo "PRODUCTION_DB_PASSWORD=${{ secrets.PRODUCTION_DB_PASSWORD }}"
+              echo "PRODUCTION_DB_HOST=${{ secrets.PRODUCTION_DB_HOST }}"
+              echo "PRODUCTION_DB_PORT=${{ secrets.PRODUCTION_DB_PORT }}"
+              echo "KEYCLOAK_REALM_URL=${{ secrets.KEYCLOAK_REALM_URL }}"
+              echo "BASE_URL=${{ secrets.BASE_URL }}"
+              echo "VISUALIZATION_API_URL=${{ secrets.VISUALIZATION_API_URL }}"
+              echo "GUNICORN_WORKERS=${{ secrets.GUNICORN_WORKERS }}"
+              echo "GUNICORN_TIMEOUT=${{ secrets.GUNICORN_TIMEOUT }}"
+              echo "KC_ADMIN=admin"
+              echo "KC_ADMIN_PASSWORD=${{ secrets.KC_ADMIN_PASSWORD_PROD }}"
+              echo "KC_HOSTNAME=${{ secrets.KC_HOSTNAME_PROD }}"
+              echo "KC_DB_USER=${{ secrets.KC_DB_USER_PROD }}"
+              echo "KC_DB_PASSWORD=${{ secrets.KC_DB_PASSWORD_PROD }}"
+            } > .env
+
             chmod +x scripts/deploy-prod.sh
 
             GITHUB_ACTOR="${{ github.actor }}" \
             GITHUB_TOKEN="${{ secrets.GITHUB_TOKEN }}" \
             GITHUB_REPOSITORY="${{ github.repository }}" \
-            ENV_FILE_CONTENT="${{ secrets.PROD_ENV_FILE }}" \
-            KC_ADMIN_PASSWORD="${{ secrets.KC_ADMIN_PASSWORD_PROD }}" \
-            KC_HOSTNAME="${{ secrets.KC_HOSTNAME_PROD }}" \
-            KC_DB_USER="${{ secrets.KC_DB_USER_PROD }}" \
-            KC_DB_PASSWORD="${{ secrets.KC_DB_PASSWORD_PROD }}" \
               bash scripts/deploy-prod.sh
