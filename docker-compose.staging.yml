@@ -1,8 +1,8 @@
 version: "3.9"
 
 # ── Staging environment ───────────────────────────────────────────────────────
-#   nginx    → host:8090  (system nginx proxies here for staging subdomain)
-#   keycloak → host:8093  (admin / SSO)
+#   nginx    → host:8094  (system nginx proxies here for staging subdomain)
+#   keycloak → host:8095  (admin / SSO — http://VPS_IP:8095)
 #   raven    → internal only (port 8000 inside the network)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -38,7 +38,7 @@ services:
     image: nginx:1.25-alpine
     container_name: nginx_staging
     ports:
-      - "8090:80"
+      - "8094:80"
     volumes:
       - ./nginx/staging.conf:/etc/nginx/conf.d/default.conf:ro
       - static_staging:/static:ro
@@ -59,7 +59,7 @@ services:
       KC_HOSTNAME_STRICT: "false"
       KC_HTTP_ENABLED: "true"
     ports:
-      - "8093:8080"
+      - "8095:8080"
     volumes:
       - keycloak_staging_data:/opt/keycloak/data
     networks:

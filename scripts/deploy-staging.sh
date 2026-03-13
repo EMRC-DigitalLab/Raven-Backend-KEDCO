@@ -16,7 +16,7 @@ REPO_LOWER=$(echo "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')
 IMAGE="ghcr.io/${REPO_LOWER}/raven:staging"
 COMPOSE_FILE="docker-compose.staging.yml"
 CONTAINER="raven_staging"
-HEALTH_URL="http://localhost:8090/api/auth/token/"
+HEALTH_URL="http://localhost:8094/api/auth/token/"
 MAX_RETRIES=12        # 12 × 5s = 60 seconds
 RETRY_INTERVAL=5
 
