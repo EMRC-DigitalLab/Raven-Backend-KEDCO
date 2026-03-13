@@ -174,6 +174,7 @@ jobs:
             GITHUB_ACTOR="${{ github.actor }}" \
             GITHUB_TOKEN="${{ secrets.GITHUB_TOKEN }}" \
             GITHUB_REPOSITORY="${{ github.repository }}" \
+            ENV_FILE_CONTENT="${{ secrets.STAGING_ENV_FILE }}" \
               bash scripts/deploy-staging.sh
 
 
@@ -207,6 +208,7 @@ jobs:
             GITHUB_ACTOR="${{ github.actor }}" \
             GITHUB_TOKEN="${{ secrets.GITHUB_TOKEN }}" \
             GITHUB_REPOSITORY="${{ github.repository }}" \
+            ENV_FILE_CONTENT="${{ secrets.PROD_ENV_FILE }}" \
             KC_ADMIN_PASSWORD="${{ secrets.KC_ADMIN_PASSWORD_PROD }}" \
             KC_HOSTNAME="${{ secrets.KC_HOSTNAME_PROD }}" \
             KC_DB_USER="${{ secrets.KC_DB_USER_PROD }}" \

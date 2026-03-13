@@ -35,7 +35,11 @@ else
   echo "[deploy-prod] No running container found — fresh deploy."
 fi
 
-# ── 2. Log in to GHCR and pull new image ─────────────────────────────────────
+# ── 2. Write .env from CI secret ─────────────────────────────────────────────
+echo "[deploy-prod] Writing .env..."
+printf '%s' "${ENV_FILE_CONTENT}" > .env
+
+# ── 3. Log in to GHCR and pull new image ─────────────────────────────────────
 echo "[deploy-prod] Logging in to GHCR..."
 echo "${GITHUB_TOKEN}" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
 
