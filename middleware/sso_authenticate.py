@@ -39,10 +39,19 @@ from rest_framework.response import Response
 
 # ── Config ─────────────────────────────────────────────────────────────────
 
-KEYCLOAK_REALM_URL = os.getenv(
-    'KEYCLOAK_REALM_URL',
-    'http://keycloak:8080/realms/KEDCO'
-)
+# Prefer Django settings; fall back to env var for scripts run outside Django
+try:
+    from django.conf import settings as _django_settings
+    KEYCLOAK_REALM_URL = getattr(
+        _django_settings,
+        'KEYCLOAK_REALM_URL',
+        os.getenv('KEYCLOAK_REALM_URL', 'http://31.97.56.29:8083/realms/KEDCO'),
+    )
+except Exception:
+    KEYCLOAK_REALM_URL = os.getenv(
+        'KEYCLOAK_REALM_URL',
+        'http://31.97.56.29:8083/realms/KEDCO',
+    )
 
 # Roles that bypass section checks and see everything in Raven
 FULL_ACCESS_ROLES = {'management', 'super_admin'}
