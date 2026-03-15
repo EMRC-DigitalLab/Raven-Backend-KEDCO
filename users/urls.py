@@ -11,6 +11,14 @@ urlpatterns = [
     path('token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
     path('logout/', views.logout_view, name='logout'),
     path('current-user/', views.current_user, name='current_user'),
+
+    # Direct Keycloak login — frontend sends user to sso/login, Keycloak returns to sso/callback
+    path('sso/login/',    views.sso_login,    name='sso_login'),
+    path('sso/callback/', views.sso_callback, name='sso_callback'),
+
+    # DataNest → Raven SSO handoff
+    # Frontend calls POST /api/auth/sso/exchange with {"code": "<one-time-code>"}
+    path('sso/exchange/', views.sso_exchange, name='sso_exchange'),
     
     # User management
     path('users/', views.UserListCreateView.as_view(), name='user_list_create'),
