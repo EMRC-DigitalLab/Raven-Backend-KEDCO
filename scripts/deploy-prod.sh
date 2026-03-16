@@ -9,10 +9,8 @@
 #   GITHUB_ACTOR         — ghcr.io login username
 #   GITHUB_TOKEN         — ghcr.io login password
 #   GITHUB_REPOSITORY    — e.g. org/repo (used to build image name)
-#   KC_ADMIN_PASSWORD    — Keycloak admin password
-#   KC_HOSTNAME          — Keycloak public hostname
-#   KC_DB_USER           — Keycloak DB user
-#   KC_DB_PASSWORD       — Keycloak DB password
+#
+# Keycloak is shared — running on the DataNest server. No local instance.
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
@@ -46,10 +44,6 @@ docker pull "${IMAGE}"
 echo "[deploy-prod] Starting containers..."
 docker compose -f "${COMPOSE_FILE}" down --remove-orphans 2>/dev/null || true
 GITHUB_REPOSITORY="${REPO_LOWER}" \
-KC_ADMIN_PASSWORD="${KC_ADMIN_PASSWORD}" \
-KC_HOSTNAME="${KC_HOSTNAME}" \
-KC_DB_USER="${KC_DB_USER}" \
-KC_DB_PASSWORD="${KC_DB_PASSWORD}" \
   docker compose -f "${COMPOSE_FILE}" up -d
 
 # ── 4. Health check ───────────────────────────────────────────────────────────
@@ -73,10 +67,6 @@ if [[ "${PASSED}" == "false" ]]; then
   if [[ -n "${ROLLBACK_IMAGE}" ]]; then
     docker tag "ghcr.io/${REPO_LOWER}/raven:rollback-prod" "${IMAGE}"
     GITHUB_REPOSITORY="${REPO_LOWER}" \
-    KC_ADMIN_PASSWORD="${KC_ADMIN_PASSWORD}" \
-    KC_HOSTNAME="${KC_HOSTNAME}" \
-    KC_DB_USER="${KC_DB_USER}" \
-    KC_DB_PASSWORD="${KC_DB_PASSWORD}" \
       docker compose -f "${COMPOSE_FILE}" up -d --remove-orphans
     echo "[deploy-prod] Rolled back to previous image."
   else
