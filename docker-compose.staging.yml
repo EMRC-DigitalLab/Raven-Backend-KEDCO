@@ -1,9 +1,9 @@
 version: "3.9"
 
 # ── Staging environment ───────────────────────────────────────────────────────
-#   nginx    → host:8094  (system nginx proxies here for staging subdomain)
-#   keycloak → host:8095  (admin / SSO — http://VPS_IP:8095)
-#   raven    → internal only (port 8000 inside the network)
+#   nginx → host:8094  (system nginx proxies here for staging subdomain)
+#   raven → internal only (port 8000 inside the network)
+#   Keycloak: uses shared instance at http://31.97.56.29:8083/realms/KEDCO
 # ─────────────────────────────────────────────────────────────────────────────
 
 networks:
@@ -12,7 +12,6 @@ networks:
 
 volumes:
   static_staging:
-  keycloak_staging_data:
 
 services:
 
@@ -24,8 +23,6 @@ services:
       - static_staging:/app/staticfiles
     networks:
       - staging_net
-    depends_on:
-      - keycloak
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "curl -s -o /dev/null http://localhost:8000/api/auth/token/"]
@@ -44,24 +41,6 @@ services:
       - static_staging:/static:ro
     depends_on:
       - raven
-    networks:
-      - staging_net
-    restart: unless-stopped
-
-  keycloak:
-    image: quay.io/keycloak/keycloak:24.0
-    container_name: keycloak_staging
-    command: start-dev
-    environment:
-      KEYCLOAK_ADMIN: ${KC_ADMIN:-admin}
-      KEYCLOAK_ADMIN_PASSWORD: ${KC_ADMIN_PASSWORD}
-      KC_HTTP_PORT: 8080
-      KC_HOSTNAME_STRICT: "false"
-      KC_HTTP_ENABLED: "true"
-    ports:
-      - "8095:8080"
-    volumes:
-      - keycloak_staging_data:/opt/keycloak/data
     networks:
       - staging_net
     restart: unless-stopped
