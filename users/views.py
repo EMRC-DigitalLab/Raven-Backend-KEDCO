@@ -226,88 +226,108 @@ def revoke_temporary_access(request, temp_access_id):
         return Response({'error': 'Temporary access not found'}, status=status.HTTP_404_NOT_FOUND)
 
 
-# ── Direct Keycloak login (Raven → Keycloak → Raven) ─────────────────────────
 
-@api_view(['GET'])
+# ── Raven → DataNest handoff ──────────────────────────────────────────────────
+
+@api_view(['POST'])
 @permission_classes([permissions.AllowAny])
-def sso_login(request):
+def sso_handoff(request):
     """
-    Step 1 of direct Keycloak login.
-    Redirects the browser to Keycloak's login page.
+    Raven → DataNest handoff.
+    Raven frontend calls this with the Keycloak Bearer token.
+    Stores the token against a one-time code (60s TTL).
+    Returns a redirect_url pointing to DataNest frontend with ?code=
 
-    Frontend sends the user here when they click "Login with Keycloak".
-    After login, Keycloak redirects to sso_callback.
+    Request:
+        Authorization: Bearer <keycloak_token>
+
+    Response:
+        { "redirect_url": "<DATANEST_FRONTEND_URL>/home?code=<uuid>" }
     """
-    from urllib.parse import urlencode
-    from django.http import HttpResponseRedirect
+    import uuid
+    from django.core.cache import cache
 
-    params = urlencode({
-        'client_id':     settings.KEYCLOAK_CLIENT_ID,
-        'redirect_uri':  settings.KEYCLOAK_REDIRECT_URI,
-        'response_type': 'code',
-        'scope':         'openid email profile',
+    auth_header = request.headers.get('Authorization', '')
+    if not auth_header.startswith('Bearer '):
+        return Response({'error': 'SSO: No token provided'}, status=status.HTTP_401_UNAUTHORIZED)
+
+    token = auth_header[7:]
+    code = str(uuid.uuid4())
+    cache.set(f'handoff:{code}', token, timeout=60)
+
+    return Response({
+        'redirect_url': f"{settings.DATANEST_FRONTEND_URL}/home?code={code}"
     })
-    return HttpResponseRedirect(f"{settings.KEYCLOAK_AUTH_URL}?{params}")
 
 
-@api_view(['GET'])
+@api_view(['POST'])
 @permission_classes([permissions.AllowAny])
-def sso_callback(request):
+def sso_redeem(request):
     """
-    Step 2 of direct Keycloak login.
-    Keycloak redirects here with ?code= after the user authenticates.
+    Called by DataNest frontend after receiving ?code= from Raven.
+    Exchanges the one-time code for the Keycloak token.
+    Code is deleted immediately after use.
 
-    Exchanges the code for a Keycloak token, validates it, then
-    redirects the user to the Raven frontend with the token.
+    Request:
+        { "code": "<uuid>" }
 
-    Success redirect:
-        {RAVEN_FRONTEND_URL}/auth/callback?token=<access_token>&refresh_token=<refresh_token>
-
-    Error redirect:
-        {RAVEN_FRONTEND_URL}/auth/callback?error=<reason>
+    Response:
+        { "token": "<keycloak_access_token>" }
     """
-    from urllib.parse import urlencode
-    from django.http import HttpResponseRedirect
-    from jose import JWTError
+    from django.core.cache import cache
 
-    frontend_callback = f"{settings.RAVEN_FRONTEND_URL}/auth/callback"
-
-    code = request.GET.get('code')
+    code = request.data.get('code')
     if not code:
-        return HttpResponseRedirect(f"{frontend_callback}?error=no_code")
+        return Response({'error': 'Missing code'}, status=status.HTTP_400_BAD_REQUEST)
 
-    # Exchange authorization code for Keycloak tokens
+    token = cache.get(f'handoff:{code}')
+    if not token:
+        return Response({'error': 'Invalid or expired code'}, status=status.HTTP_401_UNAUTHORIZED)
+
+    cache.delete(f'handoff:{code}')
+    return Response({'token': token})
+
+
+# ── SSO: verify token / get current SSO user ─────────────────────────────────
+
+@api_view(['GET', 'POST'])
+@permission_classes([permissions.AllowAny])
+def sso_me(request):
+    """
+    Accepts a Keycloak Bearer token and returns the mapped Raven user.
+    Equivalent to DataNest's /api/auth/sso/verify and /api/auth/sso/me.
+
+    Usage:
+        GET  /api/auth/sso/me/
+        POST /api/auth/sso/verify/
+        Authorization: Bearer <keycloak_access_token>
+    """
+    from jose import JWTError
+    auth_header = request.headers.get('Authorization', '')
+    if not auth_header.startswith('Bearer '):
+        return Response({'error': 'SSO: No token provided'}, status=status.HTTP_401_UNAUTHORIZED)
+
+    token = auth_header[7:]
     try:
-        token_response = http_client.post(
-            settings.KEYCLOAK_TOKEN_URL,
-            data={
-                'grant_type':    'authorization_code',
-                'client_id':     settings.KEYCLOAK_CLIENT_ID,
-                'client_secret': settings.KEYCLOAK_CLIENT_SECRET,
-                'redirect_uri':  settings.KEYCLOAK_REDIRECT_URI,
-                'code':          code,
-            },
-            timeout=10,
-        )
-    except http_client.exceptions.RequestException:
-        return HttpResponseRedirect(f"{frontend_callback}?error=keycloak_unreachable")
+        payload = _decode_token(token)
+    except JWTError as exc:
+        return Response({'error': f'SSO: {exc}'}, status=status.HTTP_401_UNAUTHORIZED)
 
-    if not token_response.ok:
-        return HttpResponseRedirect(f"{frontend_callback}?error=token_exchange_failed")
+    keycloak_role = payload.get('raven_role', '')
+    mapping = _map_role(keycloak_role)
 
-    token_data    = token_response.json()
-    access_token  = token_data.get('access_token')
-    refresh_token = token_data.get('refresh_token', '')
-
-    # Validate the access token (RS256 via Keycloak public key)
-    try:
-        _decode_token(access_token)
-    except JWTError:
-        return HttpResponseRedirect(f"{frontend_callback}?error=invalid_token")
-
-    # Send user to Raven frontend with the token
-    params = urlencode({'token': access_token, 'refresh_token': refresh_token})
-    return HttpResponseRedirect(f"{frontend_callback}?{params}")
+    return Response({
+        'valid': True,
+        'user': {
+            'id':               payload.get('sub'),
+            'email':            payload.get('email'),
+            'keycloak_role':    keycloak_role,
+            'raven_role':       mapping['raven_role'],
+            'allowed_sections': mapping['allowed_sections'],
+            'full_access':      mapping['full_access'],
+            'sso':              True,
+        }
+    })
 
 
 # ── DataNest → Raven SSO handoff ─────────────────────────────────────────────
