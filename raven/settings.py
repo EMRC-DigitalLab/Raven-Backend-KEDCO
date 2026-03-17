@@ -286,20 +286,8 @@ BASE_URL = config('BASE_URL')
 # Realm URL — used by middleware/sso_authenticate.py to fetch the RS256 public key
 KEYCLOAK_REALM_URL = config('KEYCLOAK_REALM_URL', default='http://31.97.56.29:8083/realms/KEDCO')
 
-# Client credentials for the 'raven' client in Keycloak
-KEYCLOAK_CLIENT_ID = config('KEYCLOAK_CLIENT_ID', default='raven')
-KEYCLOAK_CLIENT_SECRET = config('KEYCLOAK_CLIENT_SECRET', default='')
+# DataNest SSO exchange endpoint — Raven POSTs the one-time code here to get a Keycloak token (DataNest → Raven)
+DATANEST_SSO_URL = config('DATANEST_SSO_URL', default='https://staging.apidatanest.raven-emrc.com/api/auth/sso/exchange')
 
-# Callback URL registered in Keycloak client → Valid Redirect URIs
-KEYCLOAK_REDIRECT_URI = config('KEYCLOAK_REDIRECT_URI', default='http://31.97.56.29:8096/api/auth/sso/callback')
-
-# Raven frontend — backend redirects here after successful Keycloak login
-RAVEN_FRONTEND_URL = config('RAVEN_FRONTEND_URL', default='https://kedco.raven-emrc.com')
-
-# Keycloak OIDC endpoints (derived — no extra env var needed)
-KEYCLOAK_TOKEN_URL = f'{KEYCLOAK_REALM_URL}/protocol/openid-connect/token'
-KEYCLOAK_AUTH_URL  = f'{KEYCLOAK_REALM_URL}/protocol/openid-connect/auth'
-
-# DataNest SSO verify endpoint — Raven forwards the Keycloak Bearer token here
-# DataNest SSO exchange endpoint — Raven POSTs the one-time code here to get a Keycloak token
-DATANEST_SSO_URL = config('DATANEST_SSO_URL', default='https://live.apidatanest.raven-emrc.com/api/auth/sso/exchange')
+# DataNest frontend URL — Raven redirects user here with a one-time code (Raven → DataNest)
+DATANEST_FRONTEND_URL = config('DATANEST_FRONTEND_URL', default='https://staging.apidatanest.raven-emrc.com')
