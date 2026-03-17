@@ -7,7 +7,7 @@ from django.db.models import Q
 from django.utils import timezone
 from rest_framework import generics, permissions, status
 from rest_framework.authtoken.models import Token
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, authentication_classes, permission_classes
 from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
@@ -50,6 +50,7 @@ class IsAdminOrManager(permissions.BasePermission):
 
 
 @api_view(['POST'])
+@authentication_classes([])
 @permission_classes([permissions.AllowAny])
 def login_view(request):
     """Login endpoint that returns JWT tokens"""
@@ -230,6 +231,7 @@ def revoke_temporary_access(request, temp_access_id):
 # ── Raven → DataNest handoff ──────────────────────────────────────────────────
 
 @api_view(['POST'])
+@authentication_classes([])
 @permission_classes([permissions.AllowAny])
 def sso_handoff(request):
     """
@@ -261,6 +263,7 @@ def sso_handoff(request):
 
 
 @api_view(['POST'])
+@authentication_classes([])
 @permission_classes([permissions.AllowAny])
 def sso_redeem(request):
     """
@@ -291,6 +294,7 @@ def sso_redeem(request):
 # ── SSO: verify token / get current SSO user ─────────────────────────────────
 
 @api_view(['GET', 'POST'])
+@authentication_classes([])
 @permission_classes([permissions.AllowAny])
 def sso_me(request):
     """
@@ -333,6 +337,7 @@ def sso_me(request):
 # ── DataNest → Raven SSO handoff ─────────────────────────────────────────────
 
 @api_view(['POST'])
+@authentication_classes([])
 @permission_classes([permissions.AllowAny])
 def sso_exchange(request):
     """
