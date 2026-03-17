@@ -282,6 +282,14 @@ SIMPLE_JWT = {
 
 BASE_URL = config('BASE_URL')
 
+# ── Cache (used for SSO handoff codes) ───────────────────────────────────────
+CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+        'LOCATION': config('REDIS_URL', default='redis://127.0.0.1:6379/2'),
+    }
+}
+
 # ── Keycloak SSO ──────────────────────────────────────────────────────────────
 # Realm URL — used by middleware/sso_authenticate.py to fetch the RS256 public key
 KEYCLOAK_REALM_URL = config('KEYCLOAK_REALM_URL', default='http://31.97.56.29:8083/realms/KEDCO')
