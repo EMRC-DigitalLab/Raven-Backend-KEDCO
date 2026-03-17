@@ -398,7 +398,9 @@ def sso_exchange(request):
             status=status.HTTP_502_BAD_GATEWAY,
         )
 
-    token = datanest_response.json().get('token')
+    exchange_data  = datanest_response.json()
+    token          = exchange_data.get('token')
+    refresh_token  = exchange_data.get('refresh_token', '')
     if not token:
         return Response(
             {'error': 'SSO: No token in exchange response'},
@@ -420,7 +422,8 @@ def sso_exchange(request):
     mapping = _map_role(keycloak_role)
 
     return Response({
-        'token': token,
+        'token':         token,
+        'refresh_token': refresh_token,
         'user': {
             'id':               payload['sub'],
             'email':            payload.get('email'),
