@@ -154,6 +154,7 @@ def _decode_token(token: str) -> dict:
         key,
         algorithms=['RS256'],
         issuer=KEYCLOAK_REALM_URL,
+        options={'verify_aud': False},
     )
 
 
