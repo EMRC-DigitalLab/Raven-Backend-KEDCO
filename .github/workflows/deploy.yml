@@ -274,6 +274,7 @@ jobs:
           E_EX_DB_NAME: ${{ secrets.EX_DB_NAME }}
           E_EX_DB_USER: ${{ secrets.EX_DB_USER }}
           E_EX_DB_PASSWORD: ${{ secrets.EX_DB_PASSWORD }}
+          E_REDIS_URL: ${{ secrets.REDIS_URL }}
           E_EX_DB_HOST: ${{ secrets.EX_DB_HOST }}
           E_EX_DB_PORT: ${{ secrets.EX_DB_PORT }}
         with:
