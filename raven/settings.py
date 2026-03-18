@@ -34,7 +34,7 @@ DEBUG = config('DEBUG', default=False, cast=bool)
 
 ALLOWED_HOSTS = config(
     'ALLOWED_HOSTS',
-    default='localhost,127.0.0.1,31.97.56.29,kedco-raven-backend-updated.onrender.com'
+    default='localhost,127.0.0.1,31.97.56.29,kedco-raven-backend-updated.onrender.com,staging.apiraven.raven-emrc.com,live.apiraven.raven-emrc.com'
 ).split(',')
 
 
@@ -229,7 +229,14 @@ SPECTACULAR_SETTINGS = {
 
 
 CORS_ALLOW_CREDENTIALS = True
-CSRF_TRUSTED_ORIGINS = ['http://localhost:8000', 'https://staging.apiraven.raven-emrc.com', 'https://live.apiraven.raven-emrc.com', 'http://31.97.56.29', 'https://api.raven-emrc.com', 'https://kedco-raven-backend-updated.onrender.com']
+CSRF_TRUSTED_ORIGINS = ['http://localhost:5173',
+                        'http://localhost:8000', 
+                        'https://staging.apiraven.raven-emrc.com', 
+                        'https://live.apiraven.raven-emrc.com', 
+                        'http://31.97.56.29', 
+                        'https://api.raven-emrc.com', 
+                        'https://kedco-raven-backend-updated.onrender.com', 
+                        'https://staging-six-pi.vercel.app']
 
 
 # MIDDLEWARE = [
@@ -243,6 +250,7 @@ CORS_ALLOWED_ORIGINS = [
     "https://kedco.raven-emrc.com",
     "https://staging.apiraven.raven-emrc.com",
     "https://live.apiraven.raven-emrc.com",
+    "https://staging-six-pi.vercel.app"
 ]
 
 
