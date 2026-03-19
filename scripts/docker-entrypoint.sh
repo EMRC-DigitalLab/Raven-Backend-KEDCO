@@ -11,6 +11,9 @@ python manage.py collectstatic --noinput
 echo "[entrypoint] Running database migrations..."
 python manage.py migrate --noinput
 
+echo "[entrypoint] Creating superadmin (if not exists)..."
+python manage.py create_superadmin
+
 echo "[entrypoint] Starting Gunicorn..."
 exec gunicorn raven.wsgi:application \
     --bind 0.0.0.0:8000 \
