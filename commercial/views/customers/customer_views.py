@@ -11,8 +11,9 @@ GET /api/commercial/customers/<id>/
 Full profile for one customer — all readings in the selected period.
 
 GET /api/commercial/customers/top/
-Top N customers by billed amount in the selected period.
+Top or bottom N customers by billed amount in the selected period.
 ?n=10  (default 10, max 50)
+?order=top|bottom  (default top)
 """
 
 from decimal import Decimal
@@ -107,7 +108,6 @@ def customer_list(request):
         state    = district.state if district else None
         results.append({
             'id':               c.id,
-            'external_id':      c.external_id,
             'account_no':       c.account_no,
             'meter_number':     c.meter_number,
             'customer_name':    c.customer_name,
@@ -203,7 +203,6 @@ def customer_detail(request, pk):
         },
         'customer': {
             'id':               customer.id,
-            'external_id':      customer.external_id,
             'account_no':       customer.account_no,
             'meter_number':     customer.meter_number,
             'customer_name':    customer.customer_name,
@@ -221,12 +220,17 @@ def customer_detail(request, pk):
 
 @api_view(['GET'])
 def top_customers(request):
-    """Top N customers by billed amount in the selected period."""
+    """Top or bottom N customers by billed amount in the selected period.
+    ?order=top (default) or ?order=bottom
+    """
     date_range = parse_date_range(request)
     try:
         n = min(50, max(1, int(request.GET.get('n', 10))))
     except ValueError:
         n = 10
+
+    order  = request.GET.get('order', 'top').lower()
+    bottom = order == 'bottom'
 
     filter_kwargs = reading_filter_kwargs(request, date_range)
     # Optional scope
@@ -240,18 +244,19 @@ def top_customers(request):
     if state_slug:
         filter_kwargs['customer__feeder__business_district__state__slug'] = state_slug
 
-    # Get top N customer IDs by total billed_consumption in the period
-    top_ids = list(
+    # Get top/bottom N customer IDs by total billed_consumption in the period
+    db_order = 'total_kwh' if bottom else '-total_kwh'
+    ranked_ids = list(
         MeterReading.objects
         .filter(**filter_kwargs, billed_consumption__isnull=False)
         .values('customer_id')
         .annotate(total_kwh=Sum('billed_consumption'))
-        .order_by('-total_kwh')[:n]
+        .order_by(db_order)[:n]
         .values_list('customer_id', flat=True)
     )
 
     customers = CommercialCustomer.objects.filter(
-        id__in=top_ids
+        id__in=ranked_ids
     ).select_related('feeder__business_district__state')
 
     readings_qs = MeterReading.objects.filter(**reading_filter_kwargs(request, date_range))
@@ -274,8 +279,8 @@ def top_customers(request):
             'period_billing': billing,
         })
 
-    # Sort by total_billed descending (accurate after VAT computation)
-    ranked.sort(key=lambda x: x['period_billing']['total_billed'], reverse=True)
+    # Final sort after VAT is applied
+    ranked.sort(key=lambda x: x['period_billing']['total_billed'], reverse=not bottom)
 
     return Response({
         'period': {
@@ -283,5 +288,6 @@ def top_customers(request):
             'end_date': str(date_range['end_date']), 'label': date_range['label'], 'days': date_range['days'],
         },
         'n':         n,
+        'order':     order,
         'customers': ranked,
     })

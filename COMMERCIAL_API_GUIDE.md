@@ -296,11 +296,15 @@ GET /api/commercial/customers/
 | Parameter | Description |
 |---|---|
 | `search` | Search by customer name, account number, or meter number |
-| `feeder` | Feeder slug — e.g. `KN-TAM-COC` |
+| `feeder` | Feeder slug — e.g. `KN-TAM-COC` (**use this to show customers for a feeder**) |
 | `district` | District slug — e.g. `KN-IDU` |
 | `state` | State slug — e.g. `KN` |
 | `page` | Page number (default `1`) |
 | `page_size` | Results per page (default `50`, max `200`) |
+
+> **Feeder drill-down:** When a user clicks a feeder in the UI, call:
+> `GET /api/commercial/customers/?feeder=<feeder-slug>`
+> This returns all customers on that feeder for the selected period.
 
 #### Example requests
 ```
@@ -323,7 +327,6 @@ GET /api/commercial/customers/?feeder=KN-TAM-COC&mode=monthly&year=2026&month=3
   "customers": [
     {
       "id":               "1011e552-e6b0-4c46-b342-4ea0abaa9b3f",
-      "external_id":      "32214922-596f-47f8-b40b-e9b98f8fe6c2",
       "account_no":       "32/25/90/0517-01",
       "meter_number":     "252424078",
       "customer_name":    "(FATA TANNING LIMITED) WEST AFRICAN TANNERY",
@@ -404,22 +407,32 @@ GET /api/commercial/customers/<id>/
 
 ---
 
-### Top N customers
+### Top / Bottom N customers
 ```
 GET /api/commercial/customers/top/
 GET /api/commercial/customers/top/?n=20
 GET /api/commercial/customers/top/?n=10&state=KN&type=MDI
+GET /api/commercial/customers/top/?n=10&order=bottom
+GET /api/commercial/customers/top/?n=20&order=bottom&feeder=KN-TAM-COC
 ```
 
-| Parameter | Default | Max |
-|---|---|---|
-| `n` | `10` | `50` |
+| Parameter | Default | Options | Max |
+|---|---|---|---|
+| `n` | `10` | — | `50` |
+| `order` | `top` | `top` \| `bottom` | — |
+| `feeder` | — | Feeder slug | — |
+| `district` | — | District slug | — |
+| `state` | — | State slug | — |
+
+- `order=top` → highest billed customers (defaulters who consume most)
+- `order=bottom` → lowest billed customers (potential non-billers / flat-liners)
 
 #### Response
 ```json
 {
   "period": { ... },
   "n": 10,
+  "order": "top",
   "customers": [
     {
       "id":            "uuid",
@@ -443,7 +456,7 @@ GET /api/commercial/customers/top/?n=10&state=KN&type=MDI
   ]
 }
 ```
-> **Note:** Results are sorted by `period_billing.total_billed` descending.
+> Results sorted by `period_billing.total_billed` — descending for `top`, ascending for `bottom`.
 
 ---
 
