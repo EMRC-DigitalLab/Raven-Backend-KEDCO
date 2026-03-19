@@ -110,6 +110,10 @@ def _state_metrics(state, customers_qs, readings_qs, date_range):
                 float(daily_delivered_mwh), unit='MWh/day', mode='estimated',
                 explanation='Daily energy delivered estimate for this state — avg of last 90 days of feeder technical readings.',
             ),
+            'energy_delivered_kwh': metric(
+                delivered_kwh_period, unit='kWh', mode='estimated',
+                explanation='Total energy delivered for the period in this state — daily_energy_delivered_mwh × 1000 × days.',
+            ),
             'energy_delivered_vs_billed': metric(
                 {
                     'delivered_kwh':        delivered_kwh_period,
@@ -206,6 +210,7 @@ def all_states(request):
                 'total_projected_billed_kwh': metric(float(b['total_billed_kwh'] + e['estimated_kwh']), unit='kWh', mode='estimated', explanation='Actual + estimated energy for this state.'),
                 'daily_billed_kwh_estimate': metric(float(daily_kwh), unit='kWh/day', mode='estimated', explanation='Daily energy billed estimate from actual readings in this state.'),
                 'daily_energy_delivered_mwh': metric(float(daily_mwh), unit='MWh/day', mode='estimated', explanation='Daily energy delivered estimate for this state — avg of last 90 days of feeder technical readings.'),
+                'energy_delivered_kwh': metric(delivered_kwh, unit='kWh', mode='estimated', explanation='Total energy delivered for the period in this state — daily_energy_delivered_mwh × 1000 × days.'),
                 'energy_delivered_vs_billed': metric(
                     {'delivered_kwh': delivered_kwh, 'actual_billed_kwh': float(b['total_billed_kwh']),
                      'projected_billed_kwh': float(b['total_billed_kwh'] + e['estimated_kwh']),

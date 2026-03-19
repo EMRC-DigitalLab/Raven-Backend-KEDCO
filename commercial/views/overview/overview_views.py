@@ -141,6 +141,12 @@ def commercial_overview(request):
                 mode='estimated',
                 explanation='Daily energy delivered estimate — average of last 90 days of feeder technical readings. Marked estimated because technical data does not yet cover the current period.',
             ),
+            'energy_delivered_kwh': metric(
+                delivered_kwh_period,
+                unit='kWh',
+                mode='estimated',
+                explanation='Total energy delivered for the period — daily_energy_delivered_mwh × 1000 × days.',
+            ),
             'energy_delivered_vs_billed': metric(
                 {
                     'delivered_kwh':        delivered_kwh_period,
