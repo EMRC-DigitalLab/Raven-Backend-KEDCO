@@ -95,4 +95,5 @@ media
 
 backend.zip
 setup_cron.md
-api_documentation.mdstaticfiles/
+api_documentation.md
+staticfiles/
