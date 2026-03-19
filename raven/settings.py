@@ -146,14 +146,15 @@ DATABASES = {
         'PASSWORD': db_password,
         'HOST': db_host,
         'PORT': db_port,
+        'CONN_MAX_AGE': 60,  # reuse connections for 60s — eliminates reconnect overhead
     },
     'external': {
         'ENGINE': 'django.db.backends.mysql',
-        'NAME': config('EX_DB_NAME', default='dataNestDB_KEDCO'),
-        'USER': config('EX_DB_USER', default='root'),
-        'PASSWORD': config('EX_DB_PASSWORD'),
-        'HOST': config('EX_DB_HOST'),
-        'PORT': config('EX_DB_PORT', default='3306'),
+        'NAME': config(f'{_DB}_EX_DB_NAME', default='dataNestDB_KEDCO'),
+        'USER': config(f'{_DB}_EX_DB_USER', default='root'),
+        'PASSWORD': config(f'{_DB}_EX_DB_PASSWORD'),
+        'HOST': config(f'{_DB}_EX_DB_HOST'),
+        'PORT': config(f'{_DB}_EX_DB_PORT', default='3306'),
         'OPTIONS': {
             'charset': 'utf8mb4',
         },

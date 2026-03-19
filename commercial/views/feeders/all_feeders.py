@@ -1,52 +1,296 @@
-# commercial/views/feeders/all_feeders.py
-from datetime import date
+"""
+commercial/views/feeders/all_feeders.py
 
-from dateutil.relativedelta import relativedelta  # type: ignore
-from django.db.models import Q
+GET /api/commercial/feeders/
+Returns all feeders with commercial metrics.
+Optional filters: ?state=<slug>  ?district=<slug>
+
+GET /api/commercial/feeders/<slug>/
+Returns full metrics for a single feeder.
+"""
+
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
+from rest_framework import status
 
-from commercial.models import *
-from commercial.serializers import *
-from common.models import Feeder, State
+from commercial.analytics_utils import (
+    calc_arpu,
+    calc_atc_loss,
+    calc_billing,
+    calc_coverage,
+    calc_daily_estimate,
+    calc_energy_delivered,
+    calc_estimated_billing,
+    customer_filter_kwargs,
+    metric,
+    parse_date_range,
+    reading_filter_kwargs,
+)
+from commercial.bulk_analytics import (
+    bulk_billing,
+    bulk_billing_by_type,
+    bulk_customer_types,
+    bulk_coverage,
+    bulk_estimated_billing,
+    bulk_energy_delivered,
+    bulk_managers,
+    empty_billing,
+    empty_coverage,
+    empty_estimated,
+    ZERO,
+)
+from commercial.models import CommercialCustomer, MeterManager, MeterReading
+from common.models import Feeder
 
-from .utils import calculate_atcc_metrics
+
+def _feeder_metrics(feeder, customers_qs, readings_qs, date_range):
+    """
+    Compute all commercial metrics for a single feeder.
+    customers_qs and readings_qs are already globally filtered.
+    """
+    c_qs = customers_qs.filter(feeder=feeder)
+    r_qs = readings_qs.filter(customer__feeder=feeder)
+
+    total_mdi  = c_qs.filter(customer_type='MDI').count()
+    total_mdni = c_qs.filter(customer_type='MDNI').count()
+
+    billing   = calc_billing(r_qs)
+    daily_kwh = calc_daily_estimate(billing, date_range)
+    coverage  = calc_coverage(c_qs, r_qs)
+    estimated = calc_estimated_billing(c_qs, coverage['read_ids'], date_range)
+
+    mdi_billing  = calc_billing(r_qs.filter(reading_type='MDI'))
+    mdni_billing = calc_billing(r_qs.filter(reading_type='MDNI'))
+    total_rev    = billing['total_billed_amount']
+    mdi_split  = round(float(mdi_billing['total_billed_amount']) / float(total_rev) * 100, 2) if total_rev else 0
+    mdni_split = round(float(mdni_billing['total_billed_amount']) / float(total_rev) * 100, 2) if total_rev else 0
+
+    daily_delivered_mwh = calc_energy_delivered([feeder.id])
+    delivered_kwh_period = round(float(daily_delivered_mwh) * 1000 * date_range['days'], 2)
+
+    billing_efficiency, atc_loss = calc_atc_loss(
+        billing['total_billed_kwh'], daily_delivered_mwh, date_range['days']
+    )
+    arpu = calc_arpu(billing['total_billed_amount'], coverage['read'])
+
+    mdi_mgrs  = MeterManager.objects.filter(
+        manager_type='MDI', assignments__feeder=feeder
+    ).distinct().count()
+    mdni_mgrs = MeterManager.objects.filter(
+        manager_type='MDNI', assignments__feeder=feeder
+    ).distinct().count()
+
+    district = feeder.business_district
+    return {
+        'feeder': {
+            'slug':          feeder.slug,
+            'name':          feeder.name,
+            'voltage_level': feeder.voltage_level,
+            'feeder_class':  feeder.feeder_class,
+            'district': {
+                'slug': district.slug,
+                'name': district.name,
+            } if district else None,
+            'state': {
+                'slug': district.state.slug,
+                'name': district.state.name,
+            } if district and district.state else None,
+        },
+        'customers': {
+            'total': metric(total_mdi + total_mdni, explanation='Total registered MDI and MDNI customers on this feeder.'),
+            'mdi':   metric(total_mdi,  explanation='MDI customers on this feeder.'),
+            'mdni':  metric(total_mdni, explanation='MDNI customers on this feeder.'),
+        },
+        'energy': {
+            'actual_billed_kwh': metric(
+                float(billing['total_billed_kwh']), unit='kWh',
+                explanation='Actual energy billed from real readings on this feeder for this period.',
+            ),
+            'estimated_billed_kwh': metric(
+                float(estimated['estimated_kwh']), unit='kWh', mode='estimated',
+                explanation='Estimated energy for unread customers on this feeder.',
+            ),
+            'total_projected_billed_kwh': metric(
+                float(billing['total_billed_kwh'] + estimated['estimated_kwh']), unit='kWh', mode='estimated',
+                explanation='Actual + estimated energy for this feeder.',
+            ),
+            'daily_billed_kwh_estimate': metric(
+                float(daily_kwh), unit='kWh/day', mode='estimated',
+                explanation='Daily energy billed estimate from actual readings on this feeder.',
+            ),
+            'daily_energy_delivered_mwh': metric(
+                float(daily_delivered_mwh), unit='MWh/day', mode='estimated',
+                explanation='Daily energy delivered estimate for this feeder — avg of last 90 days of technical readings.',
+            ),
+            'energy_delivered_vs_billed': metric(
+                {
+                    'delivered_kwh':        delivered_kwh_period,
+                    'actual_billed_kwh':    float(billing['total_billed_kwh']),
+                    'projected_billed_kwh': float(billing['total_billed_kwh'] + estimated['estimated_kwh']),
+                    'gap_kwh':              round(delivered_kwh_period - float(billing['total_billed_kwh']), 2),
+                },
+                unit='kWh', mode='estimated',
+                explanation='Energy delivered vs billed for this feeder. Gap = delivered minus actual billed.',
+            ),
+        },
+        'revenue': {
+            'actual_energy_charge': metric(float(billing['energy_charge']), unit='NGN', explanation='Actual energy charge from real readings on this feeder.'),
+            'estimated_energy_charge': metric(float(estimated['estimated_energy_charge']), unit='NGN', mode='estimated', explanation='Estimated energy charge for unread customers on this feeder.'),
+            'actual_vat': metric(float(billing['vat']), unit='NGN', explanation='7.5% VAT on actual energy charge on this feeder.'),
+            'actual_total_billed': metric(float(billing['total_billed_amount']), unit='NGN', explanation='Total billed from real readings on this feeder including VAT.'),
+            'estimated_revenue': metric(float(estimated['estimated_revenue']), unit='NGN', mode='estimated', explanation='Estimated revenue at risk from unread customers on this feeder.'),
+            'total_projected_revenue': metric(
+                float(billing['total_billed_amount'] + estimated['estimated_revenue']), unit='NGN', mode='estimated',
+                explanation='Total projected revenue for this feeder — actual + estimated.',
+            ),
+            'mdi_revenue_split':  metric(mdi_split,  unit='%', explanation='% of actual billed revenue from MDI customers on this feeder.'),
+            'mdni_revenue_split': metric(mdni_split, unit='%', explanation='% of actual billed revenue from MDNI customers on this feeder.'),
+            'arpu': metric(float(arpu), unit='NGN', explanation='Average Revenue Per Customer on this feeder.'),
+        },
+        'performance': {
+            'coverage_rate':    metric(coverage['rate'], unit='%', explanation='% of customers on this feeder with a reading in this period.'),
+            'customers_read':   metric(coverage['read'], explanation='Customers read on this feeder in this period.'),
+            'unread_customers': metric(coverage['unread'], explanation='Customers not read on this feeder in this period.'),
+            'billing_efficiency': metric(billing_efficiency, unit='%', mode='estimated', explanation='Energy billed / energy delivered x 100 for this feeder.'),
+            'atc_loss': metric(atc_loss, unit='%', mode='estimated', explanation='AT&C loss for this feeder — 100 minus billing efficiency.'),
+        },
+        'managers': {
+            'total_mdi_managers':  metric(mdi_mgrs,  explanation='MDI field officers assigned to this feeder.'),
+            'total_mdni_managers': metric(mdni_mgrs, explanation='MDNI field officers assigned to this feeder.'),
+        },
+    }
 
 
-@api_view(["GET"])
-def feeders_by_location_view(request):
-    state_name = request.query_params.get("state")
-    district_name = request.query_params.get("business_district")
-    year = int(request.query_params.get("year", date.today().year))
-    month = int(request.query_params.get("month", date.today().month))
-    start_date = date(year, month, 1)
-    end_date = start_date + relativedelta(months=1)
+@api_view(['GET'])
+def all_feeders(request):
+    """List all feeders with commercial metrics — fixed ~13 queries total."""
+    date_range   = parse_date_range(request)
+    customers_qs = CommercialCustomer.objects.filter(**customer_filter_kwargs(request))
+    readings_qs  = MeterReading.objects.filter(**reading_filter_kwargs(request, date_range))
 
-    filters = Q()
+    feeders_qs = Feeder.objects.exclude(
+        business_district__state__name='Test State'
+    ).select_related('business_district__state').order_by('name')
 
-    if district_name:
-        filters = Q(business_district__name__iexact=district_name)
-    elif state_name:
-        state = State.objects.filter(name__iexact=state_name).first()
-        if not state:
-            return Response({"error": "Invalid state"}, status=400)
-        filters = Q(business_district__state=state)
+    state_slug    = request.GET.get('state', '').strip()
+    district_slug = request.GET.get('district', '').strip()
+    if state_slug:
+        feeders_qs = feeders_qs.filter(business_district__state__slug=state_slug)
+    if district_slug:
+        feeders_qs = feeders_qs.filter(business_district__slug=district_slug)
+    feeders = list(feeders_qs)
 
-    feeders = Feeder.objects.filter(filters)
-    result = []
+    # ── feeder_id IS the dimension — identity map, no extra query ────────────
+    feeder_ids = [f.id for f in feeders]
+    f2d = {fid: fid for fid in feeder_ids}
 
+    billing_data   = bulk_billing(readings_qs, f2d)
+    type_billing   = bulk_billing_by_type(readings_qs, f2d)
+    ctype_counts   = bulk_customer_types(customers_qs, f2d)
+    coverage_data  = bulk_coverage(customers_qs, readings_qs, f2d)
+    estimated_data = bulk_estimated_billing(customers_qs, coverage_data, date_range, f2d)
+    managers_data  = bulk_managers(f2d)
+    energy_data    = bulk_energy_delivered(feeder_ids)  # feeder_to_dim=None → identity
+
+    # ── Assemble ──────────────────────────────────────────────────────────────
+    days    = date_range['days']
+    results = []
     for feeder in feeders:
-        metrics = calculate_atcc_metrics(feeder, start_date, end_date)
+        fid  = feeder.id
+        b    = billing_data.get(fid, empty_billing())
+        e    = estimated_data.get(fid, empty_estimated())
+        cov  = coverage_data.get(fid, empty_coverage())
+        ct   = ctype_counts.get(fid, {'MDI': 0, 'MDNI': 0})
+        mgrs = managers_data.get(fid, {'mdi': 0, 'mdni': 0})
 
-        result.append({
-            "name": feeder.name,
-            "slug": feeder.slug,
-            "voltage_level": feeder.voltage_level,
-            "business_district": {
-                "name": feeder.business_district.name if feeder.business_district else None,
-                "slug": feeder.business_district.slug if feeder.business_district else None,
+        daily_mwh     = energy_data.get(fid, ZERO)
+        delivered_kwh = round(float(daily_mwh) * 1000 * days, 2)
+        daily_kwh     = round(float(b['total_billed_kwh']) / days, 4) if days else 0
+
+        total_rev  = b['total_billed_amount']
+        mdi_amt    = type_billing.get((fid, 'MDI'),  ZERO)
+        mdni_amt   = type_billing.get((fid, 'MDNI'), ZERO)
+        mdi_split  = round(float(mdi_amt)  / float(total_rev) * 100, 2) if total_rev else 0
+        mdni_split = round(float(mdni_amt) / float(total_rev) * 100, 2) if total_rev else 0
+
+        billing_eff, atc_loss = calc_atc_loss(b['total_billed_kwh'], daily_mwh, days)
+        arpu = calc_arpu(b['total_billed_amount'], cov['read'])
+
+        district = feeder.business_district
+        results.append({
+            'feeder': {
+                'slug': feeder.slug, 'name': feeder.name,
+                'voltage_level': feeder.voltage_level, 'feeder_class': feeder.feeder_class,
+                'district': {'slug': district.slug, 'name': district.name} if district else None,
+                'state': {'slug': district.state.slug, 'name': district.state.name} if district and district.state else None,
             },
-            **metrics  # Unpack and merge the calculated metrics directly into the top-level dict
+            'customers': {
+                'total': metric(ct['MDI'] + ct['MDNI'], explanation='Total registered MDI and MDNI customers on this feeder.'),
+                'mdi':   metric(ct['MDI'],              explanation='MDI customers on this feeder.'),
+                'mdni':  metric(ct['MDNI'],             explanation='MDNI customers on this feeder.'),
+            },
+            'energy': {
+                'actual_billed_kwh':          metric(float(b['total_billed_kwh']), unit='kWh', explanation='Actual energy billed from real readings on this feeder for this period.'),
+                'estimated_billed_kwh':       metric(float(e['estimated_kwh']), unit='kWh', mode='estimated', explanation='Estimated energy for unread customers on this feeder.'),
+                'total_projected_billed_kwh': metric(float(b['total_billed_kwh'] + e['estimated_kwh']), unit='kWh', mode='estimated', explanation='Actual + estimated energy for this feeder.'),
+                'daily_billed_kwh_estimate':  metric(float(daily_kwh), unit='kWh/day', mode='estimated', explanation='Daily energy billed estimate from actual readings on this feeder.'),
+                'daily_energy_delivered_mwh': metric(float(daily_mwh), unit='MWh/day', mode='estimated', explanation='Daily energy delivered estimate for this feeder — avg of last 90 days of technical readings.'),
+                'energy_delivered_vs_billed': metric(
+                    {'delivered_kwh': delivered_kwh, 'actual_billed_kwh': float(b['total_billed_kwh']),
+                     'projected_billed_kwh': float(b['total_billed_kwh'] + e['estimated_kwh']),
+                     'gap_kwh': round(delivered_kwh - float(b['total_billed_kwh']), 2)},
+                    unit='kWh', mode='estimated', explanation='Energy delivered vs billed for this feeder. Gap = delivered minus actual billed.',
+                ),
+            },
+            'revenue': {
+                'actual_energy_charge':    metric(float(b['energy_charge']), unit='NGN', explanation='Actual energy charge from real readings on this feeder.'),
+                'estimated_energy_charge': metric(float(e['estimated_energy_charge']), unit='NGN', mode='estimated', explanation='Estimated energy charge for unread customers on this feeder.'),
+                'actual_vat':              metric(float(b['vat']), unit='NGN', explanation='7.5% VAT on actual energy charge on this feeder.'),
+                'actual_total_billed':     metric(float(b['total_billed_amount']), unit='NGN', explanation='Total billed from real readings on this feeder including VAT.'),
+                'estimated_revenue':       metric(float(e['estimated_revenue']), unit='NGN', mode='estimated', explanation='Estimated revenue at risk from unread customers on this feeder.'),
+                'total_projected_revenue': metric(float(b['total_billed_amount'] + e['estimated_revenue']), unit='NGN', mode='estimated', explanation='Total projected revenue for this feeder — actual + estimated.'),
+                'mdi_revenue_split':       metric(mdi_split,   unit='%', explanation='% of actual billed revenue from MDI customers on this feeder.'),
+                'mdni_revenue_split':      metric(mdni_split,  unit='%', explanation='% of actual billed revenue from MDNI customers on this feeder.'),
+                'arpu':                    metric(float(arpu), unit='NGN', explanation='Average Revenue Per Customer on this feeder.'),
+            },
+            'performance': {
+                'coverage_rate':      metric(cov['rate'],  unit='%', explanation='% of customers on this feeder with a reading in this period.'),
+                'customers_read':     metric(cov['read'],            explanation='Customers read on this feeder in this period.'),
+                'unread_customers':   metric(cov['unread'],          explanation='Customers not read on this feeder in this period.'),
+                'billing_efficiency': metric(billing_eff, unit='%', mode='estimated', explanation='Energy billed / energy delivered x 100 for this feeder.'),
+                'atc_loss':           metric(atc_loss,   unit='%', mode='estimated', explanation='AT&C loss for this feeder — 100 minus billing efficiency.'),
+            },
+            'managers': {
+                'total_mdi_managers':  metric(mgrs['mdi'],  explanation='MDI field officers assigned to this feeder.'),
+                'total_mdni_managers': metric(mgrs['mdni'], explanation='MDNI field officers assigned to this feeder.'),
+            },
         })
 
-    return Response(result)
+    return Response({
+        'period': {
+            'mode': date_range['mode'], 'start_date': str(date_range['start_date']),
+            'end_date': str(date_range['end_date']), 'label': date_range['label'], 'days': date_range['days'],
+        },
+        'count':   len(results),
+        'feeders': results,
+    })
+
+
+@api_view(['GET'])
+def single_feeder(request, slug):
+    """Full commercial metrics for one feeder."""
+    try:
+        feeder = Feeder.objects.select_related('business_district__state').get(slug=slug)
+    except Feeder.DoesNotExist:
+        return Response({'error': f'Feeder "{slug}" not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+    date_range   = parse_date_range(request)
+    customers_qs = CommercialCustomer.objects.filter(**customer_filter_kwargs(request))
+    readings_qs  = MeterReading.objects.filter(**reading_filter_kwargs(request, date_range))
+
+    data = _feeder_metrics(feeder, customers_qs, readings_qs, date_range)
+    data['period'] = {
+        'mode': date_range['mode'], 'start_date': str(date_range['start_date']),
+        'end_date': str(date_range['end_date']), 'label': date_range['label'], 'days': date_range['days'],
+    }
+    return Response(data)
