@@ -70,6 +70,11 @@ jobs:
       EX_DB_PASSWORD: mysql_test
       EX_DB_HOST: localhost
       EX_DB_PORT: "3306"
+      STAGING_EX_DB_NAME: dataNestDB_KEDCO
+      STAGING_EX_DB_USER: root
+      STAGING_EX_DB_PASSWORD: mysql_test
+      STAGING_EX_DB_HOST: localhost
+      STAGING_EX_DB_PORT: "3306"
       BASE_URL: "http://localhost:8000"
       VISUALIZATION_API_URL: "http://localhost:8000"
       KEYCLOAK_REALM_URL: "http://localhost:8091/realms/KEDCO"

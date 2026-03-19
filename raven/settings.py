@@ -152,8 +152,8 @@ DATABASES = {
         'ENGINE': 'django.db.backends.mysql',
         'NAME': config(f'{_DB}_EX_DB_NAME', default='dataNestDB_KEDCO'),
         'USER': config(f'{_DB}_EX_DB_USER', default='root'),
-        'PASSWORD': config(f'{_DB}_EX_DB_PASSWORD'),
-        'HOST': config(f'{_DB}_EX_DB_HOST'),
+        'PASSWORD': config(f'{_DB}_EX_DB_PASSWORD', default=''),
+        'HOST': config(f'{_DB}_EX_DB_HOST', default=''),
         'PORT': config(f'{_DB}_EX_DB_PORT', default='3306'),
         'OPTIONS': {
             'charset': 'utf8mb4',
