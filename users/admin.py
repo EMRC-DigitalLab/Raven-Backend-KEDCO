@@ -46,17 +46,12 @@ class PermissionAdmin(admin.ModelAdmin):
     search_fields = ['name', 'codename']
 
 
-class PermissionInline(admin.TabularInline):
-    model = UserSectionAccess.permissions.through
-    extra = 1
-
-
 @admin.register(UserSectionAccess)
 class UserSectionAccessAdmin(admin.ModelAdmin):
     list_display = ['user', 'section', 'is_manager', 'granted_by', 'is_active', 'granted_at']
     list_filter = ['section', 'is_manager', 'is_active', 'granted_at']
     search_fields = ['user__username', 'user__email', 'section__name']
-    inlines = [PermissionInline]
+    filter_horizontal = ['permissions']
 
 
 @admin.register(TemporaryAccess)
