@@ -1,7 +1,7 @@
 # KEDCO Raven — Commercial Analytics API
 ### Frontend Integration Guide
 
-**Base URL (staging):** `https://staging.yourdomain.com/api/commercial/`
+**Base URL (staging):** `https://staging.apiraven.raven-emrc.com/api/commercial/`
 **Auth:** Bearer token in `Authorization` header (same as existing Raven auth)
 **All responses:** `application/json`
 
@@ -16,8 +16,9 @@
 6. [Feeders](#6-feeders)
 7. [Service Bands](#7-service-bands)
 8. [Customers](#8-customers)
-9. [Data Modes — actual vs estimated](#9-data-modes--actual-vs-estimated)
-10. [KPI Reference](#10-kpi-reference)
+9. [Trend — Last 4 Periods](#9-trend--last-4-periods)
+10. [Data Modes](#10-data-modes)
+11. [KPI Reference](#11-kpi-reference)
 
 ---
 
@@ -34,14 +35,18 @@ These work on **every** endpoint unless stated otherwise.
 | `feeder_type` | `11kv` `33kv` | *(all)* | **Global filter.** Scopes the entire response to feeders of a specific voltage level. Applies at all levels — overview, states, districts, feeders, bands, and customers. |
 | `type` | `MDI` `MDNI` | *(all)* | **Sub-level filter.** Use when drilling into a specific customer segment within a geographic scope (e.g. MDI customers in Kano, or MDNI customers on a specific feeder). Not intended for top-level overview. |
 
+> **MDI** = Maximum Demand Industrial. **MDNI** = Non Maximum Demand Industrial.
+
 ### Time Mode Examples
 ```
-?mode=monthly&year=2026&month=3          → March 2026
+?mode=monthly&year=2026&month=1          → January 2026
 ?mode=daily&from_date=2026-03-15         → March 15 2026
 ?mode=weekly&from_date=2026-03-10        → Week starting March 10
 ?mode=yearly&year=2026                   → Full year 2026
-?mode=monthly&year=2026&month=3&type=MDI → March 2026, MDI customers only
+?mode=monthly&year=2026&month=1&type=MDI → January 2026, MDI customers only
 ```
+
+> **Important:** Always pass an explicit period. Defaulting to the current month will return 0 for all metrics if readings haven't been submitted yet for this month.
 
 ---
 
@@ -62,10 +67,10 @@ These work on **every** endpoint unless stated otherwise.
 |---|---|---|
 | `value` | `number` or `object` | The KPI value |
 | `unit` | `string` | `""` `"kWh"` `"kWh/day"` `"MWh/day"` `"NGN"` `"%"` |
-| `mode` | `"actual"` or `"estimated"` | Whether this is real data or a projection |
-| `explanation` | `string` | Always present — human-readable description for tooltips |
+| `mode` | `string` | See [Data Modes](#10-data-modes) |
+| `explanation` | `string` | Always present — use as tooltip text on every KPI card |
 
-> **UI Tip:** Use `mode === "estimated"` to visually flag values (e.g. italic, dashed border, ≈ prefix). Never hide the `explanation` — show it as a tooltip on every KPI card.
+> **UI Tip:** Use `mode` to visually differentiate values. Show `"actual"` as solid/confirmed, flag `"estimated"` with ≈ or dashed border, and show `"meter"` / `"system"` / `"mixed"` as a small badge on energy delivered metrics.
 
 ---
 
@@ -82,10 +87,10 @@ GET /api/commercial/overview/
 {
   "period": {
     "mode": "monthly",
-    "start_date": "2026-03-01",
-    "end_date": "2026-03-19",
-    "label": "March 2026",
-    "days": 19
+    "start_date": "2026-01-01",
+    "end_date": "2026-01-31",
+    "label": "January 2026",
+    "days": 31
   },
   "customers": {
     "total":  { "value": 1871, "unit": "", "mode": "actual", "explanation": "..." },
@@ -93,42 +98,44 @@ GET /api/commercial/overview/
     "mdni":   { "value": 714,  "unit": "", "mode": "actual", "explanation": "..." }
   },
   "energy": {
-    "actual_billed_kwh":          { "value": 50.0,           "unit": "kWh",     "mode": "actual",     "explanation": "..." },
-    "estimated_billed_kwh":       { "value": 118375736.21,   "unit": "kWh",     "mode": "estimated",  "explanation": "..." },
-    "total_projected_billed_kwh": { "value": 118375786.21,   "unit": "kWh",     "mode": "estimated",  "explanation": "..." },
-    "daily_billed_kwh_estimate":  { "value": 2.6316,         "unit": "kWh/day", "mode": "estimated",  "explanation": "..." },
-    "daily_energy_delivered_mwh": { "value": 24400.2391,     "unit": "MWh/day", "mode": "estimated",  "explanation": "..." },
+    "energy_consumed_kwh":        { "value": 35069892.61,  "unit": "kWh",     "mode": "actual",    "explanation": "..." },
+    "actual_billed_kwh":          { "value": 35069892.61,  "unit": "kWh",     "mode": "actual",    "explanation": "..." },
+    "estimated_billed_kwh":       { "value": 0.0,          "unit": "kWh",     "mode": "estimated", "explanation": "..." },
+    "total_projected_billed_kwh": { "value": 35069892.61,  "unit": "kWh",     "mode": "estimated", "explanation": "..." },
+    "daily_billed_kwh_estimate":  { "value": 1131931.0,    "unit": "kWh/day", "mode": "estimated", "explanation": "..." },
+    "daily_energy_delivered_mwh": { "value": 502.5,        "unit": "MWh/day", "mode": "mixed",     "explanation": "..." },
+    "energy_delivered_kwh":       { "value": 15578100.0,   "unit": "kWh",     "mode": "mixed",     "explanation": "..." },
     "energy_delivered_vs_billed": {
       "value": {
-        "delivered_kwh":        463604542.9,
-        "actual_billed_kwh":    50.0,
-        "projected_billed_kwh": 118375786.21,
-        "gap_kwh":              463604492.9
+        "delivered_kwh":        15578100.0,
+        "actual_billed_kwh":    35069892.61,
+        "projected_billed_kwh": 35069892.61,
+        "gap_kwh":              -19491792.61
       },
-      "unit": "kWh", "mode": "estimated", "explanation": "..."
+      "unit": "kWh", "mode": "mixed", "explanation": "..."
     }
   },
   "revenue": {
-    "actual_energy_charge":    { "value": 10475.0,           "unit": "NGN", "mode": "actual",    "explanation": "..." },
-    "estimated_energy_charge": { "value": 24444869242.19,    "unit": "NGN", "mode": "estimated", "explanation": "..." },
-    "actual_vat":              { "value": 785.62,            "unit": "NGN", "mode": "actual",    "explanation": "..." },
-    "actual_total_billed":     { "value": 11260.62,          "unit": "NGN", "mode": "actual",    "explanation": "..." },
-    "estimated_revenue":       { "value": 26278234435.36,    "unit": "NGN", "mode": "estimated", "explanation": "..." },
-    "total_projected_revenue": { "value": 26278245695.98,    "unit": "NGN", "mode": "estimated", "explanation": "..." },
-    "mdi_revenue_split":       { "value": 0.0,               "unit": "%",   "mode": "actual",    "explanation": "..." },
-    "mdni_revenue_split":      { "value": 100.0,             "unit": "%",   "mode": "actual",    "explanation": "..." },
-    "arpu":                    { "value": 11260.62,           "unit": "NGN", "mode": "actual",    "explanation": "..." }
+    "actual_energy_charge":    { "value": 7339099640.67, "unit": "NGN", "mode": "actual",    "explanation": "..." },
+    "estimated_energy_charge": { "value": 0.0,           "unit": "NGN", "mode": "estimated", "explanation": "..." },
+    "actual_vat":              { "value": 550432473.05,  "unit": "NGN", "mode": "actual",    "explanation": "..." },
+    "actual_total_billed":     { "value": 7889532113.72, "unit": "NGN", "mode": "actual",    "explanation": "..." },
+    "estimated_revenue":       { "value": 0.0,           "unit": "NGN", "mode": "estimated", "explanation": "..." },
+    "total_projected_revenue": { "value": 7889532113.72, "unit": "NGN", "mode": "estimated", "explanation": "..." },
+    "mdi_revenue_split":       { "value": 100.0,         "unit": "%",   "mode": "actual",    "explanation": "..." },
+    "mdni_revenue_split":      { "value": 0.0,           "unit": "%",   "mode": "actual",    "explanation": "..." },
+    "arpu":                    { "value": 6813668.5,     "unit": "NGN", "mode": "actual",    "explanation": "..." }
   },
   "performance": {
-    "coverage_rate":      { "value": 0.37,  "unit": "%", "mode": "actual",    "explanation": "..." },
-    "customers_read":     { "value": 7,     "unit": "",  "mode": "actual",    "explanation": "..." },
-    "unread_customers":   { "value": 1864,  "unit": "",  "mode": "actual",    "explanation": "..." },
-    "billing_efficiency": { "value": 0.0,   "unit": "%", "mode": "estimated", "explanation": "..." },
-    "atc_loss":           { "value": 100.0, "unit": "%", "mode": "estimated", "explanation": "..." }
+    "coverage_rate":      { "value": 99.46, "unit": "%", "mode": "actual",    "explanation": "..." },
+    "customers_read":     { "value": 1151,  "unit": "",  "mode": "actual",    "explanation": "..." },
+    "unread_customers":   { "value": 6,     "unit": "",  "mode": "actual",    "explanation": "..." },
+    "billing_efficiency": { "value": 225.1, "unit": "%", "mode": "estimated", "explanation": "..." },
+    "atc_loss":           { "value": -125.1,"unit": "%", "mode": "estimated", "explanation": "..." }
   },
   "managers": {
-    "total_mdi_managers":  { "value": 45, "unit": "", "mode": "actual", "explanation": "..." },
-    "total_mdni_managers": { "value": 38, "unit": "", "mode": "actual", "explanation": "..." }
+    "total_mdi_managers":  { "value": 60, "unit": "", "mode": "actual", "explanation": "..." },
+    "total_mdni_managers": { "value": 0,  "unit": "", "mode": "actual", "explanation": "..." }
   }
 }
 ```
@@ -140,13 +147,14 @@ GET /api/commercial/overview/
 ### List all states
 ```
 GET /api/commercial/states/
+GET /api/commercial/states/?mode=monthly&year=2026&month=1
 ```
 
 ### Single state
 ```
 GET /api/commercial/states/<slug>/
 ```
-**Slug examples:** `KN` `JG` `KT`
+**Slug examples:** `KN` `JG` `KS`
 
 ### Response (list)
 ```json
@@ -155,11 +163,28 @@ GET /api/commercial/states/<slug>/
   "count": 3,
   "states": [
     {
-      "state": { "slug": "JG", "name": "Jigawa" },
+      "state": { "slug": "KN", "name": "Kano" },
       "customers":   { "total": {...}, "mdi": {...}, "mdni": {...} },
-      "energy":      { "actual_billed_kwh": {...}, "estimated_billed_kwh": {...}, ... },
-      "revenue":     { "actual_total_billed": {...}, "total_projected_revenue": {...}, ... },
-      "performance": { "coverage_rate": {...}, "atc_loss": {...}, ... },
+      "energy": {
+        "energy_consumed_kwh":        { "value": 33490517.61, "unit": "kWh", "mode": "actual",  "explanation": "..." },
+        "actual_billed_kwh":          { "value": 33552126.86, "unit": "kWh", "mode": "actual",  "explanation": "..." },
+        "estimated_billed_kwh":       { "value": 0.0,         "unit": "kWh", "mode": "estimated","explanation": "..." },
+        "total_projected_billed_kwh": { "value": 33552126.86, "unit": "kWh", "mode": "estimated","explanation": "..." },
+        "daily_billed_kwh_estimate":  { "value": 1082326.67,  "unit": "kWh/day","mode": "estimated","explanation": "..." },
+        "daily_energy_delivered_mwh": { "value": 250.93,      "unit": "MWh/day","mode": "mixed",  "explanation": "..." },
+        "energy_delivered_kwh":       { "value": 7778810.0,   "unit": "kWh", "mode": "mixed",   "explanation": "..." },
+        "energy_delivered_vs_billed": {
+          "value": {
+            "delivered_kwh": 7778810.0,
+            "actual_billed_kwh": 33552126.86,
+            "projected_billed_kwh": 33552126.86,
+            "gap_kwh": -25773316.86
+          },
+          "unit": "kWh", "mode": "mixed", "explanation": "..."
+        }
+      },
+      "revenue":     { "actual_total_billed": {...}, "total_projected_revenue": {...}, "estimated_revenue": {...}, ... },
+      "performance": { "coverage_rate": {...}, "customers_read": {...}, "atc_loss": {...}, ... },
       "managers":    { "total_mdi_managers": {...}, "total_mdni_managers": {...} }
     },
     ...
@@ -177,7 +202,7 @@ Same shape as one item above, plus `period` at the top level.
 ### List all districts
 ```
 GET /api/commercial/districts/
-GET /api/commercial/districts/?state=KN          ← scope to one state
+GET /api/commercial/districts/?state=KN
 ```
 
 ### Single district
@@ -212,29 +237,29 @@ GET /api/commercial/districts/<slug>/
 ### List all feeders
 ```
 GET /api/commercial/feeders/
-GET /api/commercial/feeders/?state=KN              ← scope to state
-GET /api/commercial/feeders/?district=KN-IDU       ← scope to district
-GET /api/commercial/feeders/?state=KN&type=MDI     ← combine filters
+GET /api/commercial/feeders/?state=KN
+GET /api/commercial/feeders/?district=KN-IDU
+GET /api/commercial/feeders/?state=KN&type=MDI
 ```
 
 ### Single feeder
 ```
 GET /api/commercial/feeders/<slug>/
 ```
-**Slug examples:** `KN-TAM-COC` `KN-NW-ABR`
+**Slug examples:** `kn-tam-coc` `kn-nw-abr`
 
 ### Response (list)
 ```json
 {
   "period": { ... },
-  "count": 221,
+  "count": 50,
   "feeders": [
     {
       "feeder": {
-        "slug": "KN-TAM-COC",
-        "name": "COCA COLA",
+        "slug":          "kn-tam-coc",
+        "name":          "COCA COLA",
         "voltage_level": "11kv",
-        "feeder_class": "MDI",
+        "feeder_class":  "MDI",
         "district": { "slug": "KN-IDU", "name": "Kano Industrial" },
         "state":    { "slug": "KN",     "name": "Kano" }
       },
@@ -292,26 +317,24 @@ GET /api/commercial/bands/<slug>/
 GET /api/commercial/customers/
 ```
 
-#### Extra filters (on top of global params)
+#### Filters
 | Parameter | Description |
 |---|---|
 | `search` | Search by customer name, account number, or meter number |
-| `feeder` | Feeder slug — e.g. `KN-TAM-COC` (**use this to show customers for a feeder**) |
-| `district` | District slug — e.g. `KN-IDU` |
-| `state` | State slug — e.g. `KN` |
+| `feeder` | Feeder slug — use this to show all customers on a feeder |
+| `district` | District slug |
+| `state` | State slug |
 | `page` | Page number (default `1`) |
 | `page_size` | Results per page (default `50`, max `200`) |
 
-> **Feeder drill-down:** When a user clicks a feeder in the UI, call:
-> `GET /api/commercial/customers/?feeder=<feeder-slug>`
-> This returns all customers on that feeder for the selected period.
+> **Feeder drill-down:** When a user clicks a feeder, call:
+> `GET /api/commercial/customers/?feeder=<feeder-slug>&mode=monthly&year=2026&month=1`
 
 #### Example requests
 ```
 GET /api/commercial/customers/?search=dangote
 GET /api/commercial/customers/?type=MDI&state=KN&page=2
-GET /api/commercial/customers/?district=KN-IDU&page_size=100
-GET /api/commercial/customers/?feeder=KN-TAM-COC&mode=monthly&year=2026&month=3
+GET /api/commercial/customers/?feeder=kn-tam-coc&mode=monthly&year=2026&month=1
 ```
 
 #### Response
@@ -329,20 +352,20 @@ GET /api/commercial/customers/?feeder=KN-TAM-COC&mode=monthly&year=2026&month=3
       "id":               "1011e552-e6b0-4c46-b342-4ea0abaa9b3f",
       "account_no":       "32/25/90/0517-01",
       "meter_number":     "252424078",
-      "customer_name":    "(FATA TANNING LIMITED) WEST AFRICAN TANNERY",
+      "customer_name":    "WEST AFRICAN TANNERY",
       "customer_type":    "MDI",
       "customer_address": "PLOT 53 CHALLAWA INDUSTRIAL ESTATE KANO",
       "phone_number":     "8028647304",
-      "feeder":   { "slug": "KN-TAM-COC", "name": "COCA COLA" },
+      "feeder":   { "slug": "kn-tam-coc", "name": "COCA COLA" },
       "district": { "slug": "KN-IDU",     "name": "Kano Industrial" },
       "state":    { "slug": "KN",          "name": "Kano" },
       "period_billing": {
-        "readings_count":   0,
-        "total_billed_kwh": 0.0,
-        "energy_charge":    0.0,
-        "vat":              0.0,
-        "total_billed":     0.0,
-        "last_reading_date": null
+        "readings_count":    2,
+        "total_billed_kwh":  150.0,
+        "energy_charge":     31425.0,
+        "vat":               2356.88,
+        "total_billed":      33781.88,
+        "last_reading_date": "2026-01-28"
       }
     },
     ...
@@ -354,24 +377,23 @@ GET /api/commercial/customers/?feeder=KN-TAM-COC&mode=monthly&year=2026&month=3
 
 ### Customer detail
 ```
-GET /api/commercial/customers/<id>/
+GET /api/commercial/customers/<uuid>/
 ```
-`<id>` is the UUID from the list response (`id` field).
 
 #### Response
 ```json
 {
   "period": { ... },
   "customer": {
-    "id":               "1011e552-e6b0-4c46-b342-4ea0abaa9b3f",
-    "external_id":      "32214922-596f-47f8-b40b-e9b98f8fe6c2",
+    "id":               "1011e552-...",
+    "external_id":      "32214922-...",
     "account_no":       "32/25/90/0517-01",
     "meter_number":     "252424078",
-    "customer_name":    "(FATA TANNING LIMITED) WEST AFRICAN TANNERY",
+    "customer_name":    "WEST AFRICAN TANNERY",
     "customer_type":    "MDI",
     "customer_address": "PLOT 53 CHALLAWA INDUSTRIAL ESTATE KANO",
     "phone_number":     "8028647304",
-    "feeder":   { "slug": "KN-TAM-COC", "name": "COCA COLA" },
+    "feeder":   { "slug": "kn-tam-coc", "name": "COCA COLA" },
     "district": { "slug": "KN-IDU",     "name": "Kano Industrial" },
     "state":    { "slug": "KN",          "name": "Kano" }
   },
@@ -381,12 +403,12 @@ GET /api/commercial/customers/<id>/
     "energy_charge":     31425.0,
     "vat":               2356.88,
     "total_billed":      33781.88,
-    "last_reading_date": "2026-03-14"
+    "last_reading_date": "2026-01-28"
   },
   "readings": [
     {
       "id":                 "uuid",
-      "reading_date":       "2026-03-14",
+      "reading_date":       "2026-01-28",
       "reading_type":       "MDI",
       "previous_reading":   1200.0,
       "present_reading":    1280.0,
@@ -409,23 +431,24 @@ GET /api/commercial/customers/<id>/
 
 ### Top / Bottom N customers
 ```
-GET /api/commercial/customers/top/
-GET /api/commercial/customers/top/?n=20
+GET /api/commercial/customers/top/                              ← top 10 by default
+GET /api/commercial/customers/top/?n=50                        ← top 50
+GET /api/commercial/customers/top/?order=bottom&n=10           ← bottom 10
+GET /api/commercial/customers/top/?order=bottom&n=50           ← bottom 50
 GET /api/commercial/customers/top/?n=10&state=KN&type=MDI
-GET /api/commercial/customers/top/?n=10&order=bottom
-GET /api/commercial/customers/top/?n=20&order=bottom&feeder=KN-TAM-COC
+GET /api/commercial/customers/top/?n=20&order=bottom&feeder=kn-tam-coc
 ```
 
 | Parameter | Default | Options | Max |
 |---|---|---|---|
-| `n` | `10` | — | `50` |
+| `n` | `10` | any integer | `50` |
 | `order` | `top` | `top` \| `bottom` | — |
-| `feeder` | — | Feeder slug | — |
-| `district` | — | District slug | — |
 | `state` | — | State slug | — |
+| `district` | — | District slug | — |
+| `feeder` | — | Feeder slug | — |
 
-- `order=top` → highest billed customers (defaulters who consume most)
-- `order=bottom` → lowest billed customers (potential non-billers / flat-liners)
+- `order=top` → highest billed customers
+- `order=bottom` → lowest billed customers (potential flat-liners / non-billers)
 
 #### Response
 ```json
@@ -444,71 +467,159 @@ GET /api/commercial/customers/top/?n=20&order=bottom&feeder=KN-TAM-COC
       "district": { "slug": "...", "name": "..." },
       "state":    { "slug": "...", "name": "..." },
       "period_billing": {
-        "readings_count":   3,
-        "total_billed_kwh": 450.0,
-        "energy_charge":    94275.0,
-        "vat":              7070.63,
-        "total_billed":     101345.63,
-        "last_reading_date": "2026-03-18"
+        "readings_count":    3,
+        "total_billed_kwh":  450.0,
+        "energy_charge":     94275.0,
+        "vat":               7070.63,
+        "total_billed":      101345.63,
+        "last_reading_date": "2026-01-28"
       }
     },
     ...
   ]
 }
 ```
-> Results sorted by `period_billing.total_billed` — descending for `top`, ascending for `bottom`.
+> Results are sorted by `period_billing.total_billed` — descending for `top`, ascending for `bottom`.
 
 ---
 
-## 9. Data Modes — actual vs estimated
+## 9. Trend — Last 4 Periods
 
-Every metric carries a `mode` field. Here is what it means:
+> Returns current period + 4 previous periods for 8 key KPIs.
+> **One DB query** — fast regardless of scope.
+
+```
+GET /api/commercial/trend/
+```
+
+### Filters (same as all other endpoints)
+| Parameter | Description |
+|---|---|
+| `mode` / `year` / `month` / `from_date` | Time period (current) |
+| `type` | `MDI` or `MDNI` |
+| `feeder_type` | `11kv` or `33kv` |
+| `state` | State slug — trend for one state |
+| `district` | District slug — trend for one district |
+| `feeder` | Feeder slug — trend for one feeder |
+
+### Example requests
+```
+GET /api/commercial/trend/?mode=monthly&year=2026&month=1
+GET /api/commercial/trend/?mode=monthly&year=2026&month=1&state=KN
+GET /api/commercial/trend/?mode=monthly&year=2026&month=1&type=MDI&feeder=kn-tam-coc
+GET /api/commercial/trend/?mode=yearly&year=2026
+```
+
+### Response
+```json
+{
+  "current_period": {
+    "mode":       "monthly",
+    "start_date": "2026-01-01",
+    "end_date":   "2026-01-31",
+    "label":      "January 2026",
+    "days":       31
+  },
+  "total_customers": 1871,
+  "count": 5,
+  "periods": [
+    {
+      "period": {
+        "mode":       "monthly",
+        "start_date": "2025-09-01",
+        "end_date":   "2025-09-30",
+        "label":      "September 2025",
+        "days":       30,
+        "is_current": false
+      },
+      "actual_billed_kwh":   { "value": 31200000.0, "unit": "kWh", "mode": "actual", "explanation": "..." },
+      "energy_consumed_kwh": { "value": 31150000.0, "unit": "kWh", "mode": "actual", "explanation": "..." },
+      "actual_total_billed": { "value": 6900000000.0, "unit": "NGN", "mode": "actual", "explanation": "..." },
+      "energy_charge":       { "value": 6418604651.16, "unit": "NGN", "mode": "actual", "explanation": "..." },
+      "vat":                 { "value": 481395348.84,  "unit": "NGN", "mode": "actual", "explanation": "..." },
+      "customers_read":      { "value": 1148, "unit": "", "mode": "actual", "explanation": "..." },
+      "coverage_rate":       { "value": 61.36, "unit": "%", "mode": "actual", "explanation": "..." },
+      "arpu":                { "value": 6010453.4, "unit": "NGN", "mode": "actual", "explanation": "..." }
+    },
+    { "period": { "label": "October 2025",  "is_current": false }, ... },
+    { "period": { "label": "November 2025", "is_current": false }, ... },
+    { "period": { "label": "December 2025", "is_current": false }, ... },
+    {
+      "period": { "label": "January 2026", "is_current": true },
+      "actual_billed_kwh":   { "value": 35069892.61, ... },
+      ...
+    }
+  ]
+}
+```
+
+> **Periods are always oldest → newest.** The last item always has `is_current: true`.
+> Use this endpoint to draw trend charts — bar, line, or sparkline.
+
+---
+
+## 10. Data Modes
+
+Every metric carries a `mode` field:
 
 | Mode | Meaning | UI Treatment |
 |---|---|---|
-| `"actual"` | Computed from real meter readings submitted in the period | Show as solid/confirmed value |
-| `"estimated"` | Projected using last known daily average for unread customers | Show with ≈ prefix, dashed border, or italic — make it clear this is not real data |
+| `"actual"` | Computed from real meter readings | Show as solid/confirmed value |
+| `"estimated"` | Projected using last known daily average for unread customers | Show with ≈ prefix, dashed border, or italic |
+| `"meter"` | Energy delivered — sourced from actual injection substation meters | Show as confirmed (green badge) |
+| `"system"` | Energy delivered — estimated from HourlyLoad data (no meter data available) | Show as estimated (amber badge) |
+| `"mixed"` | Energy delivered — some feeders used meter, some used system estimate | Show as partial (blue badge) |
 
-### Estimation logic (for transparency in UI)
+### Estimation logic
 - **Who gets estimated?** Customers with zero readings in the selected period.
-- **How?** Their last submitted reading's `billed_consumption ÷ 7` gives a daily average. That is multiplied by the number of days in the period.
-- **Energy delivered** is always estimated — it's the 90-day average from technical feeder readings.
+- **How?** `last_billed_consumption ÷ 7 × period_days` = daily average × days.
+
+### Energy delivered logic
+- **PRIMARY:** `EnergyDelivered` table — actual meter sum for the period. Used if data exists and no single day exceeds 500 MWh (outlier guard).
+- **FALLBACK:** `HourlyLoad` table — `avg_load_mw × supply_hours`. Used when meter data is missing or suspect.
+- `mode` tells you which source was used per feeder/state/district.
+
+### When energy delivered = 0
+No `EnergyDelivered` or `HourlyLoad` data exists for those feeders in the technical module. This is a data gap — the code is correct.
+
+### When ATC loss is negative
+Means `energy_billed > energy_delivered` — either the technical data is incomplete (most likely) or there are billing adjustments. Display as `N/A` if negative.
 
 ---
 
-## 10. KPI Reference
-
-Quick lookup for every KPI returned across all endpoints.
+## 11. KPI Reference
 
 ### customers
 | Key | Unit | Mode | Description |
 |---|---|---|---|
 | `total` | — | actual | Total MDI + MDNI customers |
-| `mdi` | — | actual | Maximum Demand Installation customers |
-| `mdni` | — | actual | Non Maximum Demand customers |
+| `mdi` | — | actual | Maximum Demand Industrial customers |
+| `mdni` | — | actual | Non Maximum Demand Industrial customers |
 
 ### energy
 | Key | Unit | Mode | Description |
 |---|---|---|---|
-| `actual_billed_kwh` | kWh | actual | Energy from real readings |
+| `energy_consumed_kwh` | kWh | actual | Sum of (present_reading − previous_reading) for all customers read — raw meter consumption |
+| `actual_billed_kwh` | kWh | actual | Energy from real readings (billed_consumption field) |
 | `estimated_billed_kwh` | kWh | estimated | Projected energy for unread customers |
 | `total_projected_billed_kwh` | kWh | estimated | actual + estimated |
 | `daily_billed_kwh_estimate` | kWh/day | estimated | Actual billed ÷ days in period |
-| `daily_energy_delivered_mwh` | MWh/day | estimated | 90-day feeder average |
-| `energy_delivered_vs_billed` | kWh | estimated | Object with `delivered_kwh`, `actual_billed_kwh`, `projected_billed_kwh`, `gap_kwh` |
+| `daily_energy_delivered_mwh` | MWh/day | meter/system/mixed | Total delivered ÷ days — for display only |
+| `energy_delivered_kwh` | kWh | meter/system/mixed | Total energy injected into feeders for this period |
+| `energy_delivered_vs_billed` | kWh | meter/system/mixed | Object: `delivered_kwh`, `actual_billed_kwh`, `projected_billed_kwh`, `gap_kwh` |
 
 ### revenue
 | Key | Unit | Mode | Description |
 |---|---|---|---|
-| `actual_energy_charge` | NGN | actual | Energy charge from real readings (excl VAT) |
+| `actual_energy_charge` | NGN | actual | Energy charge from real readings (excl. VAT) |
 | `estimated_energy_charge` | NGN | estimated | Projected energy charge for unread customers |
 | `actual_vat` | NGN | actual | 7.5% VAT on actual energy charge |
 | `actual_total_billed` | NGN | actual | Total billed = energy_charge + VAT |
-| `estimated_revenue` | NGN | estimated | Revenue at risk from unread customers (incl VAT) |
+| `estimated_revenue` | NGN | estimated | Revenue at risk from unread customers (incl. VAT) |
 | `total_projected_revenue` | NGN | estimated | actual_total_billed + estimated_revenue |
 | `mdi_revenue_split` | % | actual | % of actual revenue from MDI customers |
 | `mdni_revenue_split` | % | actual | % of actual revenue from MDNI customers |
-| `arpu` | NGN | actual | Actual total billed ÷ customers read |
+| `arpu` | NGN | actual | Average Revenue Per Customer = actual_total_billed ÷ customers_read |
 
 ### performance
 | Key | Unit | Mode | Description |
@@ -516,8 +627,8 @@ Quick lookup for every KPI returned across all endpoints.
 | `coverage_rate` | % | actual | % of customers with a reading in this period |
 | `customers_read` | — | actual | Count of customers with at least one reading |
 | `unread_customers` | — | actual | Customers with no reading — revenue at risk |
-| `billing_efficiency` | % | estimated | Energy billed ÷ energy delivered × 100 |
-| `atc_loss` | % | estimated | 100 − billing_efficiency (AT&C loss) |
+| `billing_efficiency` | % | estimated | energy_billed ÷ energy_delivered × 100. Show N/A if > 100% or negative |
+| `atc_loss` | % | estimated | 100 − billing_efficiency. Show N/A if negative |
 
 ### managers
 | Key | Unit | Mode | Description |
@@ -525,12 +636,26 @@ Quick lookup for every KPI returned across all endpoints.
 | `total_mdi_managers` | — | actual | MDI field officers with active assignments |
 | `total_mdni_managers` | — | actual | MDNI field officers with active assignments |
 
+### trend (per period)
+| Key | Unit | Mode | Description |
+|---|---|---|---|
+| `actual_billed_kwh` | kWh | actual | Energy billed in this period |
+| `energy_consumed_kwh` | kWh | actual | Raw meter consumption in this period |
+| `actual_total_billed` | NGN | actual | Revenue including VAT |
+| `energy_charge` | NGN | actual | Revenue excluding VAT |
+| `vat` | NGN | actual | VAT component |
+| `customers_read` | — | actual | Customers read in this period |
+| `coverage_rate` | % | actual | Coverage in this period |
+| `arpu` | NGN | actual | ARPU in this period |
+
 ---
 
 ## Quick Reference — All Endpoints
 
 ```
 GET /api/commercial/overview/                          Full system KPIs
+GET /api/commercial/trend/                             Current + last 4 periods (8 KPIs)
+GET /api/commercial/trend/?state=KN                   Trend scoped to a state
 GET /api/commercial/states/                            All states
 GET /api/commercial/states/<slug>/                     Single state
 GET /api/commercial/districts/                         All districts
@@ -540,18 +665,20 @@ GET /api/commercial/feeders/                           All feeders
 GET /api/commercial/feeders/?state=<slug>              Feeders in a state
 GET /api/commercial/feeders/?district=<slug>           Feeders in a district
 GET /api/commercial/feeders/<slug>/                    Single feeder
-GET /api/commercial/bands/                             All bands (A–E)
+GET /api/commercial/bands/                             All service bands (A–E)
 GET /api/commercial/bands/<slug>/                      Single band
 GET /api/commercial/customers/                         Paginated customer list
 GET /api/commercial/customers/?search=<query>          Customer search
-GET /api/commercial/customers/?state=<slug>            Customers in state
-GET /api/commercial/customers/?district=<slug>         Customers in district
-GET /api/commercial/customers/?feeder=<slug>           Customers on feeder
+GET /api/commercial/customers/?feeder=<slug>           Customers on a feeder (drill-down)
+GET /api/commercial/customers/?state=<slug>            Customers in a state
+GET /api/commercial/customers/?district=<slug>         Customers in a district
 GET /api/commercial/customers/top/                     Top 10 customers by billing
-GET /api/commercial/customers/top/?n=25                Top N (max 50)
+GET /api/commercial/customers/top/?n=50                Top N (max 50)
+GET /api/commercial/customers/top/?order=bottom        Bottom 10 customers by billing
+GET /api/commercial/customers/top/?order=bottom&n=50   Bottom N (max 50)
 GET /api/commercial/customers/<uuid>/                  Customer detail + readings
 ```
 
 ---
 
-*Generated for KEDCO Raven Commercial Analytics Module — staging environment.*
+*KEDCO Raven Commercial Analytics Module — staging environment.*
