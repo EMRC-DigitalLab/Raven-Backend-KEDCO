@@ -20,6 +20,7 @@ from commercial.analytics_utils import (
     calc_daily_estimate,
     calc_energy_delivered,
     calc_estimated_billing,
+    calc_energy_consumed,
     customer_filter_kwargs,
     metric,
     parse_date_range,
@@ -33,6 +34,7 @@ from commercial.bulk_analytics import (
     bulk_coverage,
     bulk_estimated_billing,
     bulk_energy_delivered,
+    bulk_energy_consumed,
     bulk_managers,
     empty_billing,
     empty_coverage,
@@ -67,11 +69,13 @@ def _district_metrics(district, customers_qs, readings_qs, date_range):
     mdni_split = round(float(mdni_billing['total_billed_amount']) / float(total_rev) * 100, 2) if total_rev else 0
 
     feeder_ids = list(c_qs.filter(feeder__isnull=False).values_list('feeder_id', flat=True).distinct())
-    daily_delivered_mwh = calc_energy_delivered(feeder_ids)
-    delivered_kwh_period = round(float(daily_delivered_mwh) * 1000 * date_range['days'], 2)
+    delivered            = calc_energy_delivered(feeder_ids, date_range)
+    delivered_kwh_period = round(float(delivered['total_mwh']) * 1000, 2)
+    daily_delivered_mwh  = round(float(delivered['total_mwh']) / date_range['days'], 4) if date_range['days'] else 0
+    energy_consumed_kwh  = calc_energy_consumed(r_qs)
 
     billing_efficiency, atc_loss = calc_atc_loss(
-        billing['total_billed_kwh'], daily_delivered_mwh, date_range['days']
+        billing['total_billed_kwh'], delivered['total_mwh']
     )
     arpu = calc_arpu(billing['total_billed_amount'], coverage['read'])
 
@@ -94,6 +98,10 @@ def _district_metrics(district, customers_qs, readings_qs, date_range):
             'mdni':  metric(total_mdni, explanation='MDNI customers in this district.'),
         },
         'energy': {
+            'energy_consumed_kwh': metric(
+                float(energy_consumed_kwh), unit='kWh',
+                explanation='Total energy consumed = sum(present_reading - previous_reading) for all customers read in this period.',
+            ),
             'actual_billed_kwh': metric(
                 float(billing['total_billed_kwh']), unit='kWh',
                 explanation='Actual energy billed from real readings in this district for this period.',
@@ -111,12 +119,12 @@ def _district_metrics(district, customers_qs, readings_qs, date_range):
                 explanation='Daily energy billed estimate from actual readings in this district.',
             ),
             'daily_energy_delivered_mwh': metric(
-                float(daily_delivered_mwh), unit='MWh/day', mode='estimated',
-                explanation='Daily energy delivered estimate for this district — avg of last 90 days of feeder technical readings.',
+                float(daily_delivered_mwh), unit='MWh/day', mode=delivered['mode'],
+                explanation='Average daily energy delivered — total_mwh / days. Source: meter or system fallback.',
             ),
             'energy_delivered_kwh': metric(
-                delivered_kwh_period, unit='kWh', mode='estimated',
-                explanation='Total energy delivered for the period in this district — daily_energy_delivered_mwh × 1000 × days.',
+                delivered_kwh_period, unit='kWh', mode=delivered['mode'],
+                explanation='Total energy delivered for the period from technical module.',
             ),
             'energy_delivered_vs_billed': metric(
                 {
@@ -125,7 +133,7 @@ def _district_metrics(district, customers_qs, readings_qs, date_range):
                     'projected_billed_kwh': float(billing['total_billed_kwh'] + estimated['estimated_kwh']),
                     'gap_kwh':              round(delivered_kwh_period - float(billing['total_billed_kwh']), 2),
                 },
-                unit='kWh', mode='estimated',
+                unit='kWh', mode=delivered['mode'],
                 explanation='Energy delivered vs billed for this district. Gap = delivered minus actual billed.',
             ),
         },
@@ -179,7 +187,8 @@ def all_districts(request):
     coverage_data  = bulk_coverage(customers_qs, readings_qs, f2d)
     estimated_data = bulk_estimated_billing(customers_qs, coverage_data, date_range, f2d)
     managers_data  = bulk_managers(f2d)
-    energy_data    = bulk_energy_delivered(list(f2d.keys()), f2d)
+    energy_data    = bulk_energy_delivered(list(f2d.keys()), date_range, f2d)
+    consumed_data  = bulk_energy_consumed(readings_qs, f2d)
 
     # ── Assemble ──────────────────────────────────────────────────────────────
     days    = date_range['days']
@@ -192,9 +201,11 @@ def all_districts(request):
         ct   = ctype_counts.get(did, {'MDI': 0, 'MDNI': 0})
         mgrs = managers_data.get(did, {'mdi': 0, 'mdni': 0})
 
-        daily_mwh     = energy_data.get(did, ZERO)
-        delivered_kwh = round(float(daily_mwh) * 1000 * days, 2)
+        ed            = energy_data.get(did, {'total_mwh': 0.0, 'mode': 'system'})
+        delivered_kwh = round(float(ed['total_mwh']) * 1000, 2)
+        daily_mwh     = round(float(ed['total_mwh']) / days, 4) if days else 0
         daily_kwh     = round(float(b['total_billed_kwh']) / days, 4) if days else 0
+        consumed_kwh  = float(consumed_data.get(did, ZERO))
 
         total_rev  = b['total_billed_amount']
         mdi_amt    = type_billing.get((did, 'MDI'),  ZERO)
@@ -202,7 +213,7 @@ def all_districts(request):
         mdi_split  = round(float(mdi_amt)  / float(total_rev) * 100, 2) if total_rev else 0
         mdni_split = round(float(mdni_amt) / float(total_rev) * 100, 2) if total_rev else 0
 
-        billing_eff, atc_loss = calc_atc_loss(b['total_billed_kwh'], daily_mwh, days)
+        billing_eff, atc_loss = calc_atc_loss(b['total_billed_kwh'], ed['total_mwh'])
         arpu = calc_arpu(b['total_billed_amount'], cov['read'])
 
         results.append({
@@ -213,17 +224,18 @@ def all_districts(request):
                 'mdni':  metric(ct['MDNI'],             explanation='MDNI customers in this district.'),
             },
             'energy': {
+                'energy_consumed_kwh':        metric(consumed_kwh, unit='kWh', explanation='Total energy consumed = sum(present_reading - previous_reading) for all customers read in this period.'),
                 'actual_billed_kwh':          metric(float(b['total_billed_kwh']), unit='kWh', explanation='Actual energy billed from real readings in this district for this period.'),
                 'estimated_billed_kwh':       metric(float(e['estimated_kwh']), unit='kWh', mode='estimated', explanation='Estimated energy for unread customers in this district.'),
                 'total_projected_billed_kwh': metric(float(b['total_billed_kwh'] + e['estimated_kwh']), unit='kWh', mode='estimated', explanation='Actual + estimated energy for this district.'),
                 'daily_billed_kwh_estimate':  metric(float(daily_kwh), unit='kWh/day', mode='estimated', explanation='Daily energy billed estimate from actual readings in this district.'),
-                'daily_energy_delivered_mwh': metric(float(daily_mwh), unit='MWh/day', mode='estimated', explanation='Daily energy delivered estimate for this district — avg of last 90 days of feeder technical readings.'),
-                'energy_delivered_kwh': metric(delivered_kwh, unit='kWh', mode='estimated', explanation='Total energy delivered for the period in this district — daily_energy_delivered_mwh × 1000 × days.'),
+                'daily_energy_delivered_mwh': metric(float(daily_mwh), unit='MWh/day', mode=ed['mode'], explanation='Average daily energy delivered — total_mwh / days. Source: meter or system fallback.'),
+                'energy_delivered_kwh': metric(delivered_kwh, unit='kWh', mode=ed['mode'], explanation='Total energy delivered for the period from technical module.'),
                 'energy_delivered_vs_billed': metric(
                     {'delivered_kwh': delivered_kwh, 'actual_billed_kwh': float(b['total_billed_kwh']),
                      'projected_billed_kwh': float(b['total_billed_kwh'] + e['estimated_kwh']),
                      'gap_kwh': round(delivered_kwh - float(b['total_billed_kwh']), 2)},
-                    unit='kWh', mode='estimated', explanation='Energy delivered vs billed for this district. Gap = delivered minus actual billed.',
+                    unit='kWh', mode=ed['mode'], explanation='Energy delivered vs billed for this district. Gap = delivered minus actual billed.',
                 ),
             },
             'revenue': {

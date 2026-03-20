@@ -8,10 +8,11 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal
 
 from dateutil.relativedelta import relativedelta
-from django.db.models import Avg
+from django.db.models import ExpressionWrapper, F, Sum
+from django.db.models import DecimalField as DField
 
-from commercial.models import CommercialCustomer, MeterReading
-from technical.models import FeederEnergyDaily
+from commercial.models import MeterReading
+from technical.utils.energy_utils import calculate_energy_delivered as _tech_energy_delivered
 
 VAT_RATE = Decimal('0.075')
 
@@ -198,38 +199,55 @@ def calc_estimated_billing(customers_qs, read_ids, date_range):
     }
 
 
-def calc_energy_delivered(feeder_ids):
+def calc_energy_delivered(feeder_ids, date_range):
     """
-    Estimate daily energy delivered (MWh/day) using last 90 days average
-    from FeederEnergyDaily (technical module).
-    mode = 'estimated' — Option A.
+    Total energy delivered for the period (MWh) using the technical module.
+    PRIMARY: EnergyDelivered meter data (actual sum for the period).
+    FALLBACK: HourlyLoad avg × supply hours when no valid meter data.
+    Returns {'total_mwh': float, 'mode': 'meter'|'system'|'mixed'}.
     """
-    latest = (
-        FeederEnergyDaily.objects
-        .filter(feeder_id__in=feeder_ids)
-        .order_by('-date')
-        .values_list('date', flat=True)
-        .first()
+    if not feeder_ids:
+        return {'total_mwh': 0.0, 'mode': 'system'}
+    result = _tech_energy_delivered(feeder_ids, date_range['start_date'], date_range['end_date'])
+    total  = result['total_mwh']
+    meter  = result['meter_feeders']
+    system = result['system_feeders']
+    if system == 0:
+        mode = 'meter'
+    elif meter == 0:
+        mode = 'system'
+    else:
+        mode = 'mixed'
+    return {'total_mwh': total, 'mode': mode}
+
+
+def calc_energy_consumed(readings_qs):
+    """
+    Total energy consumed = sum(present_reading - previous_reading) for all readings in period.
+    Uses actual meter register values, not billed_consumption.
+    """
+    result = (
+        readings_qs
+        .filter(present_reading__isnull=False, previous_reading__isnull=False)
+        .aggregate(
+            total=Sum(
+                ExpressionWrapper(
+                    F('present_reading') - F('previous_reading'),
+                    output_field=DField(max_digits=20, decimal_places=4),
+                )
+            )
+        )
     )
-    if not latest:
-        return Decimal('0')
-
-    baseline_start = latest - timedelta(days=89)
-    avg = (
-        FeederEnergyDaily.objects
-        .filter(feeder_id__in=feeder_ids, date__gte=baseline_start, date__lte=latest)
-        .aggregate(avg_mwh=Avg('energy_mwh'))
-    )
-    return round(Decimal(str(avg['avg_mwh'] or 0)), 4)
+    return round(Decimal(str(result['total'] or 0)), 2)
 
 
-def calc_atc_loss(energy_billed_kwh, daily_energy_delivered_mwh, days):
+def calc_atc_loss(energy_billed_kwh, energy_delivered_mwh):
     """
     AT&C loss = 100 - billing_efficiency
-    billing_efficiency = energy_billed / energy_delivered × 100
-    Converts MWh → kWh for comparison.
+    billing_efficiency = energy_billed_kwh / (energy_delivered_mwh × 1000) × 100
+    energy_delivered_mwh is the total for the period (not daily).
     """
-    energy_delivered_kwh = float(daily_energy_delivered_mwh) * 1000 * days
+    energy_delivered_kwh = float(energy_delivered_mwh) * 1000
     if not energy_delivered_kwh:
         return None, None
     efficiency = round(float(energy_billed_kwh) / energy_delivered_kwh * 100, 2)

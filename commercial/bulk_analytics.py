@@ -16,13 +16,12 @@ Usage in list views:
 For all_feeders, pass feeder_to_dim = {f.id: f.id for f in feeders}.
 """
 
-from datetime import timedelta
 from decimal import Decimal
 
-from django.db.models import Avg, Count, ExpressionWrapper, F, Sum, DecimalField
+from django.db.models import Avg, Count, ExpressionWrapper, F, Max, Sum, DecimalField
 
 from commercial.models import MeterManager, MeterReading
-from technical.models import FeederEnergyDaily
+from technical.models import EnergyDelivered, HourlyLoad
 
 VAT_RATE = Decimal('0.075')
 ZERO     = Decimal('0')
@@ -231,37 +230,101 @@ def bulk_estimated_billing(customers_qs, coverage_by_dim, date_range, feeder_to_
 
 # ── Energy delivered ──────────────────────────────────────────────────────────
 
-def bulk_energy_delivered(feeder_ids, feeder_to_dim=None):
+_BALLOON = 500.0  # max acceptable daily MWh per feeder before treating as outlier
+
+
+def _energy_by_feeder(feeder_ids, from_date, to_date):
     """
-    TWO queries → {dim_id: daily_avg_mwh}.
+    Per-feeder energy delivered for the period.
+    PRIMARY  — EnergyDelivered meter sum if max single day ≤ 500 MWh.
+    FALLBACK — HourlyLoad avg_load × supply_hours.
+    Returns {feeder_id: {'mwh': float, 'mode': 'meter'|'system'}}.
+    """
+    per_feeder = {}
+
+    for row in (
+        EnergyDelivered.objects
+        .filter(feeder_id__in=feeder_ids, date__gte=from_date, date__lte=to_date)
+        .values('feeder_id')
+        .annotate(total=Sum('energy_mwh'), max_daily=Max('energy_mwh'), days=Count('id'))
+    ):
+        fid     = row['feeder_id']
+        max_d   = float(row['max_daily'] or 0)
+        days    = int(row['days'] or 1)
+        if days > 0 and 0 < max_d <= _BALLOON:
+            per_feeder[fid] = {'mwh': float(row['total'] or 0), 'mode': 'meter'}
+
+    needs_system = [fid for fid in feeder_ids if fid not in per_feeder]
+    if needs_system:
+        for row in (
+            HourlyLoad.objects
+            .filter(feeder_id__in=needs_system, date__gte=from_date, date__lte=to_date, load_mw__gt=0)
+            .values('feeder_id')
+            .annotate(avg_load=Avg('load_mw'), supply_hours=Count('id'))
+        ):
+            fid = row['feeder_id']
+            per_feeder[fid] = {
+                'mwh':  float(row['avg_load'] or 0) * int(row['supply_hours'] or 0),
+                'mode': 'system',
+            }
+
+    return per_feeder
+
+
+def bulk_energy_delivered(feeder_ids, date_range, feeder_to_dim=None):
+    """
+    Returns {dim_id: {'total_mwh': float, 'mode': 'meter'|'system'|'mixed'}}.
     feeder_to_dim: {feeder_id: dim_id}. If None, feeder_id IS the dim (all_feeders).
     """
     if not feeder_ids:
         return {}
 
-    latest = (
-        FeederEnergyDaily.objects
-        .filter(feeder_id__in=feeder_ids)
-        .order_by('-date')
-        .values_list('date', flat=True)
-        .first()
-    )
-    if not latest:
-        return {}
+    per_feeder = _energy_by_feeder(feeder_ids, date_range['start_date'], date_range['end_date'])
 
-    avgs = (
-        FeederEnergyDaily.objects
-        .filter(feeder_id__in=feeder_ids, date__gte=latest - timedelta(89), date__lte=latest)
-        .values('feeder_id')
-        .annotate(avg_mwh=Avg('energy_mwh'))
-    )
+    acc = {}
+    for fid, ed in per_feeder.items():
+        dim_id = feeder_to_dim[fid] if feeder_to_dim else fid
+        if dim_id not in acc:
+            acc[dim_id] = {'mwh': 0.0, 'meter': 0, 'system': 0}
+        acc[dim_id]['mwh']        += ed['mwh']
+        acc[dim_id][ed['mode']]   += 1
 
     result = {}
-    for row in avgs:
-        fid    = row['feeder_id']
-        dim_id = feeder_to_dim[fid] if feeder_to_dim else fid
-        val    = round(Decimal(str(row['avg_mwh'] or 0)), 4)
-        result[dim_id] = round(result.get(dim_id, ZERO) + val, 4)
+    for dim_id, r in acc.items():
+        if r['system'] == 0:
+            mode = 'meter'
+        elif r['meter'] == 0:
+            mode = 'system'
+        else:
+            mode = 'mixed'
+        result[dim_id] = {'total_mwh': round(r['mwh'], 2), 'mode': mode}
+    return result
+
+
+# ── Energy consumed ───────────────────────────────────────────────────────────
+
+def bulk_energy_consumed(readings_qs, feeder_to_dim):
+    """
+    ONE query → {dim_id: consumed_kwh}.
+    consumed = sum(present_reading - previous_reading) per dim.
+    """
+    _consumed_expr = ExpressionWrapper(
+        F('present_reading') - F('previous_reading'),
+        output_field=DecimalField(max_digits=20, decimal_places=4),
+    )
+    rows = (
+        readings_qs
+        .filter(present_reading__isnull=False, previous_reading__isnull=False)
+        .values('customer__feeder_id')
+        .annotate(total=Sum(_consumed_expr))
+    )
+    result = {}
+    for row in rows:
+        dim_id = feeder_to_dim.get(row['customer__feeder_id'])
+        if dim_id is None:
+            continue
+        val = Decimal(str(row['total'] or 0))
+        result[dim_id] = round(result.get(dim_id, ZERO) + val, 2)
     return result
 
 

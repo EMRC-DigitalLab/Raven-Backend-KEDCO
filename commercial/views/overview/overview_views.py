@@ -21,6 +21,7 @@ from commercial.analytics_utils import (
     calc_billing,
     calc_coverage,
     calc_daily_estimate,
+    calc_energy_consumed,
     calc_energy_delivered,
     calc_estimated_billing,
     customer_filter_kwargs,
@@ -62,17 +63,21 @@ def commercial_overview(request):
     mdi_split  = round(float(mdi_billing['total_billed_amount']) / float(total_rev) * 100, 2) if total_rev else 0
     mdni_split = round(float(mdni_billing['total_billed_amount']) / float(total_rev) * 100, 2) if total_rev else 0
 
-    # ── Energy delivered estimate (Option A: avg last 90 days technical) ──────
+    # ── Energy delivered (actual period sum from technical module) ────────────
     feeder_ids = list(
         customers_qs.filter(feeder__isnull=False)
         .values_list('feeder_id', flat=True).distinct()
     )
-    daily_energy_delivered_mwh = calc_energy_delivered(feeder_ids)
-    delivered_kwh_period = round(float(daily_energy_delivered_mwh) * 1000 * date_range['days'], 2)
+    delivered            = calc_energy_delivered(feeder_ids, date_range)
+    delivered_kwh_period = round(float(delivered['total_mwh']) * 1000, 2)
+    daily_energy_delivered_mwh = round(float(delivered['total_mwh']) / date_range['days'], 4) if date_range['days'] else 0
+
+    # ── Energy consumed (present - previous from meter readings) ──────────────
+    energy_consumed_kwh = calc_energy_consumed(readings_qs)
 
     # ── AT&C loss ─────────────────────────────────────────────────────────────
     billing_efficiency, atc_loss = calc_atc_loss(
-        billing['total_billed_kwh'], daily_energy_delivered_mwh, date_range['days']
+        billing['total_billed_kwh'], delivered['total_mwh']
     )
 
     # ── ARPU ──────────────────────────────────────────────────────────────────
@@ -112,6 +117,11 @@ def commercial_overview(request):
         },
 
         'energy': {
+            'energy_consumed_kwh': metric(
+                float(energy_consumed_kwh),
+                unit='kWh',
+                explanation='Total energy consumed = sum(present_reading - previous_reading) for all customers read in this period. MDI (Maximum Demand Industrial) customers only contribute actual metered values.',
+            ),
             'actual_billed_kwh': metric(
                 float(billing['total_billed_kwh']),
                 unit='kWh',
@@ -138,14 +148,14 @@ def commercial_overview(request):
             'daily_energy_delivered_mwh': metric(
                 float(daily_energy_delivered_mwh),
                 unit='MWh/day',
-                mode='estimated',
-                explanation='Daily energy delivered estimate — average of last 90 days of feeder technical readings. Marked estimated because technical data does not yet cover the current period.',
+                mode=delivered['mode'],
+                explanation='Average daily energy delivered for the period — total_mwh divided by days. Source: meter if EnergyDelivered records exist and pass outlier check, system (HourlyLoad) otherwise.',
             ),
             'energy_delivered_kwh': metric(
                 delivered_kwh_period,
                 unit='kWh',
-                mode='estimated',
-                explanation='Total energy delivered for the period — daily_energy_delivered_mwh × 1000 × days.',
+                mode=delivered['mode'],
+                explanation='Total energy delivered for the period — EnergyDelivered meter sum × 1000. Falls back to HourlyLoad estimate if no valid meter data.',
             ),
             'energy_delivered_vs_billed': metric(
                 {
@@ -155,7 +165,7 @@ def commercial_overview(request):
                     'gap_kwh':              round(delivered_kwh_period - float(billing['total_billed_kwh']), 2),
                 },
                 unit='kWh',
-                mode='estimated',
+                mode=delivered['mode'],
                 explanation='Energy delivered vs energy billed. Gap = delivered minus actual billed. Projected includes estimates for unread customers.',
             ),
         },
