@@ -133,6 +133,16 @@ class Command(BaseCommand):
 
         feeder_cache   = {f.slug: f for f in Feeder.objects.all()}
         district_cache = {d.slug: d for d in BusinessDistrict.objects.all()}
+        # DataNest feeder/district codes are uppercase (e.g. JG-DUT-DUT).
+        # Raven slugs are lowercase. Normalise the lookup key.
+        def _feeder(code):
+            if not code:
+                return None
+            return feeder_cache.get(code) or feeder_cache.get(code.lower())
+        def _district(code):
+            if not code:
+                return None
+            return district_cache.get(code) or district_cache.get(code.lower())
 
         objects = []
         skipped = 0
@@ -152,8 +162,8 @@ class Command(BaseCommand):
                 customer_name=name or '',
                 customer_address=addr or '',
                 phone_number=phone or '',
-                feeder=feeder_cache.get(feeder_id),
-                district=district_cache.get(dist_id),
+                feeder=_feeder(feeder_id),
+                district=_district(dist_id),
                 customer_type=raven_ctype,
                 datanest_created_at=make_aware(created_at),
             ))
