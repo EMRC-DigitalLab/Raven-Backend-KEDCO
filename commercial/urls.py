@@ -6,9 +6,11 @@ from commercial.views.districts.all_districts import all_districts, single_distr
 from commercial.views.feeders.all_feeders import all_feeders, single_feeder
 from commercial.views.customers.customer_views import customer_list, customer_detail, top_customers
 from commercial.views.service_bands.service_band_views import all_bands, single_band
+from commercial.views.trend.trend_views import commercial_trend
 
 urlpatterns = [
     path('overview/', commercial_overview, name='commercial-overview'),
+    path('trend/', commercial_trend, name='commercial-trend'),
     path('states/', all_states, name='commercial-states'),
     path('states/<slug:slug>/', single_state, name='commercial-state-detail'),
     path('districts/', all_districts, name='commercial-districts'),
