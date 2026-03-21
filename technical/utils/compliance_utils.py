@@ -193,3 +193,76 @@ def build_period_object(from_date, to_date, mode):
         'end_date': to_date.isoformat(),
         'days': (to_date - from_date).days + 1,
     }
+
+
+def aggregate_compliance(feeders, daily_map, period_dates):
+    """
+    Shared aggregation used by overview, states, and districts.
+
+    Args:
+        feeders:      list of Feeder ORM objects (must have .band selected)
+        daily_map:    {feeder_id: {date: hours}} from bulk_daily_hours()
+        period_dates: list of date objects for the period
+
+    Returns:
+        (summary dict, by_band list ordered A→E)
+    """
+    bands_meta = {}
+
+    for feeder in feeders:
+        slug = feeder.band.slug
+        if slug not in bands_meta:
+            bands_meta[slug] = {
+                'band': {
+                    'slug': slug,
+                    'name': feeder.band.name,
+                    'target_hours_per_day': float(feeder.band.target_hours_per_day),
+                },
+                'total': 0,
+                'compliant': 0,
+                'at_risk': 0,
+                'critical': 0,
+                'upgrade_eligible': 0,
+                'total_compliance_pct': 0.0,
+            }
+
+        target = BAND_TARGET_HOURS.get(slug, float(feeder.band.target_hours_per_day))
+        c = compute_compliance(daily_map.get(feeder.id, {}), slug, target, period_dates)
+
+        bands_meta[slug]['total'] += 1
+        bands_meta[slug]['total_compliance_pct'] += c['compliance_pct']
+
+        status = c['status']
+        if status == 'upgrade_eligible':
+            bands_meta[slug]['upgrade_eligible'] += 1
+        elif status == 'critical':
+            bands_meta[slug]['critical'] += 1
+        elif status == 'at_risk':
+            bands_meta[slug]['at_risk'] += 1
+        else:
+            bands_meta[slug]['compliant'] += 1
+
+    by_band = []
+    for slug in sorted(bands_meta, key=lambda s: BAND_ORDER.get(s, 99)):
+        b = bands_meta[slug]
+        total = b['total']
+        avg_pct = round(b['total_compliance_pct'] / total, 1) if total else 0.0
+        by_band.append({
+            'band': b['band'],
+            'total': total,
+            'compliant': b['compliant'],
+            'at_risk': b['at_risk'],
+            'critical': b['critical'],
+            'upgrade_eligible': b['upgrade_eligible'],
+            'avg_compliance_pct': avg_pct,
+        })
+
+    summary = {
+        'total_feeders': sum(b['total'] for b in by_band),
+        'compliant': sum(b['compliant'] for b in by_band),
+        'at_risk': sum(b['at_risk'] for b in by_band),
+        'critical': sum(b['critical'] for b in by_band),
+        'upgrade_eligible': sum(b['upgrade_eligible'] for b in by_band),
+    }
+
+    return summary, by_band
