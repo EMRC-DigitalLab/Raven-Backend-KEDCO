@@ -10,6 +10,8 @@ from .views.crud import (
 )
 from .views.districts.all_districts import all_business_districts_technical_summary
 from .views.districts.single_district import business_district_technical_summary
+from .views.compliance.feeders import compliance_feeder_detail, compliance_feeders_list
+from .views.compliance.overview import compliance_overview
 from .views.feeders.all_feeders import FeederAvailabilityOverview
 from .views.overview.overview_views import technical_overview_view
 from .views.service_bands.service_band_views import technical_service_band_summary
@@ -40,6 +42,11 @@ urlpatterns = [
 
     # # Feeders
     path('feeders/all/', FeederAvailabilityOverview.as_view(), name='feeder-availability-overview'),
+
+    # Service Level Compliance (NERC KPI)
+    path('compliance/overview/', compliance_overview, name='compliance-overview'),
+    path('compliance/feeders/', compliance_feeders_list, name='compliance-feeders-list'),
+    path('compliance/feeders/<slug:slug>/', compliance_feeder_detail, name='compliance-feeder-detail'),
 
     # Service Bands
     path('service-bands/', technical_service_band_summary, name='service-band-technical-metrics'),

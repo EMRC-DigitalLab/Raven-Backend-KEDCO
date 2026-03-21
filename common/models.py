@@ -16,6 +16,10 @@ class Band(UUIDModel, models.Model):
     name = models.CharField(max_length=50, unique=True)  # e.g., A, B
     description = models.TextField(blank=True)
     slug = models.SlugField(unique=True, blank=True)
+    target_hours_per_day = models.DecimalField(
+        max_digits=4, decimal_places=1, default=0,
+        help_text="NERC/MYTO minimum hours of supply per day for this band (A=20, B=16, C=12, D=8, E=4)"
+    )
 
     def save(self, *args, **kwargs):
         if not self.slug:
