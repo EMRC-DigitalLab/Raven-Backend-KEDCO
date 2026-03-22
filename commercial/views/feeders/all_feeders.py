@@ -180,8 +180,13 @@ def all_feeders(request):
     customers_qs = CommercialCustomer.objects.filter(**customer_filter_kwargs(request))
     readings_qs  = MeterReading.objects.filter(**reading_filter_kwargs(request, date_range))
 
-    feeders_qs = Feeder.objects.exclude(
-        business_district__state__name='Test State'
+    # Only feeders that have commercial customers (respects MDI/MDNI filter)
+    commercial_feeder_ids = list(
+        customers_qs.filter(feeder__isnull=False)
+        .values_list('feeder_id', flat=True).distinct()
+    )
+    feeders_qs = Feeder.objects.filter(
+        id__in=commercial_feeder_ids
     ).select_related('business_district__state').order_by('name')
 
     state_slug    = request.GET.get('state', '').strip()
@@ -310,4 +315,19 @@ def single_feeder(request, slug):
         'mode': date_range['mode'], 'start_date': str(date_range['start_date']),
         'end_date': str(date_range['end_date']), 'label': date_range['label'], 'days': date_range['days'],
     }
+
+    # ── Customers tied to this feeder ─────────────────────────────────────────
+    feeder_customers = list(
+        CommercialCustomer.objects.filter(feeder=feeder, **customer_filter_kwargs(request))
+        .values(
+            'id', 'external_id', 'account_no', 'meter_number',
+            'customer_name', 'customer_address', 'phone_number', 'customer_type',
+        )
+        .order_by('customer_name')
+    )
+    data['customers_list'] = {
+        'count':     len(feeder_customers),
+        'customers': feeder_customers,
+    }
+
     return Response(data)

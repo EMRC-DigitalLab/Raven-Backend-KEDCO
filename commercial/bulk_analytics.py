@@ -301,6 +301,44 @@ def bulk_energy_delivered(feeder_ids, date_range, feeder_to_dim=None):
     return result
 
 
+def energy_per_feeder(feeder_ids, date_range):
+    """
+    Returns raw {feeder_id: {'mwh': float, 'mode': 'meter'|'system'}} for each feeder.
+    Use this when you need to roll up to multiple dimensions without re-hitting the DB.
+    """
+    if not feeder_ids:
+        return {}
+    return _energy_by_feeder(feeder_ids, date_range['start_date'], date_range['end_date'])
+
+
+def rollup_energy(per_feeder, feeder_to_dim):
+    """
+    Roll up per_feeder energy to per_dim without hitting the DB.
+    per_feeder: output of energy_per_feeder()
+    Returns {dim_id: {'total_mwh': float, 'mode': 'meter'|'system'|'mixed'}}.
+    """
+    acc = {}
+    for fid, ed in per_feeder.items():
+        dim_id = feeder_to_dim.get(fid)
+        if dim_id is None:
+            continue
+        if dim_id not in acc:
+            acc[dim_id] = {'mwh': 0.0, 'meter': 0, 'system': 0}
+        acc[dim_id]['mwh']       += ed['mwh']
+        acc[dim_id][ed['mode']]  += 1
+
+    result = {}
+    for dim_id, r in acc.items():
+        if r['system'] == 0:
+            mode = 'meter'
+        elif r['meter'] == 0:
+            mode = 'system'
+        else:
+            mode = 'mixed'
+        result[dim_id] = {'total_mwh': round(r['mwh'], 2), 'mode': mode}
+    return result
+
+
 # ── Energy consumed ───────────────────────────────────────────────────────────
 
 def bulk_energy_consumed(readings_qs, feeder_to_dim):

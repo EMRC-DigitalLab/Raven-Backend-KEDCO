@@ -29,7 +29,16 @@ from commercial.analytics_utils import (
     parse_date_range,
     reading_filter_kwargs,
 )
+from commercial.bulk_analytics import (
+    feeder_dim_map,
+    bulk_billing,
+    bulk_energy_consumed,
+    energy_per_feeder,
+    rollup_energy,
+    ZERO,
+)
 from commercial.models import CommercialCustomer, MeterManager, MeterReading
+from common.models import Band, BusinessDistrict, State
 
 
 @api_view(['GET'])
@@ -82,6 +91,76 @@ def commercial_overview(request):
 
     # ── ARPU ──────────────────────────────────────────────────────────────────
     arpu = calc_arpu(billing['total_billed_amount'], coverage['read'])
+
+    # ── Total feeders with commercial customers ───────────────────────────────
+    total_feeders = customers_qs.filter(feeder__isnull=False).values('feeder_id').distinct().count()
+
+    # ── Energy breakdown by state / district / band ───────────────────────────
+    f2s    = feeder_dim_map(customers_qs, 'feeder__business_district__state_id')
+    f2dmap = feeder_dim_map(customers_qs, 'feeder__business_district_id')
+    f2b    = feeder_dim_map(customers_qs, 'feeder__band_id')
+
+    all_breakdown_feeder_ids = list(f2s.keys())
+    pf_energy = energy_per_feeder(all_breakdown_feeder_ids, date_range)
+
+    energy_by_state    = rollup_energy(pf_energy, f2s)
+    billing_by_state   = bulk_billing(readings_qs, f2s)
+    consumed_by_state  = bulk_energy_consumed(readings_qs, f2s)
+
+    energy_by_district   = rollup_energy(pf_energy, f2dmap)
+    billing_by_district  = bulk_billing(readings_qs, f2dmap)
+    consumed_by_district = bulk_energy_consumed(readings_qs, f2dmap)
+
+    energy_by_band   = rollup_energy(pf_energy, f2b)
+    billing_by_band  = bulk_billing(readings_qs, f2b)
+    consumed_by_band = bulk_energy_consumed(readings_qs, f2b)
+
+    _empty_b = {'total_billed_kwh': ZERO}
+
+    def _bd_row(ed, b, consumed):
+        delivered_kwh = round(float(ed['total_mwh']) * 1000, 2)
+        _, atc = calc_atc_loss(b['total_billed_kwh'], ed['total_mwh'])
+        return {
+            'energy_delivered_kwh': delivered_kwh,
+            'energy_consumed_kwh':  float(consumed),
+            'actual_billed_kwh':    float(b['total_billed_kwh']),
+            'atc_loss':             atc,
+            'mode':                 ed['mode'],
+        }
+
+    by_state_breakdown = []
+    for s_obj in State.objects.exclude(name='Test State').order_by('name'):
+        sid = s_obj.id
+        ed  = energy_by_state.get(sid, {'total_mwh': 0.0, 'mode': 'system'})
+        b   = billing_by_state.get(sid, _empty_b)
+        by_state_breakdown.append({
+            'state': {'slug': s_obj.slug, 'name': s_obj.name},
+            **_bd_row(ed, b, consumed_by_state.get(sid, ZERO)),
+        })
+
+    by_district_breakdown = []
+    for d_obj in BusinessDistrict.objects.exclude(state__name='Test State').select_related('state').order_by('name'):
+        did = d_obj.id
+        ed  = energy_by_district.get(did, {'total_mwh': 0.0, 'mode': 'system'})
+        b   = billing_by_district.get(did, _empty_b)
+        by_district_breakdown.append({
+            'district': {
+                'slug':  d_obj.slug,
+                'name':  d_obj.name,
+                'state': d_obj.state.slug if d_obj.state else None,
+            },
+            **_bd_row(ed, b, consumed_by_district.get(did, ZERO)),
+        })
+
+    by_band_breakdown = []
+    for band_obj in Band.objects.all().order_by('name'):
+        bid = band_obj.id
+        ed  = energy_by_band.get(bid, {'total_mwh': 0.0, 'mode': 'system'})
+        b   = billing_by_band.get(bid, _empty_b)
+        by_band_breakdown.append({
+            'band': {'slug': band_obj.slug, 'name': band_obj.name},
+            **_bd_row(ed, b, consumed_by_band.get(bid, ZERO)),
+        })
 
     # ── Meter managers ────────────────────────────────────────────────────────
     ctype  = request.GET.get('type', '').upper()
@@ -258,5 +337,13 @@ def commercial_overview(request):
                 total_mdni_managers,
                 explanation='Number of field officers assigned to read MDNI meters.',
             ),
+        },
+
+        'total_feeders': total_feeders,
+
+        'energy_breakdown': {
+            'by_state':    by_state_breakdown,
+            'by_district': by_district_breakdown,
+            'by_band':     by_band_breakdown,
         },
     })

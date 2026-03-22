@@ -36,13 +36,15 @@ from commercial.bulk_analytics import (
     bulk_energy_delivered,
     bulk_energy_consumed,
     bulk_managers,
+    energy_per_feeder,
+    rollup_energy,
     empty_billing,
     empty_coverage,
     empty_estimated,
     ZERO,
 )
 from commercial.models import CommercialCustomer, MeterManager, MeterReading
-from common.models import BusinessDistrict
+from common.models import BusinessDistrict, Feeder
 
 
 def _district_metrics(district, customers_qs, readings_qs, date_range):
@@ -85,6 +87,29 @@ def _district_metrics(district, customers_qs, readings_qs, date_range):
     mdni_mgrs = MeterManager.objects.filter(
         manager_type='MDNI', assignments__feeder__business_district=district
     ).distinct().count()
+
+    # ── By-feeder energy breakdown ────────────────────────────────────────────
+    f2fdr = feeder_dim_map(c_qs, 'feeder_id')
+    by_feeder_breakdown = []
+    if f2fdr:
+        pf_fdr   = energy_per_feeder(list(f2fdr.keys()), date_range)
+        e_by_fdr = rollup_energy(pf_fdr, f2fdr)
+        b_by_fdr = bulk_billing(r_qs, f2fdr)
+        c_by_fdr = bulk_energy_consumed(r_qs, f2fdr)
+        for fdr in Feeder.objects.filter(id__in=list(f2fdr.keys())).order_by('name'):
+            fid     = fdr.id
+            ed_f    = e_by_fdr.get(fid, {'total_mwh': 0.0, 'mode': 'system'})
+            b_f     = b_by_fdr.get(fid, {'total_billed_kwh': ZERO})
+            del_kwh = round(float(ed_f['total_mwh']) * 1000, 2)
+            _, atc  = calc_atc_loss(b_f['total_billed_kwh'], ed_f['total_mwh'])
+            by_feeder_breakdown.append({
+                'feeder': {'slug': fdr.slug, 'name': fdr.name},
+                'energy_delivered_kwh': del_kwh,
+                'energy_consumed_kwh':  float(c_by_fdr.get(fid, ZERO)),
+                'actual_billed_kwh':    float(b_f['total_billed_kwh']),
+                'atc_loss':             atc,
+                'mode':                 ed_f['mode'],
+            })
 
     return {
         'district': {
@@ -161,6 +186,9 @@ def _district_metrics(district, customers_qs, readings_qs, date_range):
         'managers': {
             'total_mdi_managers':  metric(mdi_mgrs,  explanation='MDI field officers with assignments in this district.'),
             'total_mdni_managers': metric(mdni_mgrs, explanation='MDNI field officers with assignments in this district.'),
+        },
+        'energy_breakdown': {
+            'by_feeder': by_feeder_breakdown,
         },
     }
 

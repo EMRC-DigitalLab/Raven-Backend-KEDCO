@@ -36,13 +36,15 @@ from commercial.bulk_analytics import (
     bulk_estimated_billing,
     bulk_energy_delivered,
     bulk_managers,
+    energy_per_feeder,
+    rollup_energy,
     empty_billing,
     empty_coverage,
     empty_estimated,
     ZERO,
 )
 from commercial.models import CommercialCustomer, MeterManager, MeterReading
-from common.models import State
+from common.models import BusinessDistrict, State
 
 
 def _state_metrics(state, customers_qs, readings_qs, date_range):
@@ -85,6 +87,29 @@ def _state_metrics(state, customers_qs, readings_qs, date_range):
     mdni_mgrs = MeterManager.objects.filter(
         manager_type='MDNI', assignments__feeder__business_district__state=state
     ).distinct().count()
+
+    # ── By-district energy breakdown ─────────────────────────────────────────
+    f2dist = feeder_dim_map(c_qs, 'feeder__business_district_id')
+    by_district_breakdown = []
+    if f2dist:
+        pf_dist   = energy_per_feeder(list(f2dist.keys()), date_range)
+        e_by_dist = rollup_energy(pf_dist, f2dist)
+        b_by_dist = bulk_billing(r_qs, f2dist)
+        c_by_dist = bulk_energy_consumed(r_qs, f2dist)
+        for d_obj in BusinessDistrict.objects.filter(state=state).order_by('name'):
+            did       = d_obj.id
+            ed_d      = e_by_dist.get(did, {'total_mwh': 0.0, 'mode': 'system'})
+            b_d       = b_by_dist.get(did, {'total_billed_kwh': ZERO})
+            del_kwh   = round(float(ed_d['total_mwh']) * 1000, 2)
+            _, atc    = calc_atc_loss(b_d['total_billed_kwh'], ed_d['total_mwh'])
+            by_district_breakdown.append({
+                'district': {'slug': d_obj.slug, 'name': d_obj.name},
+                'energy_delivered_kwh': del_kwh,
+                'energy_consumed_kwh':  float(c_by_dist.get(did, ZERO)),
+                'actual_billed_kwh':    float(b_d['total_billed_kwh']),
+                'atc_loss':             atc,
+                'mode':                 ed_d['mode'],
+            })
 
     return {
         'state': {'slug': state.slug, 'name': state.name},
@@ -157,6 +182,9 @@ def _state_metrics(state, customers_qs, readings_qs, date_range):
         'managers': {
             'total_mdi_managers':  metric(mdi_mgrs,  explanation='MDI field officers with assignments in this state.'),
             'total_mdni_managers': metric(mdni_mgrs, explanation='MDNI field officers with assignments in this state.'),
+        },
+        'energy_breakdown': {
+            'by_district': by_district_breakdown,
         },
     }
 
