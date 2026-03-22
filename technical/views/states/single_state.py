@@ -837,13 +837,20 @@ def state_technical_summary(request):
     else:
         period_label = f"{from_date.strftime('%Y-%m-%d')} to {to_date.strftime('%Y-%m-%d')}"
     
+    from technical.utils.compliance_utils import get_compliance_summary
     response_data = {
         "state": state_name,
         "month": period_label,
         "top_feeders": top_feeders,
         "bottom_feeders": bottom_feeders,
         "load_trend": load_trend,
-        "metrics": metrics
+        "metrics": metrics,
+        "compliance": get_compliance_summary(
+            from_date=from_date,
+            to_date=to_date,
+            state=state_name,
+            voltage_level=voltage_level,
+        ),
     }
-    
+
     return Response(response_data)

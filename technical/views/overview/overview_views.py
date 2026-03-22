@@ -1700,5 +1700,13 @@ def technical_overview_view(request):
             "slug": feeder_slug,
             "voltage_level": feeder.voltage_level
         }
-    
+
+    # Compliance summary
+    from technical.utils.compliance_utils import get_compliance_summary
+    response_data["compliance"] = get_compliance_summary(
+        from_date=start_date,
+        to_date=end_date,
+        voltage_level=voltage_level,
+    )
+
     return Response(response_data)

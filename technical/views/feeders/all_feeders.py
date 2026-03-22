@@ -11,6 +11,13 @@ from rest_framework.views import APIView
 from common.models import Feeder
 from technical.constants import TURNAROUND_EXCLUSIONS
 from technical.models import FeederInterruption, HourlyLoad
+from technical.utils.compliance_utils import (
+    BAND_ORDER,
+    BAND_TARGET_HOURS,
+    build_ongoing_interruption,
+    bulk_ongoing_interruptions,
+    compliance_status,
+)
 
 
 def _parse_iso_date(date_str):
@@ -367,7 +374,7 @@ def get_feeder_availability_summary_optimized(from_date, to_date, mode, state=No
     feeders_qs = (
         Feeder.objects
         .filter(is_onboarded=True)
-        .select_related('business_district__state', 'substation')
+        .select_related('business_district__state', 'substation', 'band')
     )
     if voltage_level:
         feeders_qs = feeders_qs.filter(voltage_level=voltage_level)
@@ -382,21 +389,32 @@ def get_feeder_availability_summary_optimized(from_date, to_date, mode, state=No
 
     feeder_ids = [f.id for f in feeders]
 
-    # ── 3 bulk queries ──────────────────────────────────────────────────────
+    # ── 4 bulk queries ──────────────────────────────────────────────────────
     supply_map = _bulk_supply_hours(feeder_ids, from_date, to_date)
     interrupt_map = _bulk_interruption_metrics(feeder_ids, from_date, to_date)
     turnaround_map = _bulk_interruption_metrics(
         feeder_ids, from_date, to_date, exclude_types=list(TURNAROUND_EXCLUSIONS)
     )
+    ongoing_map = bulk_ongoing_interruptions(feeder_ids)
     # ────────────────────────────────────────────────────────────────────────
 
     result = []
     for feeder in feeders:
         fid = feeder.id
+        in_supply_map = fid in supply_map
         avg_supply = round(min(supply_map.get(fid, 0.0), 24.0), 2)
-        avg_duration = round(24.0 - avg_supply, 2)          # always sums to 24
-        _, ftc = interrupt_map.get(fid, (0.0, 0))           # ftc count only
+        avg_duration = round(24.0 - avg_supply, 2)
+        _, ftc = interrupt_map.get(fid, (0.0, 0))
         turnaround, _ = turnaround_map.get(fid, (0.0, 0))
+
+        # Band
+        band = feeder.band
+        target_hours = BAND_TARGET_HOURS.get(band.slug, float(band.target_hours_per_day) if hasattr(band, 'target_hours_per_day') else 0.0) if band else 0.0
+        band_info = {
+            'slug': band.slug,
+            'name': band.name,
+            'target_hours_per_day': target_hours,
+        } if band else None
 
         result.append({
             "feeder_name": feeder.name,
@@ -407,8 +425,16 @@ def get_feeder_availability_summary_optimized(from_date, to_date, mode, state=No
             "duration_of_interruptions": avg_duration,
             "turnaround_time": round(min(turnaround, 24.0), 2),
             "ftc": ftc,
+            "band": band_info,
+            "compliance_status": compliance_status(avg_supply, in_supply_map, target_hours) if band else "no_band",
+            "ongoing_interruption": build_ongoing_interruption(fid, ongoing_map, target_hours),
+            "_band_order": BAND_ORDER.get(band.slug, 99) if band else 99,
+            "_feeder_name": feeder.name,
             "_source": f"bulk_sql_{mode}",
         })
+
+    # Sort: Band A → E, then alphabetically within each band
+    result.sort(key=lambda r: (r['_band_order'], r['_feeder_name']))
 
     return result
 

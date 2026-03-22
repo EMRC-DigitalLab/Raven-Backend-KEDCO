@@ -543,6 +543,7 @@ def technical_service_band_summary(request):
             })
     
     # Build response
+    from technical.utils.compliance_utils import get_compliance_summary
     response_data = {
         "period": _format_period_label(from_date, to_date, mode),
         "state_filter": state_filter.name if state_filter else None,
@@ -552,7 +553,13 @@ def technical_service_band_summary(request):
             "bands_with_data": len([b for b in band_data if any(v > 0 for v in b["metrics"].values() if isinstance(v, (int, float)))]),
             "bands_without_data": len([b for b in band_data if all(v == 0 for v in b["metrics"].values() if isinstance(v, (int, float)))]),
             "onboarded_feeders_only": True
-        }
+        },
+        "compliance": get_compliance_summary(
+            from_date=from_date,
+            to_date=to_date,
+            state=state_filter.name if state_filter else None,
+            voltage_level=voltage_level,
+        ),
     }
-    
+
     return Response(response_data)

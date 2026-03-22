@@ -690,6 +690,7 @@ def business_district_technical_summary(request):
     # Top/bottom feeders (filtered by voltage_level when provided)
     top_feeders, bottom_feeders = get_top_bottom_feeders_sql(district.id, from_date, to_date, voltage_level=voltage_level)
     
+    from technical.utils.compliance_utils import get_compliance_summary
     response_data = {
         "metrics": metrics,
         "top_feeders": top_feeders,
@@ -702,7 +703,13 @@ def business_district_technical_summary(request):
             "to_date": to_date.isoformat(),
             "period_days": period_days,
             "onboarded_feeders_only": True
-        }
+        },
+        "compliance": get_compliance_summary(
+            from_date=from_date,
+            to_date=to_date,
+            district=district.name,
+            voltage_level=voltage_level,
+        ),
     }
-    
+
     return Response(response_data)
