@@ -691,6 +691,7 @@ def business_district_technical_summary(request):
     top_feeders, bottom_feeders = get_top_bottom_feeders_sql(district.id, from_date, to_date, voltage_level=voltage_level)
     
     from technical.utils.compliance_utils import get_compliance_summary
+    from technical.utils.explanations import DISTRICTS
     response_data = {
         "metrics": metrics,
         "top_feeders": top_feeders,
@@ -710,6 +711,7 @@ def business_district_technical_summary(request):
             district=district.name,
             voltage_level=voltage_level,
         ),
+        "explanations": DISTRICTS,
     }
 
     return Response(response_data)

@@ -182,6 +182,179 @@ def _bulk_supply_hours(feeder_ids, from_date, to_date):
     return result
 
 
+def _get_category_codes():
+    """
+    Returns (load_shedding_codes, transmission_codes) as sets, read from DB.
+    'disco' = every code NOT in either set.
+    Results are cached in-process for 60 s to avoid repeated tiny queries.
+    """
+    from django.core.cache import cache
+    cached = cache.get('_fault_type_category_codes')
+    if cached is not None:
+        return cached
+
+    from technical.models import FaultTypeCategory
+    ls_codes = set(
+        FaultTypeCategory.objects.filter(category='ls').values_list('code', flat=True)
+    )
+    tx_codes = set(
+        FaultTypeCategory.objects.filter(category='tcn').values_list('code', flat=True)
+    )
+    result = (ls_codes, tx_codes)
+    cache.set('_fault_type_category_codes', result, timeout=60)
+    return result
+
+
+def _classify_interruption_type(itype, ls_codes, tx_codes):
+    itype = itype or 'Unknown'
+    if itype in ls_codes:
+        return 'ls'
+    if itype in tx_codes:
+        return 'tcn'
+    return 'disco'
+
+
+def get_interruption_category_breakdown(start_date, end_date, period_days, period_offset=0, voltage_level=None):
+    """
+    Returns interruption counts split into ls / tcn / disco for ONE period slot.
+    Uses the same date-offset logic as get_interruption_breakdown_network so it
+    can be called in a list-of-4 loop.
+
+    Per category:
+        interruption_count          — total interruptions that started in the period
+        feeders_affected            — distinct feeder count
+        mean_time_to_restore_hours  — avg restore time for resolved interruptions
+    """
+    from datetime import datetime as dt, timedelta
+    from dateutil.relativedelta import relativedelta
+
+    # ── Resolve target date range for this period slot ────────────────────────
+    if period_days == 1:
+        target_start = start_date - timedelta(days=period_offset)
+        target_end = target_start
+    elif period_days == 7:
+        target_start = start_date - timedelta(weeks=period_offset)
+        target_end = target_start + timedelta(days=6)
+    elif 28 <= period_days <= 31:
+        temp = start_date - relativedelta(months=period_offset)
+        from technical.views.overview.overview_views import get_month_range
+        target_start, target_end = get_month_range(temp.year, temp.month)
+    else:
+        target_start = start_date - timedelta(days=period_days * period_offset)
+        target_end = target_start + timedelta(days=period_days - 1)
+
+    ls_codes, tx_codes = _get_category_codes()
+
+    voltage_clause = ""
+    params = [target_start, target_end]
+    if voltage_level:
+        voltage_clause = "AND cf.voltage_level = %s"
+        params.append(voltage_level)
+
+    query = f"""
+        SELECT
+            fi.feeder_id,
+            fi.interruption_type,
+            fi.occurred_at,
+            fi.restored_at
+        FROM technical_feederinterruption fi
+        JOIN common_feeder cf ON cf.id = fi.feeder_id
+        WHERE cf.is_onboarded = TRUE
+            AND (fi.occurred_at AT TIME ZONE 'Africa/Lagos')::date BETWEEN %s AND %s
+            {voltage_clause}
+    """
+
+    with connection.cursor() as cursor:
+        cursor.execute(query, params)
+        rows = cursor.fetchall()
+
+    buckets = {
+        'ls':    {'feeder_ids': set(), 'count': 0, 'restore_hours': []},
+        'tcn':   {'feeder_ids': set(), 'count': 0, 'restore_hours': []},
+        'disco': {'feeder_ids': set(), 'count': 0, 'restore_hours': []},
+    }
+
+    for feeder_id, itype, occurred_at, restored_at in rows:
+        cat = _classify_interruption_type(itype, ls_codes, tx_codes)
+        buckets[cat]['count'] += 1
+        buckets[cat]['feeder_ids'].add(feeder_id)
+
+        if restored_at is not None:
+            if occurred_at.tzinfo is None:
+                from django.utils.timezone import make_aware
+                occurred_at = make_aware(occurred_at)
+            if restored_at.tzinfo is None:
+                from django.utils.timezone import make_aware
+                restored_at = make_aware(restored_at)
+            hrs = (restored_at - occurred_at).total_seconds() / 3600
+            buckets[cat]['restore_hours'].append(hrs)
+
+    result = {}
+    for cat, data in buckets.items():
+        rlist = data['restore_hours']
+        result[cat] = {
+            'interruption_count': data['count'],
+            'feeders_affected': len(data['feeder_ids']),
+            'mean_time_to_restore_hours': round(sum(rlist) / len(rlist), 2) if rlist else 0.0,
+        }
+    return result
+
+
+def get_feeder_ids_by_interruption_category(from_date, to_date, category, voltage_level=None):
+    """
+    Returns feeder IDs (list) that had at least one interruption of the given
+    category in the period.  Used by feeders/all/ ?interruption_type= filter.
+
+    category: 'load_shedding' | 'transmission' | 'disco'
+    """
+    ls_codes, tx_codes = _get_category_codes()
+
+    if category == 'ls':
+        type_list = list(ls_codes)
+        use_exclude = False
+    elif category == 'tcn':
+        type_list = list(tx_codes)
+        use_exclude = False
+    else:  # disco = everything not in ls or tcn
+        type_list = list(ls_codes | tx_codes)
+        use_exclude = True
+
+    if not type_list and not use_exclude:
+        return []
+
+    voltage_clause = ""
+    params = [from_date, to_date]
+
+    if type_list:
+        placeholders = ','.join(['%s'] * len(type_list))
+        type_clause = (
+            f"AND fi.interruption_type NOT IN ({placeholders})"
+            if use_exclude
+            else f"AND fi.interruption_type IN ({placeholders})"
+        )
+        params += type_list
+    else:
+        type_clause = ""  # disco with empty exclusion list = all types
+
+    if voltage_level:
+        voltage_clause = "AND cf.voltage_level = %s"
+        params.append(voltage_level)
+
+    query = f"""
+        SELECT DISTINCT fi.feeder_id
+        FROM technical_feederinterruption fi
+        JOIN common_feeder cf ON cf.id = fi.feeder_id
+        WHERE cf.is_onboarded = TRUE
+            AND (fi.occurred_at AT TIME ZONE 'Africa/Lagos')::date BETWEEN %s AND %s
+            {type_clause}
+            {voltage_clause}
+    """
+
+    with connection.cursor() as cursor:
+        cursor.execute(query, params)
+        return [row[0] for row in cursor.fetchall()]
+
+
 def build_compliance_summary(feeders, supply_map):
     """
     Build the compliance summary block added to overview/states/districts/service-bands.

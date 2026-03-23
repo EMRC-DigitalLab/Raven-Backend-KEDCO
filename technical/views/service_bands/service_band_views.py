@@ -544,6 +544,7 @@ def technical_service_band_summary(request):
     
     # Build response
     from technical.utils.compliance_utils import get_compliance_summary
+    from technical.utils.explanations import SERVICE_BANDS
     response_data = {
         "period": _format_period_label(from_date, to_date, mode),
         "state_filter": state_filter.name if state_filter else None,
@@ -560,6 +561,7 @@ def technical_service_band_summary(request):
             state=state_filter.name if state_filter else None,
             voltage_level=voltage_level,
         ),
+        "explanations": SERVICE_BANDS,
     }
 
     return Response(response_data)

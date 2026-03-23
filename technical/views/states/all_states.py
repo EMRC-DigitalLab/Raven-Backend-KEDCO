@@ -694,6 +694,7 @@ def all_states_technical_summary(request):
         metadata["month"] = from_date.month
     
     from technical.utils.compliance_utils import get_compliance_summary
+    from technical.utils.explanations import STATES
     response_data = {
         "overview": overview,
         "_metadata": metadata,
@@ -702,6 +703,7 @@ def all_states_technical_summary(request):
             to_date=to_date,
             voltage_level=voltage_level,
         ),
+        "explanations": STATES,
     }
 
     return Response(response_data)

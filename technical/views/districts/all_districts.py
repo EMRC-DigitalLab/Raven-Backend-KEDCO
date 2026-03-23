@@ -666,6 +666,7 @@ def all_business_districts_technical_summary(request):
             })
     
     from technical.utils.compliance_utils import get_compliance_summary
+    from technical.utils.explanations import DISTRICTS
     final_response = {
         "districts": response_data,
         "_metadata": {
@@ -684,6 +685,7 @@ def all_business_districts_technical_summary(request):
             state=state,
             voltage_level=voltage_level,
         ),
+        "explanations": DISTRICTS,
     }
 
     print(f"DEBUG: Final response has {len(response_data)} districts ({final_response['_metadata']['districts_with_onboarded_feeders']} with onboarded feeders)")

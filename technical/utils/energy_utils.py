@@ -112,3 +112,61 @@ def calculate_energy_delivered(feeder_ids, from_date, to_date):
         'meter_feeders': len(ed_by_feeder),
         'system_feeders': len(feeders_needing_system),
     }
+
+
+def calculate_energy_delivered_per_feeder(feeder_ids, from_date, to_date):
+    """
+    Same hybrid logic as calculate_energy_delivered but returns a per-feeder dict.
+
+    Returns:
+        {feeder_id: {'mwh': float, 'source': 'meter' | 'system'}}
+
+    Feeders with zero data in both sources are not included in the result
+    (caller should treat missing key as 0 / no_data).
+    """
+    if not feeder_ids:
+        return {}
+
+    # ── Step 1: valid meter data per feeder ───────────────────────────────────
+    ed_by_feeder = {}
+    ed_records = (
+        EnergyDelivered.objects
+        .filter(feeder_id__in=feeder_ids, date__gte=from_date, date__lte=to_date)
+        .values('feeder_id')
+        .annotate(total=Sum('energy_mwh'), max_daily=Max('energy_mwh'), days=Count('id'))
+    )
+    for row in ed_records:
+        fid = row['feeder_id']
+        total = float(row['total'] or 0)
+        max_daily = float(row['max_daily'] or 0)
+        days = int(row['days'] or 1)
+        if days > 0 and 0 < max_daily <= DAILY_BALLOON_LIMIT:
+            ed_by_feeder[fid] = total
+
+    # ── Step 2: system estimate for feeders with no valid meter data ──────────
+    feeders_needing_system = [fid for fid in feeder_ids if fid not in ed_by_feeder]
+    system_by_feeder = {}
+    if feeders_needing_system:
+        hl_records = (
+            HourlyLoad.objects
+            .filter(
+                feeder_id__in=feeders_needing_system,
+                date__gte=from_date,
+                date__lte=to_date,
+                load_mw__gt=0,
+            )
+            .values('feeder_id')
+            .annotate(avg_load=Avg('load_mw'), supply_hours=Count('id'))
+        )
+        for row in hl_records:
+            fid = row['feeder_id']
+            system_by_feeder[fid] = float(row['avg_load'] or 0) * int(row['supply_hours'] or 0)
+
+    result = {}
+    for fid, mwh in ed_by_feeder.items():
+        result[fid] = {'mwh': round(mwh, 2), 'source': 'meter'}
+    for fid, mwh in system_by_feeder.items():
+        if mwh > 0:
+            result[fid] = {'mwh': round(mwh, 2), 'source': 'system'}
+
+    return result

@@ -838,6 +838,7 @@ def state_technical_summary(request):
         period_label = f"{from_date.strftime('%Y-%m-%d')} to {to_date.strftime('%Y-%m-%d')}"
     
     from technical.utils.compliance_utils import get_compliance_summary
+    from technical.utils.explanations import STATES
     response_data = {
         "state": state_name,
         "month": period_label,
@@ -851,6 +852,7 @@ def state_technical_summary(request):
             state=state_name,
             voltage_level=voltage_level,
         ),
+        "explanations": STATES,
     }
 
     return Response(response_data)

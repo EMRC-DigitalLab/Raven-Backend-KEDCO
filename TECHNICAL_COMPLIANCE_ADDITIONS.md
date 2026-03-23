@@ -1,65 +1,96 @@
-# KEDCO Raven — Technical Module: Compliance Additions
+# KEDCO Raven — Technical Module: All Additions
 ### Frontend Integration Guide
 
 **Base URL (staging):** `https://staging.apiraven.raven-emrc.com/api/technical/`
-**Auth:** Bearer token in `Authorization` header`
+**Auth:** Bearer token in `Authorization` header
 **All responses:** `application/json`
 
-> This document covers compliance fields added to **existing** technical endpoints.
-> No new endpoints were created — compliance data is embedded in the existing responses.
+> This document covers everything added to existing technical endpoints.
+> No new endpoints were created — all data is embedded in the existing responses.
 
 ---
 
-## What Was Added
+## Summary of Everything Added
 
-Two things are now attached to existing technical endpoints:
-
-1. **Per-feeder compliance** — on `feeders/all/`, each feeder now carries its band, compliance status, and whether it has an ongoing interruption that is breaching its band allowance.
-
-2. **Compliance summary** — on overview, states, districts, and service-bands, a `compliance` block is appended showing total compliant / non-compliant / no_data feeder counts, broken down by band.
+| Feature | Where |
+|---|---|
+| Per-feeder band + compliance status + ongoing interruption | `feeders/all/` |
+| Energy delivered per feeder (hybrid) | `feeders/all/` |
+| Sort feeders Band A → E | `feeders/all/` |
+| `?interruption_type=` filter | `feeders/all/` |
+| Compliance summary block | overview, states, districts, service-bands |
+| Interruption breakdown (ls / tcn / disco) — 4 periods | `overview/` only |
+| Customer count (MDI / MDNI / feeder_count) | `overview/` technical_breakdown |
+| `explanations` tooltip block | all endpoints |
+| Fault type category admin (dynamic ls/tcn mapping) | Django Admin |
 
 ---
 
 ## 1. Feeders List — `GET /api/technical/feeders/all/`
 
-Existing fields are unchanged. Three new fields are appended to every feeder:
+### Query Parameters
 
-```
-GET /api/technical/feeders/all/
-GET /api/technical/feeders/all/?feeder_type=11kv
-GET /api/technical/feeders/all/?feeder_type=33kv&state=Kano
-```
+| Param | Values | Description |
+|---|---|---|
+| `feeder_type` | `11kv` `33kv` | Filter by voltage level |
+| `state` | state name | Filter by state |
+| `business_district` | district name | Filter by business district |
+| `interruption_type` | `ls` `tcn` `disco` | Only feeders that had that interruption category in the period |
+| `mode` | `monthly` `daily` `custom` etc. | Date range mode |
 
-### New fields per feeder
+> `interruption_type` and `feeder_type` stack — e.g. `?interruption_type=disco&feeder_type=11kv` returns only 11kv feeders that had a DisCo fault.
+
+### Response shape
 
 ```json
 {
-  "feeder_name": "COCA COLA",
-  "feeder_slug": "kn-tam-coc",
-  "voltage_level": "11kv",
-  "substation_name": "TAMBURAWA",
-  "avg_hours_of_supply": 18.5,
-  "duration_of_interruptions": 5.5,
-  "turnaround_time": 1.5,
-  "ftc": 12,
+  "explanations": { ... },
+  "feeders": [
+    {
+      "feeder_name": "COCA COLA",
+      "feeder_slug": "kn-tam-coc",
+      "voltage_level": "11kv",
+      "substation_name": "TAMBURAWA",
+      "avg_hours_of_supply": 18.5,
+      "duration_of_interruptions": 5.5,
+      "turnaround_time": 1.5,
+      "ftc": 12,
 
-  "band": {
-    "slug": "a",
-    "name": "A",
-    "target_hours_per_day": 20
-  },
+      "energy_delivered": {
+        "mwh": 142.5,
+        "source": "meter"
+      },
 
-  "compliance_status": "at_risk",
+      "band": {
+        "slug": "a",
+        "name": "A",
+        "target_hours_per_day": 20
+      },
 
-  "ongoing_interruption": {
-    "has_interruption": true,
-    "type": "E/F",
-    "duration_hours": 6.5,
-    "band_allowance_hours": 4.0,
-    "breaching": true
-  }
+      "compliance_status": "at_risk",
+
+      "ongoing_interruption": {
+        "has_interruption": true,
+        "type": "E/F",
+        "duration_hours": 6.5,
+        "band_allowance_hours": 4.0,
+        "breaching": true
+      }
+    }
+  ]
 }
 ```
+
+### Sort order
+
+Feeders are returned **Band A first → B → C → D → E**, then alphabetically within each band. No sort parameter needed.
+
+### `energy_delivered` object
+
+| Field | Description |
+|---|---|
+| `mwh` | Total MWh delivered to this feeder in the period |
+| `source` | `meter` = real EnergyDelivered record; `system` = estimated from avg load × supply hours; `no_data` = no data available |
 
 ### `band` object
 
@@ -67,32 +98,30 @@ GET /api/technical/feeders/all/?feeder_type=33kv&state=Kano
 |---|---|
 | `slug` | `a` `b` `c` `d` `e` |
 | `name` | `A` `B` `C` `D` `E` |
-| `target_hours_per_day` | NERC minimum hrs/day for this band (A=20, B=16, C=12, D=8, E=4) |
+| `target_hours_per_day` | NERC minimum hrs/day (A=20, B=16, C=12, D=8, E=4) |
 
 ### `compliance_status` values
 
 | Value | Meaning |
 |---|---|
-| `compliant` | Avg hours supplied ≥ band target for the selected period |
-| `at_risk` | Avg hours < target but ≥ 50% of target |
-| `critical` | Avg hours < 50% of target |
-| `no_data` | Zero HourlyLoad records submitted for this feeder in the period — cannot determine compliance |
-| `no_band` | Feeder has no band assigned in the system |
-
-> `no_data` means the field team has not submitted any readings for this feeder in the selected period. It is **not** the same as zero supply — treat it as an unread/unknown state, not a failure.
+| `compliant` | Avg supply ≥ band target |
+| `at_risk` | Avg supply < target but ≥ 50% of target |
+| `critical` | Avg supply < 50% of target |
+| `no_data` | No HourlyLoad records submitted — unknown state, **not** a failure |
+| `no_band` | No band assigned in the system |
 
 ### `ongoing_interruption` object
 
 | Field | Type | Description |
 |---|---|---|
-| `has_interruption` | bool | `true` if there is an unresolved interruption right now |
-| `type` | string | Interruption type e.g. `E/F`, `O/C`, `L/S` |
-| `duration_hours` | float | How long the interruption has been running (hours) |
+| `has_interruption` | bool | `true` if there is an active unresolved fault right now |
+| `type` | string | Fault type e.g. `E/F`, `O/C`, `L/S` |
+| `duration_hours` | float | How long the fault has been running |
 | `band_allowance_hours` | float | Max downtime the band permits per day = `24 − target_hours` |
-| `breaching` | bool | `true` when `duration_hours > band_allowance_hours` — feeder is actively violating its NERC commitment right now |
+| `breaching` | bool | `true` when duration already exceeds the band's daily allowance — NERC violation in progress |
 
-**Band allowance reference:**
-| Band | Target hrs | Max downtime allowed |
+**Band downtime allowance:**
+| Band | Target hrs | Max downtime |
 |---|---|---|
 | A | 20 hrs | **4 hrs** |
 | B | 16 hrs | **8 hrs** |
@@ -100,21 +129,13 @@ GET /api/technical/feeders/all/?feeder_type=33kv&state=Kano
 | D | 8 hrs | **16 hrs** |
 | E | 4 hrs | **20 hrs** |
 
-> `breaching: true` is the critical admin alert — this feeder's current fault has already exceeded what its band permits.
-
-### Default sort order
-
-Feeders are returned **Band A first → B → C → D → E**, then alphabetically by name within each band. No sort parameter needed.
-
 ---
 
-## 2. Compliance Summary Block
+## 2. Overview — `GET /api/technical/overview/`
 
-Added to: **overview**, **all states**, **single state**, **all districts**, **single district**, **service-bands**.
+Three blocks are added to the existing response.
 
-Every one of these endpoints now includes a `compliance` key at the top level of the response.
-
-### Shape
+### 2a. `compliance` block
 
 ```json
 "compliance": {
@@ -132,34 +153,112 @@ Every one of these endpoints now includes a `compliance` key at the top level of
 }
 ```
 
+> `compliant + non_compliant + no_data = total_feeders`
+
+### 2b. `interruption_breakdown` block
+
+4-period array (same structure as `interruption_sources`). Each period has 3 category objects.
+
+```json
+"interruption_breakdown": [
+  {
+    "ls":    { "interruption_count": 5,  "feeders_affected": 4,  "mean_time_to_restore_hours": 8.0 },
+    "tcn":   { "interruption_count": 3,  "feeders_affected": 3,  "mean_time_to_restore_hours": 14.5 },
+    "disco": { "interruption_count": 47, "feeders_affected": 31, "mean_time_to_restore_hours": 3.8 }
+  },
+  { ... },
+  { ... },
+  { ... }
+]
+```
+
+**Categories:**
+
+| Key | What it includes |
+|---|---|
+| `ls` | Only standalone `L/S` (system-wide load shedding) |
+| `tcn` | TCN/grid events: `TCN`, `132KV E/F`, `132KV CB/F`, `132KV MTCE`, `132KV L/F`, `330KV L/F`, `330KV L/S`, `T/LS`, `L/S GS` |
+| `disco` | Everything else — local DisCo faults under the distribution company's control |
+
+**Per category:**
+
 | Field | Description |
 |---|---|
-| `total_feeders` | All onboarded feeders with a band assigned |
-| `compliant` | Feeders meeting their band target for the period |
-| `non_compliant` | Feeders with data but below their band target |
-| `no_data` | Feeders with no readings submitted — cannot be assessed |
-| `by_band` | Same three counts broken down per band, ordered A → E |
+| `interruption_count` | Total interruptions that started in the period |
+| `feeders_affected` | Distinct feeders with at least one interruption of this type |
+| `mean_time_to_restore_hours` | Avg restore time for resolved interruptions (0 if none resolved yet) |
 
-> `non_compliant + no_data + compliant = total_feeders`
+> **Click-through to feeder list:** `GET /api/technical/feeders/all/?interruption_type=disco&feeder_type=11kv`
 
-### Which endpoints carry this block
+> **Category mapping is admin-managed** — go to Django Admin → *Technical → Fault Type Categories* to add, remove, or reassign fault codes. Changes take effect within 60 seconds. Any code not explicitly mapped is automatically classified as `disco`.
 
-| Endpoint | Compliance block | Scoped to |
-|---|---|---|
-| `GET /api/technical/overview/` | ✅ | Whole network |
-| `GET /api/technical/states/all/` | ✅ | Whole network |
-| `GET /api/technical/states/single/?state=Kano` | ✅ | That state only |
-| `GET /api/technical/business-districts/all/?state=Kano` | ✅ | That state |
-| `GET /api/technical/business-districts/single/?district=Kano+Industrial` | ✅ | That district only |
-| `GET /api/technical/service-bands/` | ✅ | Whole network |
+### 2c. `technical_breakdown.customer_count` — updated
 
-All endpoints respect `feeder_type=11kv` or `feeder_type=33kv` — the compliance block is filtered accordingly.
+Previously hardcoded to 0. Now returns live counts:
+
+```json
+"technical_breakdown": {
+  "feeder_count": { "value": 87, "delta": 0 },
+  "interruption_count": { "value": 55, "delta": 12.5 },
+  "avg_turnaround": { "value": 2.1, "delta": -5.0 },
+  "customer_count": {
+    "total": 1250,
+    "mdi": 450,
+    "mdni": 800,
+    "feeder_count": 87
+  }
+}
+```
+
+| Field | Description |
+|---|---|
+| `total` | All MDI + MDNI customers on onboarded feeders |
+| `mdi` | Maximum Demand Installation customers |
+| `mdni` | Non-Maximum Demand customers |
+| `feeder_count` | Distinct feeders that have at least one customer assigned |
+
+---
+
+## 3. Compliance Summary Block
+
+Added to: **overview**, **all states**, **single state**, **all districts**, **single district**, **service-bands**.
+
+Same shape on all endpoints — scoped to that endpoint's feeders.
+
+| Endpoint | Scoped to |
+|---|---|
+| `GET /api/technical/overview/` | Whole network |
+| `GET /api/technical/states/all/` | Whole network |
+| `GET /api/technical/states/single/?state=Kano` | That state |
+| `GET /api/technical/business-districts/all/?state=Kano` | That state |
+| `GET /api/technical/business-districts/single/?district=Kano+Industrial` | That district |
+| `GET /api/technical/service-bands/` | Whole network |
+
+All endpoints respect `feeder_type=11kv` or `feeder_type=33kv`.
+
+---
+
+## 4. `explanations` Block — All Endpoints
+
+Every technical endpoint now returns a top-level `explanations` object. Use it to drive tooltips on the frontend — no hardcoding needed.
+
+```json
+"explanations": {
+  "avg_hours_of_supply": "Average hours per day the feeder had active supply...",
+  "turnaround_time": "Average hours per day of local DisCo faults only...",
+  "compliance_status": "NERC/MYTO band compliance: compliant, at_risk, critical...",
+  "energy_delivered": "Total MWh delivered. Source: meter if available, otherwise system estimate...",
+  ...
+}
+```
+
+Read `response.explanations["field_name"]` for any tooltip text. All strings are maintained in one place: `technical/utils/explanations.py`.
 
 ---
 
 ## UI Implementation Notes
 
-### Compliance status colours (feeder list)
+### Compliance status colours
 ```js
 const COMPLIANCE_COLORS = {
   compliant:    '#22c55e',  // green
@@ -172,17 +271,25 @@ const COMPLIANCE_COLORS = {
 
 ### Ongoing interruption badge
 - `has_interruption: false` → no badge
-- `has_interruption: true, breaching: false` → amber badge: *"Fault — X hrs (within allowance)"*
-- `has_interruption: true, breaching: true` → red badge: *"BREACHING — X hrs (band allows Y hrs)"*
+- `has_interruption: true, breaching: false` → amber: *"Fault — X hrs (within allowance)"*
+- `has_interruption: true, breaching: true` → red: *"BREACHING — X hrs (band allows Y hrs)"*
 
-### Summary block display
-Show three numbers prominently:
+### Interruption breakdown colours
+```js
+const INTERRUPTION_CATEGORY_COLORS = {
+  ls:    '#f59e0b',  // amber — planned, not a DisCo failure
+  tcn:   '#3b82f6',  // blue  — grid/transmission, outside DisCo control
+  disco: '#ef4444',  // red   — local fault, DisCo responsible
+}
+```
+
+### Compliance summary display
 - **Compliant** → green
 - **Non-compliant** → red
-- **No data** → grey (separate from non-compliant — these are unread, not failing)
+- **No data** → grey (unread, not failing — show separately)
 
-The `by_band` array drives the band-level breakdown table. Always render Band A row first.
+`by_band` array drives the band breakdown table — always render Band A first.
 
 ---
 
-*KEDCO Raven Technical Module — Compliance additions to existing endpoints.*
+*KEDCO Raven Technical Module — All additions to existing endpoints.*
