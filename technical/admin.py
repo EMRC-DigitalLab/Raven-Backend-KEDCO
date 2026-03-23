@@ -9,6 +9,7 @@ from .models import (
     CumulativeMeterReading,
     DailyHoursOfSupply,
     EnergyDelivered,
+    FaultTypeCategory,
     FeederEnergyDaily,
     FeederEnergyMonthly,
     FeederInterruption,
@@ -921,3 +922,29 @@ class FeederEnergyMonthlyAdmin(admin.ModelAdmin):
         return obj.period.strftime('%B %Y')
     month_display.short_description = 'Month'
     month_display.admin_order_field = 'period'
+
+
+@admin.register(FaultTypeCategory)
+class FaultTypeCategoryAdmin(admin.ModelAdmin):
+    """
+    Manage which interruption type codes belong to Load Shedding or Transmission.
+    Any code NOT listed here is automatically classified as a DisCo fault.
+    """
+    list_display = ['code', 'label', 'category_badge']
+    list_filter = ['category']
+    search_fields = ['code', 'label']
+    ordering = ['category', 'code']
+    list_per_page = 50
+
+    def category_badge(self, obj):
+        colors = {
+            'load_shedding': '#f59e0b',
+            'transmission': '#3b82f6',
+        }
+        color = colors.get(obj.category, '#6b7280')
+        return format_html(
+            '<span style="background:{};color:#fff;padding:2px 10px;border-radius:4px;font-weight:bold">{}</span>',
+            color,
+            obj.get_category_display(),
+        )
+    category_badge.short_description = 'Category'

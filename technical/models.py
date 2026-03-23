@@ -460,3 +460,46 @@ class FeederEnergyMonthly(UUIDModel, models.Model):
 
     def __str__(self):
         return f"{self.feeder.name} | {self.period:%Y-%m} → {self.energy_mwh} MWh"
+
+
+class FaultTypeCategory(models.Model):
+    """
+    Maps an interruption type code (e.g. '132KV E/F', 'L/S') to one of two
+    explicit categories.  Any code NOT listed here is automatically treated
+    as 'disco' (DisCo fault — under the distribution company's control).
+
+    Categories
+    ----------
+    load_shedding  — system-wide planned shedding (typically only bare 'L/S')
+    transmission   — TCN / grid-level events and voltage-prefixed L/S variants
+    """
+
+    CATEGORY_CHOICES = [
+        ('ls',    'Load Shedding'),
+        ('tcn',   'Transmission (TCN / Grid)'),
+        ('disco', 'DisCo Fault'),
+    ]
+
+    code = models.CharField(
+        max_length=100,
+        unique=True,
+        help_text="Interruption type code exactly as it appears in feeder records (e.g. 'L/S', '132KV E/F')",
+    )
+    label = models.CharField(
+        max_length=200,
+        blank=True,
+        help_text="Human-readable name for this fault type",
+    )
+    category = models.CharField(
+        max_length=20,
+        choices=CATEGORY_CHOICES,
+        help_text="Category bucket — codes not listed here are classified as DisCo faults",
+    )
+
+    class Meta:
+        verbose_name = 'Fault Type Category'
+        verbose_name_plural = 'Fault Type Categories'
+        ordering = ['category', 'code']
+
+    def __str__(self):
+        return f"{self.code} → {self.get_category_display()}"

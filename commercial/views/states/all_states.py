@@ -1,315 +1,312 @@
-# commercial/views/states/all_states.py
-from datetime import date
-from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
+"""
+commercial/views/states/all_states.py
 
-from dateutil.relativedelta import relativedelta  # type: ignore
-from django.db.models import Sum
-from django.utils.dateparse import parse_date
+GET /api/commercial/states/
+Returns all states with commercial metrics — same KPIs as overview scoped per state.
+
+GET /api/commercial/states/<slug>/
+Returns full metrics for a single state.
+"""
+
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
+from rest_framework import status
 
-from commercial.models import *
-from commercial.models import MonthlyCommercialSummary, MonthlyEnergyBilled
-from commercial.serializers import *
-from common.models import State
-from technical.models import EnergyDelivered
+from commercial.analytics_utils import (
+    calc_arpu,
+    calc_atc_loss,
+    calc_billing,
+    calc_coverage,
+    calc_daily_estimate,
+    calc_energy_consumed,
+    calc_energy_delivered,
+    calc_estimated_billing,
+    customer_filter_kwargs,
+    metric,
+    parse_date_range,
+    reading_filter_kwargs,
+)
+from commercial.bulk_analytics import (
+    feeder_dim_map,
+    bulk_billing,
+    bulk_billing_by_type,
+    bulk_customer_types,
+    bulk_coverage,
+    bulk_energy_consumed,
+    bulk_estimated_billing,
+    bulk_energy_delivered,
+    bulk_managers,
+    energy_per_feeder,
+    rollup_energy,
+    empty_billing,
+    empty_coverage,
+    empty_estimated,
+    ZERO,
+)
+from commercial.models import CommercialCustomer, MeterManager, MeterReading
+from common.models import BusinessDistrict, State
 
 
-def round_two_places(val):
-    return Decimal(val).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-
-
-def get_realistic_target(metric_type, current_value):
+def _state_metrics(state, customers_qs, readings_qs, date_range):
     """
-    Get realistic targets based on industry standards and NERC guidelines
+    Compute all commercial metrics for a single state.
+    customers_qs and readings_qs are already globally filtered (type, feeder_type, etc.)
+    We just add the state scope here.
     """
-    try:
-        current_value = Decimal(str(current_value))
-        
-        if metric_type == "billing_efficiency":
-            # Target: 100% billing efficiency (ideal)
-            # If current is above 95%, aim for 100%
-            # If current is below 95%, aim for gradual improvement (current + 5-10%)
-            if current_value >= 95:
-                return 100.0
-            else:
-                improvement = min(Decimal("10"), Decimal("100") - current_value)
-                return float(round_two_places(current_value + improvement))
-        
-        elif metric_type == "collection_efficiency":
-            # Target: 100% collection efficiency (ideal)
-            # Similar logic to billing efficiency
-            if current_value >= 95:
-                return 100.0
-            else:
-                improvement = min(Decimal("10"), Decimal("100") - current_value)
-                return float(round_two_places(current_value + improvement))
-        
-        elif metric_type == "atcc":
-            # Target: Minimize AT&C losses (aim for 0-15% based on NERC standards)
-            # Good performance: < 15%, Acceptable: < 20%, Poor: > 20%
-            if current_value <= 15:
-                # Already good, aim to maintain or slightly improve
-                return max(0.0, float(round_two_places(current_value - Decimal("2"))))
-            elif current_value <= 25:
-                # Moderate losses, aim for significant improvement
-                return 15.0
-            else:
-                # High losses, aim for substantial reduction
-                reduction = current_value * Decimal("0.2")  # 20% reduction
-                return float(round_two_places(current_value - reduction))
-        
-        elif metric_type == "customer_response_rate":
-            # Target: 100% customer response rate (ideal)
-            # Similar to efficiency metrics
-            if current_value >= 95:
-                return 100.0
-            else:
-                improvement = min(Decimal("10"), Decimal("100") - current_value)
-                return float(round_two_places(current_value + improvement))
-        
-        else:
-            # Default: no target for other metrics
-            return None
-            
-    except:
-        return None
+    c_qs = customers_qs.filter(feeder__business_district__state=state)
+    r_qs = readings_qs.filter(customer__feeder__business_district__state=state)
 
+    total_mdi  = c_qs.filter(customer_type='MDI').count()
+    total_mdni = c_qs.filter(customer_type='MDNI').count()
 
-@api_view(["GET"])
-def commercial_all_states_view(request):
-    mode = request.query_params.get("mode", "monthly")
-    year = int(request.query_params.get("year", date.today().year))
-    month = int(request.query_params.get("month", date.today().month))
-    from_date = request.query_params.get("from_date")
-    to_date = request.query_params.get("to_date")
+    billing   = calc_billing(r_qs)
+    daily_kwh = calc_daily_estimate(billing, date_range)
+    coverage  = calc_coverage(c_qs, r_qs)
+    estimated = calc_estimated_billing(c_qs, coverage['read_ids'], date_range)
 
-    if mode == "monthly":
-        current_start = date(year, month, 1)
-        current_end = current_start + relativedelta(months=1)
-        previous_start = current_start - relativedelta(months=1)
-        previous_end = current_start
-    else:
-        current_start = parse_date(from_date) or date.today().replace(day=1)
-        current_end = parse_date(to_date) or date.today()
-        previous_start = current_start - (current_end - current_start)
-        previous_end = current_start
+    mdi_billing  = calc_billing(r_qs.filter(reading_type='MDI'))
+    mdni_billing = calc_billing(r_qs.filter(reading_type='MDNI'))
+    total_rev    = billing['total_billed_amount']
+    mdi_split  = round(float(mdi_billing['total_billed_amount']) / float(total_rev) * 100, 2) if total_rev else 0
+    mdni_split = round(float(mdni_billing['total_billed_amount']) / float(total_rev) * 100, 2) if total_rev else 0
 
-    def get_disco_aggregates(start_date, end_date):
-        """Get aggregated data for the entire DisCo"""
-        # Get revenue and customer data for entire DisCo
-        disco_summary = MonthlyCommercialSummary.objects.filter(
-            month__gte=start_date,
-            month__lt=end_date,
-        ).aggregate(
-            revenue_billed=Sum("revenue_billed"),
-            revenue_collected=Sum("revenue_collected"),
-            customers_billed=Sum("customers_billed"),
-            customers_responded=Sum("customers_responded"),
-        )
+    feeder_ids = list(c_qs.filter(feeder__isnull=False).values_list('feeder_id', flat=True).distinct())
+    delivered            = calc_energy_delivered(feeder_ids, date_range)
+    delivered_kwh_period = round(float(delivered['total_mwh']) * 1000, 2)
+    daily_delivered_mwh  = round(float(delivered['total_mwh']) / date_range['days'], 4) if date_range['days'] else 0
+    energy_consumed_kwh  = calc_energy_consumed(r_qs)
 
-        # Get energy data for entire DisCo
-        disco_energy_delivered = EnergyDelivered.objects.filter(
-            date__gte=start_date,
-            date__lt=end_date
-        ).aggregate(Sum("energy_mwh"))["energy_mwh__sum"] or Decimal(0)
+    billing_efficiency, atc_loss = calc_atc_loss(
+        billing['total_billed_kwh'], delivered['total_mwh']
+    )
+    arpu = calc_arpu(billing['total_billed_amount'], coverage['read'])
 
-        disco_energy_billed = MonthlyEnergyBilled.objects.filter(
-            month__gte=start_date,
-            month__lt=end_date
-        ).aggregate(Sum("energy_mwh"))["energy_mwh__sum"] or Decimal(0)
+    mdi_mgrs  = MeterManager.objects.filter(
+        manager_type='MDI', assignments__feeder__business_district__state=state
+    ).distinct().count()
+    mdni_mgrs = MeterManager.objects.filter(
+        manager_type='MDNI', assignments__feeder__business_district__state=state
+    ).distinct().count()
 
-        return {
-            'revenue_billed': disco_summary["revenue_billed"] or Decimal(0),
-            'revenue_collected': disco_summary["revenue_collected"] or Decimal(0),
-            'customers_billed': disco_summary["customers_billed"] or 0,
-            'customers_responded': disco_summary["customers_responded"] or 0,
-            'energy_delivered': disco_energy_delivered,
-            'energy_billed': disco_energy_billed,
-        }
+    # ── By-district energy breakdown ─────────────────────────────────────────
+    f2dist = feeder_dim_map(c_qs, 'feeder__business_district_id')
+    by_district_breakdown = []
+    if f2dist:
+        pf_dist   = energy_per_feeder(list(f2dist.keys()), date_range)
+        e_by_dist = rollup_energy(pf_dist, f2dist)
+        b_by_dist = bulk_billing(r_qs, f2dist)
+        c_by_dist = bulk_energy_consumed(r_qs, f2dist)
+        for d_obj in BusinessDistrict.objects.filter(state=state).order_by('name'):
+            did       = d_obj.id
+            ed_d      = e_by_dist.get(did, {'total_mwh': 0.0, 'mode': 'system'})
+            b_d       = b_by_dist.get(did, {'total_billed_kwh': ZERO})
+            del_kwh   = round(float(ed_d['total_mwh']) * 1000, 2)
+            _, atc    = calc_atc_loss(b_d['total_billed_kwh'], ed_d['total_mwh'])
+            by_district_breakdown.append({
+                'district': {'slug': d_obj.slug, 'name': d_obj.name},
+                'energy_delivered_kwh': del_kwh,
+                'energy_consumed_kwh':  float(c_by_dist.get(did, ZERO)),
+                'actual_billed_kwh':    float(b_d['total_billed_kwh']),
+                'atc_loss':             atc,
+                'mode':                 ed_d['mode'],
+            })
 
-    def get_state_aggregates(state, start_date, end_date):
-        """Get aggregated data for a specific state"""
-        # Get revenue and customer data by filtering transformers through their feeders
-        state_summary = MonthlyCommercialSummary.objects.filter(
-            transformer__feeder__business_district__state=state,
-            month__gte=start_date,
-            month__lt=end_date,
-        ).aggregate(
-            revenue_billed=Sum("revenue_billed"),
-            revenue_collected=Sum("revenue_collected"),
-            customers_billed=Sum("customers_billed"),
-            customers_responded=Sum("customers_responded"),
-        )
-
-        # Get energy data for the state
-        state_energy_delivered = EnergyDelivered.objects.filter(
-            feeder__business_district__state=state,
-            date__gte=start_date,
-            date__lt=end_date
-        ).aggregate(Sum("energy_mwh"))["energy_mwh__sum"] or Decimal(0)
-
-        state_energy_billed = MonthlyEnergyBilled.objects.filter(
-            feeder__business_district__state=state,
-            month__gte=start_date,
-            month__lt=end_date
-        ).aggregate(Sum("energy_mwh"))["energy_mwh__sum"] or Decimal(0)
-
-        return {
-            'revenue_billed': state_summary["revenue_billed"] or Decimal(0),
-            'revenue_collected': state_summary["revenue_collected"] or Decimal(0),
-            'customers_billed': state_summary["customers_billed"] or 0,
-            'customers_responded': state_summary["customers_responded"] or 0,
-            'energy_delivered': state_energy_delivered,
-            'energy_billed': state_energy_billed,
-        }
-
-    def calc_metrics(data):
-        """Calculate efficiency metrics from aggregated data"""
-        try:
-            revenue_billed = Decimal(str(data['revenue_billed']))
-            revenue_collected = Decimal(str(data['revenue_collected']))
-            energy_delivered = Decimal(str(data['energy_delivered']))
-            energy_billed = Decimal(str(data['energy_billed']))
-            customers_billed = data['customers_billed']
-            customers_responded = data['customers_responded']
-
-            # Calculate efficiencies
-            billing_eff = (energy_billed / energy_delivered) * 100 if energy_delivered > 0 else Decimal(0)
-            collection_eff = (revenue_collected / revenue_billed) * 100 if revenue_billed > 0 else Decimal(0)
-            
-            # Calculate energy collected using the corrected formula
-            energy_collected = energy_billed * (collection_eff / 100) if energy_delivered > 0 else Decimal(0)
-            
-            # Calculate AT&C losses
-            atcc = (Decimal(1) - ((billing_eff / 100) * (collection_eff / 100))) * 100
-            
-            # Calculate customer metrics
-            customer_response_rate = (Decimal(customers_responded) / Decimal(customers_billed)) * 100 if customers_billed > 0 else Decimal(0)
-            revenue_per_customer = revenue_billed / Decimal(customers_billed) if customers_billed > 0 else Decimal(0)
-            collections_per_customer = revenue_collected / Decimal(customers_billed) if customers_billed > 0 else Decimal(0)
-
-            return {
-                'energy_delivered': energy_delivered,
-                'energy_billed': energy_billed,
-                'energy_collected': energy_collected,
-                'revenue_billed': revenue_billed,
-                'revenue_collected': revenue_collected,
-                'billing_efficiency': billing_eff,
-                'collection_efficiency': collection_eff,
-                'atcc': atcc,
-                'customer_response_rate': customer_response_rate,
-                'revenue_per_customer': revenue_per_customer,
-                'collections_per_customer': collections_per_customer,
-            }
-        except (InvalidOperation, ZeroDivisionError):
-            return {
-                'energy_delivered': Decimal(0),
-                'energy_billed': Decimal(0),
-                'energy_collected': Decimal(0),
-                'revenue_billed': Decimal(0),
-                'revenue_collected': Decimal(0),
-                'billing_efficiency': Decimal(0),
-                'collection_efficiency': Decimal(0),
-                'atcc': Decimal(0),
-                'customer_response_rate': Decimal(0),
-                'revenue_per_customer': Decimal(0),
-                'collections_per_customer': Decimal(0),
-            }
-
-    def percentage_delta(current, previous):
-        """Calculate percentage change between current and previous values"""
-        if previous and previous != 0:
-            return round(float(((Decimal(str(current)) - Decimal(str(previous))) / Decimal(str(previous))) * 100), 2)
-        return None
-
-    # Get DisCo-wide data for current and previous periods
-    current_disco = get_disco_aggregates(current_start, current_end)
-    previous_disco = get_disco_aggregates(previous_start, previous_end)
-
-    current_disco_metrics = calc_metrics(current_disco)
-    previous_disco_metrics = calc_metrics(previous_disco)
-
-    # Build DisCo-wide summary
-    disco_summary = {
-        "atcc": {
-            "actual": float(round_two_places(current_disco_metrics['atcc'])),
-            "delta": percentage_delta(current_disco_metrics['atcc'], previous_disco_metrics['atcc']),
-            "target": get_realistic_target("atcc", current_disco_metrics['atcc'])
+    return {
+        'state': {'slug': state.slug, 'name': state.name},
+        'customers': {
+            'total': metric(total_mdi + total_mdni, explanation='Total registered MDI and MDNI customers in this state.'),
+            'mdi':   metric(total_mdi,  explanation='MDI customers in this state.'),
+            'mdni':  metric(total_mdni, explanation='MDNI customers in this state.'),
         },
-        "billing_efficiency": {
-            "actual": float(round_two_places(current_disco_metrics['billing_efficiency'])),
-            "delta": percentage_delta(current_disco_metrics['billing_efficiency'], previous_disco_metrics['billing_efficiency']),
-            "target": get_realistic_target("billing_efficiency", current_disco_metrics['billing_efficiency'])
+        'energy': {
+            'energy_consumed_kwh': metric(
+                float(energy_consumed_kwh), unit='kWh',
+                explanation='Total energy consumed = sum(present_reading - previous_reading) for all customers read in this state in this period.',
+            ),
+            'actual_billed_kwh': metric(
+                float(billing['total_billed_kwh']), unit='kWh',
+                explanation='Actual energy billed from real readings in this state for this period.',
+            ),
+            'estimated_billed_kwh': metric(
+                float(estimated['estimated_kwh']), unit='kWh', mode='estimated',
+                explanation='Estimated energy for unread customers in this state.',
+            ),
+            'total_projected_billed_kwh': metric(
+                float(billing['total_billed_kwh'] + estimated['estimated_kwh']), unit='kWh', mode='estimated',
+                explanation='Actual + estimated energy for this state.',
+            ),
+            'daily_billed_kwh_estimate': metric(
+                float(daily_kwh), unit='kWh/day', mode='estimated',
+                explanation='Daily energy billed estimate from actual readings in this state.',
+            ),
+            'daily_energy_delivered_mwh': metric(
+                float(daily_delivered_mwh), unit='MWh/day', mode=delivered['mode'],
+                explanation='Average daily energy delivered for this state — total_mwh / days. Source: meter or system fallback.',
+            ),
+            'energy_delivered_kwh': metric(
+                delivered_kwh_period, unit='kWh', mode=delivered['mode'],
+                explanation='Total energy delivered for the period in this state from technical module.',
+            ),
+            'energy_delivered_vs_billed': metric(
+                {
+                    'delivered_kwh':        delivered_kwh_period,
+                    'actual_billed_kwh':    float(billing['total_billed_kwh']),
+                    'projected_billed_kwh': float(billing['total_billed_kwh'] + estimated['estimated_kwh']),
+                    'gap_kwh':              round(delivered_kwh_period - float(billing['total_billed_kwh']), 2),
+                },
+                unit='kWh', mode=delivered['mode'],
+                explanation='Energy delivered vs billed for this state. Gap = delivered minus actual billed.',
+            ),
         },
-        "collection_efficiency": {
-            "actual": float(round_two_places(current_disco_metrics['collection_efficiency'])),
-            "delta": percentage_delta(current_disco_metrics['collection_efficiency'], previous_disco_metrics['collection_efficiency']),
-            "target": get_realistic_target("collection_efficiency", current_disco_metrics['collection_efficiency'])
+        'revenue': {
+            'actual_energy_charge': metric(float(billing['energy_charge']), unit='NGN', explanation='Actual energy charge from real readings in this state.'),
+            'estimated_energy_charge': metric(float(estimated['estimated_energy_charge']), unit='NGN', mode='estimated', explanation='Estimated energy charge for unread customers in this state.'),
+            'actual_vat': metric(float(billing['vat']), unit='NGN', explanation='7.5% VAT on actual energy charge in this state.'),
+            'actual_total_billed': metric(float(billing['total_billed_amount']), unit='NGN', explanation='Total billed from real readings in this state including VAT.'),
+            'estimated_revenue': metric(float(estimated['estimated_revenue']), unit='NGN', mode='estimated', explanation='Estimated revenue at risk from unread customers in this state.'),
+            'total_projected_revenue': metric(
+                float(billing['total_billed_amount'] + estimated['estimated_revenue']), unit='NGN', mode='estimated',
+                explanation='Total projected revenue for this state — actual + estimated.',
+            ),
+            'mdi_revenue_split':  metric(mdi_split,  unit='%', explanation='% of actual billed revenue from MDI customers in this state.'),
+            'mdni_revenue_split': metric(mdni_split, unit='%', explanation='% of actual billed revenue from MDNI customers in this state.'),
+            'arpu': metric(float(arpu), unit='NGN', explanation='Average Revenue Per Customer in this state.'),
         },
-        "customer_response_rate": {
-            "actual": float(round_two_places(current_disco_metrics['customer_response_rate'])),
-            "delta": percentage_delta(current_disco_metrics['customer_response_rate'], previous_disco_metrics['customer_response_rate']),
-            "target": get_realistic_target("customer_response_rate", current_disco_metrics['customer_response_rate'])
-        }
+        'performance': {
+            'coverage_rate':    metric(coverage['rate'], unit='%', explanation='% of customers in this state with a reading in this period.'),
+            'customers_read':   metric(coverage['read'], explanation='Customers read in this state in this period.'),
+            'unread_customers': metric(coverage['unread'], explanation='Customers not read in this state in this period.'),
+            'billing_efficiency': metric(billing_efficiency, unit='%', mode='estimated', explanation='Energy billed / energy delivered x 100 for this state.'),
+            'atc_loss': metric(atc_loss, unit='%', mode='estimated', explanation='AT&C loss for this state — 100 minus billing efficiency.'),
+        },
+        'managers': {
+            'total_mdi_managers':  metric(mdi_mgrs,  explanation='MDI field officers with assignments in this state.'),
+            'total_mdni_managers': metric(mdni_mgrs, explanation='MDNI field officers with assignments in this state.'),
+        },
+        'energy_breakdown': {
+            'by_district': by_district_breakdown,
+        },
     }
 
-    # Process each state
-    state_results = []
-    for state in State.objects.all():
-        # Current period data
-        current_state = get_state_aggregates(state, current_start, current_end)
-        current_metrics = calc_metrics(current_state)
 
-        # Previous period data
-        previous_state = get_state_aggregates(state, previous_start, previous_end)
-        previous_metrics = calc_metrics(previous_state)
+@api_view(['GET'])
+def all_states(request):
+    """List all states with commercial metrics — fixed ~13 queries total."""
+    date_range   = parse_date_range(request)
+    customers_qs = CommercialCustomer.objects.filter(**customer_filter_kwargs(request))
+    readings_qs  = MeterReading.objects.filter(**reading_filter_kwargs(request, date_range))
 
-        state_results.append({
-            "state": state.name,
-            "energy_delivered": {
-                "actual": float(round_two_places(current_metrics['energy_delivered'])),
-                "delta": percentage_delta(current_metrics['energy_delivered'], previous_metrics['energy_delivered'])
+    states = list(State.objects.exclude(name='Test State').order_by('name'))
+
+    # ── One query builds feeder→state map; all bulk fns use it ───────────────
+    f2d = feeder_dim_map(customers_qs, 'feeder__business_district__state_id')
+
+    billing_data   = bulk_billing(readings_qs, f2d)
+    type_billing   = bulk_billing_by_type(readings_qs, f2d)
+    ctype_counts   = bulk_customer_types(customers_qs, f2d)
+    coverage_data  = bulk_coverage(customers_qs, readings_qs, f2d)
+    estimated_data = bulk_estimated_billing(customers_qs, coverage_data, date_range, f2d)
+    managers_data  = bulk_managers(f2d)
+    energy_data    = bulk_energy_delivered(list(f2d.keys()), date_range, f2d)
+    consumed_data  = bulk_energy_consumed(readings_qs, f2d)
+
+    # ── Assemble per-state from pre-aggregated buckets ────────────────────────
+    days    = date_range['days']
+    results = []
+    for state in states:
+        sid  = state.id
+        b    = billing_data.get(sid, empty_billing())
+        e    = estimated_data.get(sid, empty_estimated())
+        cov  = coverage_data.get(sid, empty_coverage())
+        ct   = ctype_counts.get(sid, {'MDI': 0, 'MDNI': 0})
+        mgrs = managers_data.get(sid, {'mdi': 0, 'mdni': 0})
+
+        ed            = energy_data.get(sid, {'total_mwh': 0.0, 'mode': 'system'})
+        delivered_kwh = round(float(ed['total_mwh']) * 1000, 2)
+        daily_mwh     = round(float(ed['total_mwh']) / days, 4) if days else 0
+        daily_kwh     = round(float(b['total_billed_kwh']) / days, 4) if days else 0
+        consumed_kwh  = float(consumed_data.get(sid, ZERO))
+
+        total_rev  = b['total_billed_amount']
+        mdi_amt    = type_billing.get((sid, 'MDI'),  ZERO)
+        mdni_amt   = type_billing.get((sid, 'MDNI'), ZERO)
+        mdi_split  = round(float(mdi_amt)  / float(total_rev) * 100, 2) if total_rev else 0
+        mdni_split = round(float(mdni_amt) / float(total_rev) * 100, 2) if total_rev else 0
+
+        billing_eff, atc_loss = calc_atc_loss(b['total_billed_kwh'], ed['total_mwh'])
+        arpu = calc_arpu(b['total_billed_amount'], cov['read'])
+
+        results.append({
+            'state': {'slug': state.slug, 'name': state.name},
+            'customers': {
+                'total': metric(ct['MDI'] + ct['MDNI'], explanation='Total registered MDI and MDNI customers in this state.'),
+                'mdi':   metric(ct['MDI'],              explanation='MDI customers in this state.'),
+                'mdni':  metric(ct['MDNI'],             explanation='MDNI customers in this state.'),
             },
-            "energy_billed": {
-                "actual": float(round_two_places(current_metrics['energy_billed'])),
-                "delta": percentage_delta(current_metrics['energy_billed'], previous_metrics['energy_billed'])
+            'energy': {
+                'energy_consumed_kwh': metric(consumed_kwh, unit='kWh', explanation='Total energy consumed = sum(present_reading - previous_reading) for all customers read in this state in this period.'),
+                'actual_billed_kwh': metric(float(b['total_billed_kwh']), unit='kWh', explanation='Actual energy billed from real readings in this state for this period.'),
+                'estimated_billed_kwh': metric(float(e['estimated_kwh']), unit='kWh', mode='estimated', explanation='Estimated energy for unread customers in this state.'),
+                'total_projected_billed_kwh': metric(float(b['total_billed_kwh'] + e['estimated_kwh']), unit='kWh', mode='estimated', explanation='Actual + estimated energy for this state.'),
+                'daily_billed_kwh_estimate': metric(float(daily_kwh), unit='kWh/day', mode='estimated', explanation='Daily energy billed estimate from actual readings in this state.'),
+                'daily_energy_delivered_mwh': metric(float(daily_mwh), unit='MWh/day', mode=ed['mode'], explanation='Average daily energy delivered for this state — total_mwh / days. Source: meter or system fallback.'),
+                'energy_delivered_kwh': metric(delivered_kwh, unit='kWh', mode=ed['mode'], explanation='Total energy delivered for the period in this state from technical module.'),
+                'energy_delivered_vs_billed': metric(
+                    {'delivered_kwh': delivered_kwh, 'actual_billed_kwh': float(b['total_billed_kwh']),
+                     'projected_billed_kwh': float(b['total_billed_kwh'] + e['estimated_kwh']),
+                     'gap_kwh': round(delivered_kwh - float(b['total_billed_kwh']), 2)},
+                    unit='kWh', mode=ed['mode'], explanation='Energy delivered vs billed for this state. Gap = delivered minus actual billed.',
+                ),
             },
-            "energy_collected": {
-                "actual": float(round_two_places(current_metrics['energy_collected'])),
-                "delta": percentage_delta(current_metrics['energy_collected'], previous_metrics['energy_collected'])
+            'revenue': {
+                'actual_energy_charge':    metric(float(b['energy_charge']), unit='NGN', explanation='Actual energy charge from real readings in this state.'),
+                'estimated_energy_charge': metric(float(e['estimated_energy_charge']), unit='NGN', mode='estimated', explanation='Estimated energy charge for unread customers in this state.'),
+                'actual_vat':              metric(float(b['vat']), unit='NGN', explanation='7.5% VAT on actual energy charge in this state.'),
+                'actual_total_billed':     metric(float(b['total_billed_amount']), unit='NGN', explanation='Total billed from real readings in this state including VAT.'),
+                'estimated_revenue':       metric(float(e['estimated_revenue']), unit='NGN', mode='estimated', explanation='Estimated revenue at risk from unread customers in this state.'),
+                'total_projected_revenue': metric(float(b['total_billed_amount'] + e['estimated_revenue']), unit='NGN', mode='estimated', explanation='Total projected revenue for this state — actual + estimated.'),
+                'mdi_revenue_split':       metric(mdi_split,       unit='%', explanation='% of actual billed revenue from MDI customers in this state.'),
+                'mdni_revenue_split':      metric(mdni_split,      unit='%', explanation='% of actual billed revenue from MDNI customers in this state.'),
+                'arpu':                    metric(float(arpu),     unit='NGN', explanation='Average Revenue Per Customer in this state.'),
             },
-            "atcc": {
-                "actual": float(round_two_places(current_metrics['atcc'])),
-                "delta": percentage_delta(current_metrics['atcc'], previous_metrics['atcc']),
-                "target": get_realistic_target("atcc", current_metrics['atcc'])
+            'performance': {
+                'coverage_rate':      metric(cov['rate'],    unit='%', explanation='% of customers in this state with a reading in this period.'),
+                'customers_read':     metric(cov['read'],              explanation='Customers read in this state in this period.'),
+                'unread_customers':   metric(cov['unread'],            explanation='Customers not read in this state in this period.'),
+                'billing_efficiency': metric(billing_eff, unit='%', mode='estimated', explanation='Energy billed / energy delivered x 100 for this state.'),
+                'atc_loss':           metric(atc_loss,   unit='%', mode='estimated', explanation='AT&C loss for this state — 100 minus billing efficiency.'),
             },
-            "billing_efficiency": {
-                "actual": float(round_two_places(current_metrics['billing_efficiency'])),
-                "delta": percentage_delta(current_metrics['billing_efficiency'], previous_metrics['billing_efficiency']),
-                "target": get_realistic_target("billing_efficiency", current_metrics['billing_efficiency'])
-            },
-            "collection_efficiency": {
-                "actual": float(round_two_places(current_metrics['collection_efficiency'])),
-                "delta": percentage_delta(current_metrics['collection_efficiency'], previous_metrics['collection_efficiency']),
-                "target": get_realistic_target("collection_efficiency", current_metrics['collection_efficiency'])
-            },
-            "customer_response_rate": {
-                "actual": float(round_two_places(current_metrics['customer_response_rate'])),
-                "delta": percentage_delta(current_metrics['customer_response_rate'], previous_metrics['customer_response_rate']),
-                "target": get_realistic_target("customer_response_rate", current_metrics['customer_response_rate'])
-            },
-            "revenue_billed_per_customer": {
-                "actual": float(round_two_places(current_metrics['revenue_per_customer'])),
-                "delta": percentage_delta(current_metrics['revenue_per_customer'], previous_metrics['revenue_per_customer'])
-            },
-            "collections_per_customer": {
-                "actual": float(round_two_places(current_metrics['collections_per_customer'])),
-                "delta": percentage_delta(current_metrics['collections_per_customer'], previous_metrics['collections_per_customer'])
+            'managers': {
+                'total_mdi_managers':  metric(mgrs['mdi'],  explanation='MDI field officers with assignments in this state.'),
+                'total_mdni_managers': metric(mgrs['mdni'], explanation='MDNI field officers with assignments in this state.'),
             },
         })
 
     return Response({
-        "disco_summary": disco_summary,
-        "states": state_results
+        'period': {
+            'mode': date_range['mode'], 'start_date': str(date_range['start_date']),
+            'end_date': str(date_range['end_date']), 'label': date_range['label'], 'days': date_range['days'],
+        },
+        'count':  len(results),
+        'states': results,
     })
+
+
+@api_view(['GET'])
+def single_state(request, slug):
+    """Full commercial metrics for one state."""
+    try:
+        state = State.objects.get(slug=slug)
+    except State.DoesNotExist:
+        return Response({'error': f'State "{slug}" not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+    date_range   = parse_date_range(request)
+    customers_qs = CommercialCustomer.objects.filter(**customer_filter_kwargs(request))
+    readings_qs  = MeterReading.objects.filter(**reading_filter_kwargs(request, date_range))
+
+    data = _state_metrics(state, customers_qs, readings_qs, date_range)
+    data['period'] = {
+        'mode': date_range['mode'], 'start_date': str(date_range['start_date']),
+        'end_date': str(date_range['end_date']), 'label': date_range['label'], 'days': date_range['days'],
+    }
+    return Response(data)

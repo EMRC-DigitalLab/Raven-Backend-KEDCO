@@ -665,6 +665,8 @@ def all_business_districts_technical_summary(request):
                 }
             })
     
+    from technical.utils.compliance_utils import get_compliance_summary
+    from technical.utils.explanations import DISTRICTS
     final_response = {
         "districts": response_data,
         "_metadata": {
@@ -675,12 +677,19 @@ def all_business_districts_technical_summary(request):
             "period_days": (to_date - from_date).days + 1,
             "total_districts": len(response_data),
             "districts_with_onboarded_feeders": sum(1 for d in response_data if d["metrics"]["feeder_count"] > 0),
-            "onboarded_feeders_only": True  # Indicator that only onboarded feeders are counted
-        }
+            "onboarded_feeders_only": True
+        },
+        "compliance": get_compliance_summary(
+            from_date=from_date,
+            to_date=to_date,
+            state=state,
+            voltage_level=voltage_level,
+        ),
+        "explanations": DISTRICTS,
     }
-    
+
     print(f"DEBUG: Final response has {len(response_data)} districts ({final_response['_metadata']['districts_with_onboarded_feeders']} with onboarded feeders)")
-    
+
     return Response(final_response)
 
 

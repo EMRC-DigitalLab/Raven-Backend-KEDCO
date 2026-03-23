@@ -1,0 +1,27 @@
+services:
+  raven:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: raven_dev
+    env_file: .env
+    ports:
+      - "8000:8000"
+    volumes:
+      - static_dev:/app/staticfiles
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:alpine
+    container_name: nginx_dev
+    ports:
+      - "8080:80"
+    volumes:
+      - ./nginx/dev.conf:/etc/nginx/conf.d/default.conf:ro
+      - static_dev:/app/staticfiles:ro
+    depends_on:
+      - raven
+    restart: unless-stopped
+
+volumes:
+  static_dev:

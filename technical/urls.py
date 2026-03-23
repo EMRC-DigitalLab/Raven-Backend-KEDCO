@@ -38,7 +38,7 @@ urlpatterns = [
     path('business-districts/all/', all_business_districts_technical_summary, name='business-districts-technical-summary'),
     path('business-districts/single/',  business_district_technical_summary, name='business-district-technical-summary'),
 
-    # # Feeders
+    # Feeders
     path('feeders/all/', FeederAvailabilityOverview.as_view(), name='feeder-availability-overview'),
 
     # Service Bands
@@ -46,7 +46,4 @@ urlpatterns = [
 
     # Transformer Metrics
     path('transformers/', TransformerAvailabilityOverview.as_view(), name="transformer-availability"),
-
-
-    
 ]

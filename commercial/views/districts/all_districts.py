@@ -1,152 +1,320 @@
-# commercial/views/districts/all_districts.py
-from datetime import date, timedelta
-from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
+"""
+commercial/views/districts/all_districts.py
 
-from dateutil.relativedelta import relativedelta  # type: ignore
-from django.db.models import Sum
+GET /api/commercial/districts/
+Returns all business districts with commercial metrics.
+
+GET /api/commercial/districts/<slug>/
+Returns full metrics for a single business district.
+"""
+
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
+from rest_framework import status
 
-from commercial.models import *
-from commercial.models import MonthlyCommercialSummary, MonthlyEnergyBilled
-from commercial.serializers import *
+from commercial.analytics_utils import (
+    calc_arpu,
+    calc_atc_loss,
+    calc_billing,
+    calc_coverage,
+    calc_daily_estimate,
+    calc_energy_delivered,
+    calc_estimated_billing,
+    calc_energy_consumed,
+    customer_filter_kwargs,
+    metric,
+    parse_date_range,
+    reading_filter_kwargs,
+)
+from commercial.bulk_analytics import (
+    feeder_dim_map,
+    bulk_billing,
+    bulk_billing_by_type,
+    bulk_customer_types,
+    bulk_coverage,
+    bulk_estimated_billing,
+    bulk_energy_delivered,
+    bulk_energy_consumed,
+    bulk_managers,
+    energy_per_feeder,
+    rollup_energy,
+    empty_billing,
+    empty_coverage,
+    empty_estimated,
+    ZERO,
+)
+from commercial.models import CommercialCustomer, MeterManager, MeterReading
 from common.models import BusinessDistrict, Feeder
-from technical.models import FeederEnergyDaily, FeederEnergyMonthly
 
 
-@api_view(["GET"])
-def commercial_all_business_districts_view(request):
-    state_name = request.query_params.get("state")
-    year = int(request.query_params.get("year", date.today().year))
-    month = int(request.query_params.get("month", date.today().month))
+def _district_metrics(district, customers_qs, readings_qs, date_range):
+    """
+    Compute all commercial metrics for a single business district.
+    customers_qs and readings_qs are already globally filtered.
+    We just add the district scope here.
+    """
+    c_qs = customers_qs.filter(feeder__business_district=district)
+    r_qs = readings_qs.filter(customer__feeder__business_district=district)
 
-    period_start = date(year, month, 1)
+    total_mdi  = c_qs.filter(customer_type='MDI').count()
+    total_mdni = c_qs.filter(customer_type='MDNI').count()
 
-    if not state_name:
-        return Response({"error": "State parameter is required"}, status=400)
+    billing   = calc_billing(r_qs)
+    daily_kwh = calc_daily_estimate(billing, date_range)
+    coverage  = calc_coverage(c_qs, r_qs)
+    estimated = calc_estimated_billing(c_qs, coverage['read_ids'], date_range)
 
-    districts = BusinessDistrict.objects.filter(state__name__iexact=state_name)
-    result = []
+    mdi_billing  = calc_billing(r_qs.filter(reading_type='MDI'))
+    mdni_billing = calc_billing(r_qs.filter(reading_type='MDNI'))
+    total_rev    = billing['total_billed_amount']
+    mdi_split  = round(float(mdi_billing['total_billed_amount']) / float(total_rev) * 100, 2) if total_rev else 0
+    mdni_split = round(float(mdni_billing['total_billed_amount']) / float(total_rev) * 100, 2) if total_rev else 0
 
+    feeder_ids = list(c_qs.filter(feeder__isnull=False).values_list('feeder_id', flat=True).distinct())
+    delivered            = calc_energy_delivered(feeder_ids, date_range)
+    delivered_kwh_period = round(float(delivered['total_mwh']) * 1000, 2)
+    daily_delivered_mwh  = round(float(delivered['total_mwh']) / date_range['days'], 4) if date_range['days'] else 0
+    energy_consumed_kwh  = calc_energy_consumed(r_qs)
+
+    billing_efficiency, atc_loss = calc_atc_loss(
+        billing['total_billed_kwh'], delivered['total_mwh']
+    )
+    arpu = calc_arpu(billing['total_billed_amount'], coverage['read'])
+
+    mdi_mgrs  = MeterManager.objects.filter(
+        manager_type='MDI', assignments__feeder__business_district=district
+    ).distinct().count()
+    mdni_mgrs = MeterManager.objects.filter(
+        manager_type='MDNI', assignments__feeder__business_district=district
+    ).distinct().count()
+
+    # ── By-feeder energy breakdown ────────────────────────────────────────────
+    f2fdr = feeder_dim_map(c_qs, 'feeder_id')
+    by_feeder_breakdown = []
+    if f2fdr:
+        pf_fdr   = energy_per_feeder(list(f2fdr.keys()), date_range)
+        e_by_fdr = rollup_energy(pf_fdr, f2fdr)
+        b_by_fdr = bulk_billing(r_qs, f2fdr)
+        c_by_fdr = bulk_energy_consumed(r_qs, f2fdr)
+        for fdr in Feeder.objects.filter(id__in=list(f2fdr.keys())).order_by('name'):
+            fid     = fdr.id
+            ed_f    = e_by_fdr.get(fid, {'total_mwh': 0.0, 'mode': 'system'})
+            b_f     = b_by_fdr.get(fid, {'total_billed_kwh': ZERO})
+            del_kwh = round(float(ed_f['total_mwh']) * 1000, 2)
+            _, atc  = calc_atc_loss(b_f['total_billed_kwh'], ed_f['total_mwh'])
+            by_feeder_breakdown.append({
+                'feeder': {'slug': fdr.slug, 'name': fdr.name},
+                'energy_delivered_kwh': del_kwh,
+                'energy_consumed_kwh':  float(c_by_fdr.get(fid, ZERO)),
+                'actual_billed_kwh':    float(b_f['total_billed_kwh']),
+                'atc_loss':             atc,
+                'mode':                 ed_f['mode'],
+            })
+
+    return {
+        'district': {
+            'slug': district.slug,
+            'name': district.name,
+            'state': district.state.name if district.state else None,
+        },
+        'customers': {
+            'total': metric(total_mdi + total_mdni, explanation='Total registered MDI and MDNI customers in this district.'),
+            'mdi':   metric(total_mdi,  explanation='MDI customers in this district.'),
+            'mdni':  metric(total_mdni, explanation='MDNI customers in this district.'),
+        },
+        'energy': {
+            'energy_consumed_kwh': metric(
+                float(energy_consumed_kwh), unit='kWh',
+                explanation='Total energy consumed = sum(present_reading - previous_reading) for all customers read in this period.',
+            ),
+            'actual_billed_kwh': metric(
+                float(billing['total_billed_kwh']), unit='kWh',
+                explanation='Actual energy billed from real readings in this district for this period.',
+            ),
+            'estimated_billed_kwh': metric(
+                float(estimated['estimated_kwh']), unit='kWh', mode='estimated',
+                explanation='Estimated energy for unread customers in this district.',
+            ),
+            'total_projected_billed_kwh': metric(
+                float(billing['total_billed_kwh'] + estimated['estimated_kwh']), unit='kWh', mode='estimated',
+                explanation='Actual + estimated energy for this district.',
+            ),
+            'daily_billed_kwh_estimate': metric(
+                float(daily_kwh), unit='kWh/day', mode='estimated',
+                explanation='Daily energy billed estimate from actual readings in this district.',
+            ),
+            'daily_energy_delivered_mwh': metric(
+                float(daily_delivered_mwh), unit='MWh/day', mode=delivered['mode'],
+                explanation='Average daily energy delivered — total_mwh / days. Source: meter or system fallback.',
+            ),
+            'energy_delivered_kwh': metric(
+                delivered_kwh_period, unit='kWh', mode=delivered['mode'],
+                explanation='Total energy delivered for the period from technical module.',
+            ),
+            'energy_delivered_vs_billed': metric(
+                {
+                    'delivered_kwh':        delivered_kwh_period,
+                    'actual_billed_kwh':    float(billing['total_billed_kwh']),
+                    'projected_billed_kwh': float(billing['total_billed_kwh'] + estimated['estimated_kwh']),
+                    'gap_kwh':              round(delivered_kwh_period - float(billing['total_billed_kwh']), 2),
+                },
+                unit='kWh', mode=delivered['mode'],
+                explanation='Energy delivered vs billed for this district. Gap = delivered minus actual billed.',
+            ),
+        },
+        'revenue': {
+            'actual_energy_charge': metric(float(billing['energy_charge']), unit='NGN', explanation='Actual energy charge from real readings in this district.'),
+            'estimated_energy_charge': metric(float(estimated['estimated_energy_charge']), unit='NGN', mode='estimated', explanation='Estimated energy charge for unread customers in this district.'),
+            'actual_vat': metric(float(billing['vat']), unit='NGN', explanation='7.5% VAT on actual energy charge in this district.'),
+            'actual_total_billed': metric(float(billing['total_billed_amount']), unit='NGN', explanation='Total billed from real readings in this district including VAT.'),
+            'estimated_revenue': metric(float(estimated['estimated_revenue']), unit='NGN', mode='estimated', explanation='Estimated revenue at risk from unread customers in this district.'),
+            'total_projected_revenue': metric(
+                float(billing['total_billed_amount'] + estimated['estimated_revenue']), unit='NGN', mode='estimated',
+                explanation='Total projected revenue for this district — actual + estimated.',
+            ),
+            'mdi_revenue_split':  metric(mdi_split,  unit='%', explanation='% of actual billed revenue from MDI customers in this district.'),
+            'mdni_revenue_split': metric(mdni_split, unit='%', explanation='% of actual billed revenue from MDNI customers in this district.'),
+            'arpu': metric(float(arpu), unit='NGN', explanation='Average Revenue Per Customer in this district.'),
+        },
+        'performance': {
+            'coverage_rate':    metric(coverage['rate'], unit='%', explanation='% of customers in this district with a reading in this period.'),
+            'customers_read':   metric(coverage['read'], explanation='Customers read in this district in this period.'),
+            'unread_customers': metric(coverage['unread'], explanation='Customers not read in this district in this period.'),
+            'billing_efficiency': metric(billing_efficiency, unit='%', mode='estimated', explanation='Energy billed / energy delivered x 100 for this district.'),
+            'atc_loss': metric(atc_loss, unit='%', mode='estimated', explanation='AT&C loss for this district — 100 minus billing efficiency.'),
+        },
+        'managers': {
+            'total_mdi_managers':  metric(mdi_mgrs,  explanation='MDI field officers with assignments in this district.'),
+            'total_mdni_managers': metric(mdni_mgrs, explanation='MDNI field officers with assignments in this district.'),
+        },
+        'energy_breakdown': {
+            'by_feeder': by_feeder_breakdown,
+        },
+    }
+
+
+@api_view(['GET'])
+def all_districts(request):
+    """List all business districts with commercial metrics — fixed ~13 queries total."""
+    date_range   = parse_date_range(request)
+    customers_qs = CommercialCustomer.objects.filter(**customer_filter_kwargs(request))
+    readings_qs  = MeterReading.objects.filter(**reading_filter_kwargs(request, date_range))
+
+    state_slug   = request.GET.get('state', '').strip()
+    districts_qs = BusinessDistrict.objects.exclude(state__name='Test State').select_related('state').order_by('name')
+    if state_slug:
+        districts_qs = districts_qs.filter(state__slug=state_slug)
+    districts = list(districts_qs)
+
+    # ── One query builds feeder→district map; all bulk fns use it ────────────
+    f2d = feeder_dim_map(customers_qs, 'feeder__business_district_id')
+
+    billing_data   = bulk_billing(readings_qs, f2d)
+    type_billing   = bulk_billing_by_type(readings_qs, f2d)
+    ctype_counts   = bulk_customer_types(customers_qs, f2d)
+    coverage_data  = bulk_coverage(customers_qs, readings_qs, f2d)
+    estimated_data = bulk_estimated_billing(customers_qs, coverage_data, date_range, f2d)
+    managers_data  = bulk_managers(f2d)
+    energy_data    = bulk_energy_delivered(list(f2d.keys()), date_range, f2d)
+    consumed_data  = bulk_energy_consumed(readings_qs, f2d)
+
+    # ── Assemble ──────────────────────────────────────────────────────────────
+    days    = date_range['days']
+    results = []
     for district in districts:
-        # Get all feeders in this business district specifically
-        district_feeders = Feeder.objects.filter(business_district=district)
-        
-        # Get all transformers in this business district via feeders
-        transformers = DistributionTransformer.objects.filter(
-            feeder__in=district_feeders
-        )
-        
-        # Get commercial summaries for transformers in this district
-        summaries = MonthlyCommercialSummary.objects.filter(
-            transformer__in=transformers,
-            month=period_start  # Use exact month match
-        )
+        did  = district.id
+        b    = billing_data.get(did, empty_billing())
+        e    = estimated_data.get(did, empty_estimated())
+        cov  = coverage_data.get(did, empty_coverage())
+        ct   = ctype_counts.get(did, {'MDI': 0, 'MDNI': 0})
+        mgrs = managers_data.get(did, {'mdi': 0, 'mdni': 0})
 
-        # Aggregate the commercial data
-        totals = summaries.aggregate(
-            revenue_billed=Sum("revenue_billed"),
-            revenue_collected=Sum("revenue_collected"),
-            customers_billed=Sum("customers_billed"),
-            customers_responded=Sum("customers_responded"),
-        )
+        ed            = energy_data.get(did, {'total_mwh': 0.0, 'mode': 'system'})
+        delivered_kwh = round(float(ed['total_mwh']) * 1000, 2)
+        daily_mwh     = round(float(ed['total_mwh']) / days, 4) if days else 0
+        daily_kwh     = round(float(b['total_billed_kwh']) / days, 4) if days else 0
+        consumed_kwh  = float(consumed_data.get(did, ZERO))
 
-        # Energy Delivered from technical models - use district_feeders specifically
-        try:
-            # Try monthly aggregates first
-            delivered_mwh = FeederEnergyMonthly.objects.filter(
-                feeder__in=district_feeders,  # Use specific feeders for this district
-                period=period_start,
-            ).aggregate(Sum("energy_mwh"))['energy_mwh__sum'] or Decimal(0)
-            
-            if delivered_mwh == 0:
-                # Fallback to daily aggregation
-                period_end = period_start + relativedelta(months=1) - timedelta(days=1)
-                delivered_mwh = FeederEnergyDaily.objects.filter(
-                    feeder__in=district_feeders,  # Use specific feeders for this district
-                    date__gte=period_start,
-                    date__lte=period_end,
-                ).aggregate(Sum("energy_mwh"))['energy_mwh__sum'] or Decimal(0)
-        except Exception as e:
-            print(f"Error calculating delivered energy for {district.name}: {e}")
-            delivered_mwh = Decimal(0)
+        total_rev  = b['total_billed_amount']
+        mdi_amt    = type_billing.get((did, 'MDI'),  ZERO)
+        mdni_amt   = type_billing.get((did, 'MDNI'), ZERO)
+        mdi_split  = round(float(mdi_amt)  / float(total_rev) * 100, 2) if total_rev else 0
+        mdni_split = round(float(mdni_amt) / float(total_rev) * 100, 2) if total_rev else 0
 
-        # Energy Billed from commercial models - use district_feeders specifically
-        try:
-            billed_mwh = MonthlyEnergyBilled.objects.filter(
-                feeder__in=district_feeders,  # Use specific feeders for this district
-                month=period_start,
-            ).aggregate(Sum("energy_mwh"))['energy_mwh__sum'] or Decimal(0)
-        except Exception as e:
-            print(f"Error calculating billed energy for {district.name}: {e}")
-            billed_mwh = Decimal(0)
+        billing_eff, atc_loss = calc_atc_loss(b['total_billed_kwh'], ed['total_mwh'])
+        arpu = calc_arpu(b['total_billed_amount'], cov['read'])
 
-        # Extract values with safe defaults
-        revenue_billed = totals["revenue_billed"] or Decimal(0)
-        revenue_collected = totals["revenue_collected"] or Decimal(0)
-        customers_billed = totals["customers_billed"] or 0
-        customers_responded = totals["customers_responded"] or 0
-
-        # Calculate efficiency metrics with proper error handling
-        try:
-            # Billing efficiency = (Energy Billed / Energy Delivered) * 100
-            billing_eff = (billed_mwh / delivered_mwh * 100) if delivered_mwh > 0 else Decimal(0)
-            
-            # Collection efficiency = (Revenue Collected / Revenue Billed) * 100
-            collection_eff = (revenue_collected / revenue_billed * 100) if revenue_billed > 0 else Decimal(0)
-            
-            # AT&C losses = 100% - (Billing Efficiency * Collection Efficiency / 100)
-            atcc = Decimal(100) - (billing_eff * collection_eff / 100)
-            
-            # Energy collected = Energy Delivered * Collection Efficiency / 100
-            # This represents the energy equivalent of what was actually collected
-            energy_collected = billed_mwh * collection_eff / 100
-            
-        except (ZeroDivisionError, InvalidOperation) as e:
-            print(f"Error calculating efficiency metrics for {district.name}: {e}")
-            billing_eff = collection_eff = atcc = energy_collected = Decimal(0)
-
-        # Customer metrics
-        try:
-            response_rate = (Decimal(customers_responded) / Decimal(customers_billed) * 100) if customers_billed > 0 else Decimal(0)
-            revenue_per_customer = (revenue_billed / Decimal(customers_billed)) if customers_billed > 0 else Decimal(0)
-            collections_per_customer = (revenue_collected / Decimal(customers_billed)) if customers_billed > 0 else Decimal(0)
-        except (ZeroDivisionError, InvalidOperation) as e:
-            print(f"Error calculating customer metrics for {district.name}: {e}")
-            response_rate = revenue_per_customer = collections_per_customer = Decimal(0)
-
-        # Round all decimal values appropriately
-        def safe_round(value, places=2):
-            try:
-                return float(value.quantize(Decimal(10) ** -places, rounding=ROUND_HALF_UP))
-            except (AttributeError, InvalidOperation):
-                return float(value) if value else 0.0
-
-        # Debug logging to help identify issues
-        print(f"District: {district.name}")
-        print(f"  Feeders count: {district_feeders.count()}")
-        print(f"  Energy delivered: {delivered_mwh}")
-        print(f"  Energy billed: {billed_mwh}")
-        print(f"  Billing efficiency: {billing_eff}")
-        print(f"  Revenue billed: {revenue_billed}")
-        print(f"  Revenue collected: {revenue_collected}")
-        print("---")
-
-        result.append({
-            "name": district.name,
-            "energy_delivered": safe_round(delivered_mwh),
-            "energy_billed": safe_round(billed_mwh),
-            "energy_collected": safe_round(energy_collected),
-            "revenue_billed": safe_round(revenue_billed),
-            "revenue_collected": safe_round(revenue_collected),
-            "billing_efficiency": safe_round(billing_eff),
-            "collection_efficiency": safe_round(collection_eff),
-            "atcc": safe_round(atcc),
-            "customer_response_rate": safe_round(response_rate),
-            "revenue_billed_per_customer": safe_round(revenue_per_customer),
-            "collections_per_customer": safe_round(collections_per_customer),
-            "customers_billed": customers_billed,
-            "customers_responded": customers_responded,
+        results.append({
+            'district': {'slug': district.slug, 'name': district.name, 'state': district.state.name if district.state else None},
+            'customers': {
+                'total': metric(ct['MDI'] + ct['MDNI'], explanation='Total registered MDI and MDNI customers in this district.'),
+                'mdi':   metric(ct['MDI'],              explanation='MDI customers in this district.'),
+                'mdni':  metric(ct['MDNI'],             explanation='MDNI customers in this district.'),
+            },
+            'energy': {
+                'energy_consumed_kwh':        metric(consumed_kwh, unit='kWh', explanation='Total energy consumed = sum(present_reading - previous_reading) for all customers read in this period.'),
+                'actual_billed_kwh':          metric(float(b['total_billed_kwh']), unit='kWh', explanation='Actual energy billed from real readings in this district for this period.'),
+                'estimated_billed_kwh':       metric(float(e['estimated_kwh']), unit='kWh', mode='estimated', explanation='Estimated energy for unread customers in this district.'),
+                'total_projected_billed_kwh': metric(float(b['total_billed_kwh'] + e['estimated_kwh']), unit='kWh', mode='estimated', explanation='Actual + estimated energy for this district.'),
+                'daily_billed_kwh_estimate':  metric(float(daily_kwh), unit='kWh/day', mode='estimated', explanation='Daily energy billed estimate from actual readings in this district.'),
+                'daily_energy_delivered_mwh': metric(float(daily_mwh), unit='MWh/day', mode=ed['mode'], explanation='Average daily energy delivered — total_mwh / days. Source: meter or system fallback.'),
+                'energy_delivered_kwh': metric(delivered_kwh, unit='kWh', mode=ed['mode'], explanation='Total energy delivered for the period from technical module.'),
+                'energy_delivered_vs_billed': metric(
+                    {'delivered_kwh': delivered_kwh, 'actual_billed_kwh': float(b['total_billed_kwh']),
+                     'projected_billed_kwh': float(b['total_billed_kwh'] + e['estimated_kwh']),
+                     'gap_kwh': round(delivered_kwh - float(b['total_billed_kwh']), 2)},
+                    unit='kWh', mode=ed['mode'], explanation='Energy delivered vs billed for this district. Gap = delivered minus actual billed.',
+                ),
+            },
+            'revenue': {
+                'actual_energy_charge':    metric(float(b['energy_charge']), unit='NGN', explanation='Actual energy charge from real readings in this district.'),
+                'estimated_energy_charge': metric(float(e['estimated_energy_charge']), unit='NGN', mode='estimated', explanation='Estimated energy charge for unread customers in this district.'),
+                'actual_vat':              metric(float(b['vat']), unit='NGN', explanation='7.5% VAT on actual energy charge in this district.'),
+                'actual_total_billed':     metric(float(b['total_billed_amount']), unit='NGN', explanation='Total billed from real readings in this district including VAT.'),
+                'estimated_revenue':       metric(float(e['estimated_revenue']), unit='NGN', mode='estimated', explanation='Estimated revenue at risk from unread customers in this district.'),
+                'total_projected_revenue': metric(float(b['total_billed_amount'] + e['estimated_revenue']), unit='NGN', mode='estimated', explanation='Total projected revenue for this district — actual + estimated.'),
+                'mdi_revenue_split':       metric(mdi_split,   unit='%', explanation='% of actual billed revenue from MDI customers in this district.'),
+                'mdni_revenue_split':      metric(mdni_split,  unit='%', explanation='% of actual billed revenue from MDNI customers in this district.'),
+                'arpu':                    metric(float(arpu), unit='NGN', explanation='Average Revenue Per Customer in this district.'),
+            },
+            'performance': {
+                'coverage_rate':      metric(cov['rate'],  unit='%', explanation='% of customers in this district with a reading in this period.'),
+                'customers_read':     metric(cov['read'],            explanation='Customers read in this district in this period.'),
+                'unread_customers':   metric(cov['unread'],          explanation='Customers not read in this district in this period.'),
+                'billing_efficiency': metric(billing_eff, unit='%', mode='estimated', explanation='Energy billed / energy delivered x 100 for this district.'),
+                'atc_loss':           metric(atc_loss,   unit='%', mode='estimated', explanation='AT&C loss for this district — 100 minus billing efficiency.'),
+            },
+            'managers': {
+                'total_mdi_managers':  metric(mgrs['mdi'],  explanation='MDI field officers with assignments in this district.'),
+                'total_mdni_managers': metric(mgrs['mdni'], explanation='MDNI field officers with assignments in this district.'),
+            },
         })
 
-    return Response(result)
+    return Response({
+        'period': {
+            'mode': date_range['mode'], 'start_date': str(date_range['start_date']),
+            'end_date': str(date_range['end_date']), 'label': date_range['label'], 'days': date_range['days'],
+        },
+        'count':     len(results),
+        'districts': results,
+    })
+
+
+@api_view(['GET'])
+def single_district(request, slug):
+    """Full commercial metrics for one business district."""
+    try:
+        district = BusinessDistrict.objects.get(slug=slug)
+    except BusinessDistrict.DoesNotExist:
+        return Response({'error': f'District "{slug}" not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+    date_range   = parse_date_range(request)
+    customers_qs = CommercialCustomer.objects.filter(**customer_filter_kwargs(request))
+    readings_qs  = MeterReading.objects.filter(**reading_filter_kwargs(request, date_range))
+
+    data = _district_metrics(district, customers_qs, readings_qs, date_range)
+    data['period'] = {
+        'mode': date_range['mode'], 'start_date': str(date_range['start_date']),
+        'end_date': str(date_range['end_date']), 'label': date_range['label'], 'days': date_range['days'],
+    }
+    return Response(data)

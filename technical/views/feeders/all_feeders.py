@@ -11,6 +11,15 @@ from rest_framework.views import APIView
 from common.models import Feeder
 from technical.constants import TURNAROUND_EXCLUSIONS
 from technical.models import FeederInterruption, HourlyLoad
+from technical.utils.energy_utils import calculate_energy_delivered_per_feeder
+from technical.utils.compliance_utils import (
+    BAND_ORDER,
+    BAND_TARGET_HOURS,
+    build_ongoing_interruption,
+    bulk_ongoing_interruptions,
+    compliance_status,
+    get_feeder_ids_by_interruption_category,
+)
 
 
 def _parse_iso_date(date_str):
@@ -351,7 +360,7 @@ def _bulk_interruption_metrics(feeder_ids, from_date, to_date, exclude_types=Non
     return result
 
 
-def get_feeder_availability_summary_optimized(from_date, to_date, mode, state=None, business_district=None, voltage_level=None):
+def get_feeder_availability_summary_optimized(from_date, to_date, mode, state=None, business_district=None, voltage_level=None, interruption_category=None):
     """
     HIGH-PERFORMANCE feeder availability summary.
 
@@ -359,6 +368,10 @@ def get_feeder_availability_summary_optimized(from_date, to_date, mode, state=No
     AFTER:  3 bulk queries total regardless of how many feeders.
 
     Still returns the same per-feeder structure as before.
+
+    interruption_category: optional — 'load_shedding' | 'transmission' | 'disco'
+        When set, only feeders that had an interruption of that category in the
+        period are returned (used by the ?interruption_type= filter on feeders/all/).
     """
     today = timezone.now().date()
     if from_date > today:
@@ -367,7 +380,7 @@ def get_feeder_availability_summary_optimized(from_date, to_date, mode, state=No
     feeders_qs = (
         Feeder.objects
         .filter(is_onboarded=True)
-        .select_related('business_district__state', 'substation')
+        .select_related('business_district__state', 'substation', 'band')
     )
     if voltage_level:
         feeders_qs = feeders_qs.filter(voltage_level=voltage_level)
@@ -376,28 +389,48 @@ def get_feeder_availability_summary_optimized(from_date, to_date, mode, state=No
     elif state:
         feeders_qs = feeders_qs.filter(business_district__state__name=state)
 
+    # Filter to feeders that had a specific interruption category in the period
+    if interruption_category in ('ls', 'tcn', 'disco'):
+        cat_feeder_ids = get_feeder_ids_by_interruption_category(
+            from_date, to_date, interruption_category, voltage_level
+        )
+        feeders_qs = feeders_qs.filter(id__in=cat_feeder_ids)
+
     feeders = list(feeders_qs)
     if not feeders:
         return []
 
     feeder_ids = [f.id for f in feeders]
 
-    # ── 3 bulk queries ──────────────────────────────────────────────────────
+    # ── 5 bulk queries ──────────────────────────────────────────────────────
     supply_map = _bulk_supply_hours(feeder_ids, from_date, to_date)
     interrupt_map = _bulk_interruption_metrics(feeder_ids, from_date, to_date)
     turnaround_map = _bulk_interruption_metrics(
         feeder_ids, from_date, to_date, exclude_types=list(TURNAROUND_EXCLUSIONS)
     )
+    ongoing_map = bulk_ongoing_interruptions(feeder_ids)
+    energy_map = calculate_energy_delivered_per_feeder(feeder_ids, from_date, to_date)
     # ────────────────────────────────────────────────────────────────────────
 
     result = []
     for feeder in feeders:
         fid = feeder.id
+        in_supply_map = fid in supply_map
         avg_supply = round(min(supply_map.get(fid, 0.0), 24.0), 2)
-        avg_duration = round(24.0 - avg_supply, 2)          # always sums to 24
-        _, ftc = interrupt_map.get(fid, (0.0, 0))           # ftc count only
+        avg_duration = round(24.0 - avg_supply, 2)
+        _, ftc = interrupt_map.get(fid, (0.0, 0))
         turnaround, _ = turnaround_map.get(fid, (0.0, 0))
 
+        # Band
+        band = feeder.band
+        target_hours = BAND_TARGET_HOURS.get(band.slug, float(band.target_hours_per_day) if hasattr(band, 'target_hours_per_day') else 0.0) if band else 0.0
+        band_info = {
+            'slug': band.slug,
+            'name': band.name,
+            'target_hours_per_day': target_hours,
+        } if band else None
+
+        energy_rec = energy_map.get(fid)
         result.append({
             "feeder_name": feeder.name,
             "feeder_slug": feeder.slug,
@@ -407,8 +440,20 @@ def get_feeder_availability_summary_optimized(from_date, to_date, mode, state=No
             "duration_of_interruptions": avg_duration,
             "turnaround_time": round(min(turnaround, 24.0), 2),
             "ftc": ftc,
+            "energy_delivered": {
+                "mwh": energy_rec['mwh'] if energy_rec else 0.0,
+                "source": energy_rec['source'] if energy_rec else "no_data",
+            },
+            "band": band_info,
+            "compliance_status": compliance_status(avg_supply, in_supply_map, target_hours) if band else "no_band",
+            "ongoing_interruption": build_ongoing_interruption(fid, ongoing_map, target_hours),
+            "_band_order": BAND_ORDER.get(band.slug, 99) if band else 99,
+            "_feeder_name": feeder.name,
             "_source": f"bulk_sql_{mode}",
         })
+
+    # Sort: Band A → E, then alphabetically within each band
+    result.sort(key=lambda r: (r['_band_order'], r['_feeder_name']))
 
     return result
 
@@ -515,6 +560,7 @@ class FeederAvailabilityOverview(APIView):
         # Get feeder availability data using optimized method (ONBOARDED feeders only, voltage-filtered)
         feeder_type_param = request.GET.get("feeder_type", "")
         voltage_level = feeder_type_param if feeder_type_param in ("11kv", "33kv") else None
+        interruption_category = request.GET.get("interruption_type")  # load_shedding | transmission | disco
         
         data = get_feeder_availability_summary_optimized(
             from_date=from_date,
@@ -523,6 +569,7 @@ class FeederAvailabilityOverview(APIView):
             state=state,
             business_district=business_district,
             voltage_level=voltage_level,
+            interruption_category=interruption_category,
         )
         
         # Remove internal source field for response
@@ -530,9 +577,9 @@ class FeederAvailabilityOverview(APIView):
         for item in data:
             clean_item = {k: v for k, v in item.items() if not k.startswith('_')}
             clean_data.append(clean_item)
-        
-        # Return data directly (bypassing serializer to include substation_name)
-        return Response(clean_data)
+
+        from technical.utils.explanations import FEEDER_LIST
+        return Response({"explanations": FEEDER_LIST, "feeders": clean_data})
 
 
 # Utility functions for backward compatibility

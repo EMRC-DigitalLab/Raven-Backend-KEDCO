@@ -75,43 +75,17 @@ class Command(BaseCommand):
         fault_count = 0
         skipped = 0
 
-        # Fault code mapping to interruption types
-        FAULT_CODE_MAP = {
-            "L/S": "L/S",
-            "O/S": "O/S", 
-            "T/F": "T/F",
-            "B/F": "B/F",
-            "E/F": "E/F",
-            "ON": "O/N",  # Assuming ON maps to O/N (overheating)
-            "O/E": "O/E",
-            "P/O": "P/O",
-            "O/F": "O/F",
-            "P/M": "P/M",
-            "L/F": "132KV L/F",  # Default line fault to 132KV
-            "O/C": "O/C",
-            "O": "O",
-            "T/S": "T/S",
-            "L/S GS": "L/S GS",
-            "MTNC": "MTNC",
-            "OC & E/F": "OC & E/F",
-            "EM/D": "EM/D",
-            "330KV L/F": "330KV L/F",
-            "OFF": "OFF",
-            "S/C": "S/C",
-            "132KV E/F": "132KV E/F",
-            "132KV L/F": "132KV L/F",
-            "330KV L/S": "330KV L/S",
-            "132KV CB/F": "132KV CB/F",
-            "O/C & E/F": "O/C & E/F",
-            "D/C": "D/C",
-            "MTCE": "MTCE",
-            "IN O/C": "IN O/C",
-            "T/LS": "T/LS",
-            "132KV MTCE": "132KV MTCE",
-            "LIM": "LIM",
-            "fault": "fault",
-            "ls": "L/S",  # lowercase ls maps to Load Shedding
-        }
+        # Fault code mapping — built dynamically from FaultTypeCategory admin records.
+        # Every code in the admin maps to itself (identity).
+        # The three entries below handle raw DataNest quirks where the source
+        # sends a different string than the standardised code we store.
+        from technical.models import FaultTypeCategory
+        FAULT_CODE_MAP = {obj.code: obj.code for obj in FaultTypeCategory.objects.all()}
+        FAULT_CODE_MAP.update({
+            "ON":  "O/N",       # DataNest sends "ON",  we store "O/N"
+            "L/F": "132KV L/F", # DataNest sends "L/F", we store "132KV L/F"
+            "ls":  "L/S",       # DataNest sends "ls",  we store "L/S"
+        })
 
         def reconnect_if_needed(conn):
             """Reconnect to database if connection is lost"""

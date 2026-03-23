@@ -933,6 +933,33 @@ def get_interruption_breakdown_network(start_date, end_date, period_days, period
     }
 
 
+def _get_customer_counts(feeder=None, voltage_level=None):
+    """
+    Returns MDI / MDNI customer counts and feeder_count for the technical breakdown.
+    Scoped to onboarded feeders, optionally filtered by feeder or voltage_level.
+    """
+    from commercial.models import CommercialCustomer
+
+    qs = CommercialCustomer.objects.filter(feeder__is_onboarded=True)
+    if feeder:
+        qs = qs.filter(feeder=feeder)
+    elif voltage_level:
+        qs = qs.filter(feeder__voltage_level=voltage_level)
+
+    counts = qs.aggregate(
+        total=Count('id'),
+        mdi=Count('id', filter=Q(customer_type='MDI')),
+        mdni=Count('id', filter=Q(customer_type='MDNI')),
+        feeder_count=Count('feeder', distinct=True),
+    )
+    return {
+        'total':        counts['total'] or 0,
+        'mdi':          counts['mdi'] or 0,
+        'mdni':         counts['mdni'] or 0,
+        'feeder_count': counts['feeder_count'] or 0,
+    }
+
+
 def calculate_trend_analytics(series, mode, target_energy=None):
     """
     Calculate statistical analytics for load trend data to help spot discrepancies and anomalies.
@@ -1597,10 +1624,7 @@ def technical_overview_view(request):
             "value": turnaround_time["current"],
             "delta": turnaround_time["delta"]
         },
-        "customer_count": {
-            "value": 0,  # SET TO 0 as requested
-            "delta": 0
-        }
+        "customer_count": _get_customer_counts(feeder if feeder_slug else None, voltage_level),
     }
     
     # Interruption sources for 4 periods - UPDATED to show COUNTS not durations
@@ -1700,5 +1724,24 @@ def technical_overview_view(request):
             "slug": feeder_slug,
             "voltage_level": feeder.voltage_level
         }
-    
+
+    # Compliance summary
+    from technical.utils.compliance_utils import get_compliance_summary, get_interruption_category_breakdown
+    response_data["compliance"] = get_compliance_summary(
+        from_date=start_date,
+        to_date=end_date,
+        voltage_level=voltage_level,
+    )
+
+    # Interruption category breakdown — network-level overview only (not single-feeder)
+    # Returns 4 periods same as interruptions_data
+    if not feeder_slug:
+        response_data["interruption_breakdown"] = [
+            get_interruption_category_breakdown(start_date, end_date, period_days, i, voltage_level=voltage_level)
+            for i in range(4)
+        ]
+
+    from technical.utils.explanations import OVERVIEW
+    response_data["explanations"] = OVERVIEW
+
     return Response(response_data)
