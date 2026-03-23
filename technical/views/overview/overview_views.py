@@ -795,6 +795,30 @@ def get_ongoing_interruptions_info_feeder(feeder_id, from_date):
     }
 
 
+def _group_by_category(type_counts):
+    """
+    Takes {interruption_type: count} and returns counts grouped under ls/tcn/disco.
+    {
+      "ls":    {"total": N, "codes": {...}},
+      "tcn":   {"total": N, "codes": {...}},
+      "disco": {"total": N, "codes": {...}},
+    }
+    """
+    from technical.utils.compliance_utils import _get_category_codes, _classify_interruption_type
+    ls_codes, tx_codes = _get_category_codes()
+
+    groups = {
+        'ls':    {'total': 0, 'codes': {}},
+        'tcn':   {'total': 0, 'codes': {}},
+        'disco': {'total': 0, 'codes': {}},
+    }
+    for itype, count in type_counts.items():
+        cat = _classify_interruption_type(itype, ls_codes, tx_codes)
+        groups[cat]['codes'][itype] = count
+        groups[cat]['total'] += count
+    return groups
+
+
 def get_interruption_breakdown_feeder(feeder_id, start_date, end_date, period_days, period_offset=0):
     """
     Get interruption COUNT breakdown for a single feeder.
@@ -848,20 +872,18 @@ def get_interruption_breakdown_feeder(feeder_id, start_date, end_date, period_da
         cursor.execute(query, [feeder_id, start_datetime, end_datetime])
         results = cursor.fetchall()
     
-    # Process results
     type_counts = {}
     total_count = 0
-    
     for itype, count in results:
         count_val = int(count) if count else 0
         type_counts[itype or 'Unknown'] = count_val
         total_count += count_val
-    
+
     return {
         "month": label,
         "total": total_count,
         "delta": 0,
-        "breakdown": type_counts
+        "breakdown": _group_by_category(type_counts),
     }
 
 
@@ -924,12 +946,12 @@ def get_interruption_breakdown_network(start_date, end_date, period_days, period
         itype = row['interruption_type'] or 'Unknown'
         type_counts[itype] = row['count']
         total_count += row['count']
-    
+
     return {
         "month": label,
         "total": total_count,
         "delta": 0,
-        "breakdown": type_counts
+        "breakdown": _group_by_category(type_counts),
     }
 
 
