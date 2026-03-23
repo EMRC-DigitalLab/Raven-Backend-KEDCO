@@ -77,11 +77,19 @@ def bulk_ongoing_interruptions(feeder_ids):
     return result
 
 
-def build_ongoing_interruption(feeder_id, interruption_map, target_hours):
+def build_ongoing_interruption(feeder_id, interruption_map, target_hours, from_date=None, to_date=None):
     """
     Build the ongoing_interruption block for a single feeder.
-    band_allowance_hours = 24 - target_hours (max downtime the band permits per day).
-    breaching = True when the fault has already exceeded that allowance.
+
+    duration_hours is scoped to the selected period:
+      - daily  (1 day):  capped at 24 hrs
+      - weekly (7 days): capped at 168 hrs
+      - monthly (N days): capped at N × 24 hrs
+
+    band_allowance_hours is also scaled to the period:
+      daily allowance × period_days  (e.g. Band A = 4 hrs/day → 92 hrs for 23-day month)
+
+    breaching = duration_hours > band_allowance_hours
     """
     if feeder_id not in interruption_map:
         return {'has_interruption': False}
@@ -90,13 +98,27 @@ def build_ongoing_interruption(feeder_id, interruption_map, target_hours):
     now = timezone.now()
     occurred_at = rec['occurred_at']
 
-    # Make timezone-aware if naive
     if occurred_at.tzinfo is None:
         from django.utils.timezone import make_aware
         occurred_at = make_aware(occurred_at)
 
-    duration_hours = round((now - occurred_at).total_seconds() / 3600, 2)
-    band_allowance = round(24.0 - target_hours, 1)
+    # Period boundaries
+    if from_date and to_date:
+        from datetime import datetime as _dt
+        period_days = (to_date - from_date).days + 1
+        period_start = make_aware(_dt.combine(from_date, _dt.min.time()))
+        period_end = now  # always count up to now (not future end of period)
+
+        # Fault might have started before the period — only count within period
+        effective_start = max(occurred_at, period_start)
+        duration_hours = round(max((period_end - effective_start).total_seconds() / 3600, 0.0), 2)
+    else:
+        # Fallback: raw duration from occurrence to now
+        period_days = 1
+        duration_hours = round((now - occurred_at).total_seconds() / 3600, 2)
+
+    daily_allowance = 24.0 - target_hours
+    band_allowance = round(daily_allowance * period_days, 1)
 
     return {
         'has_interruption': True,

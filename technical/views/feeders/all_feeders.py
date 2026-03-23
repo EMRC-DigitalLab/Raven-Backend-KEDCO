@@ -446,7 +446,7 @@ def get_feeder_availability_summary_optimized(from_date, to_date, mode, state=No
             },
             "band": band_info,
             "compliance_status": compliance_status(avg_supply, in_supply_map, target_hours) if band else "no_band",
-            "ongoing_interruption": build_ongoing_interruption(fid, ongoing_map, target_hours),
+            "ongoing_interruption": build_ongoing_interruption(fid, ongoing_map, target_hours, from_date, to_date),
             "_band_order": BAND_ORDER.get(band.slug, 99) if band else 99,
             "_feeder_name": feeder.name,
             "_source": f"bulk_sql_{mode}",
