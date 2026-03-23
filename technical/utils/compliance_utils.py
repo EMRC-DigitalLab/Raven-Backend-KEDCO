@@ -182,16 +182,22 @@ def _bulk_supply_hours(feeder_ids, from_date, to_date):
     return result
 
 
+# Module-level in-process cache (avoids Redis dependency for this tiny dataset)
+_category_codes_cache = None
+_category_codes_ts = 0.0
+
+
 def _get_category_codes():
     """
     Returns (load_shedding_codes, transmission_codes) as sets, read from DB.
     'disco' = every code NOT in either set.
-    Results are cached in-process for 60 s to avoid repeated tiny queries.
+    Results are cached in-process for 60 s (no Redis dependency).
     """
-    from django.core.cache import cache
-    cached = cache.get('_fault_type_category_codes')
-    if cached is not None:
-        return cached
+    import time
+    global _category_codes_cache, _category_codes_ts
+
+    if _category_codes_cache is not None and (time.time() - _category_codes_ts) < 60:
+        return _category_codes_cache
 
     from technical.models import FaultTypeCategory
     ls_codes = set(
@@ -200,9 +206,9 @@ def _get_category_codes():
     tx_codes = set(
         FaultTypeCategory.objects.filter(category='tcn').values_list('code', flat=True)
     )
-    result = (ls_codes, tx_codes)
-    cache.set('_fault_type_category_codes', result, timeout=60)
-    return result
+    _category_codes_cache = (ls_codes, tx_codes)
+    _category_codes_ts = time.time()
+    return _category_codes_cache
 
 
 def _classify_interruption_type(itype, ls_codes, tx_codes):
