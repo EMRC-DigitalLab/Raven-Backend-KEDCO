@@ -475,8 +475,9 @@ class FaultTypeCategory(models.Model):
     """
 
     CATEGORY_CHOICES = [
-        ('ls', 'Load Shedding'),
-        ('tcn', 'Transmission (TCN / Grid)'),
+        ('ls',    'Load Shedding'),
+        ('tcn',   'Transmission (TCN / Grid)'),
+        ('disco', 'DisCo Fault'),
     ]
 
     code = models.CharField(

@@ -60,8 +60,9 @@ class Migration(migrations.Migration):
                 ('category', models.CharField(
                     max_length=20,
                     choices=[
-                        ('ls', 'Load Shedding'),
-                        ('tcn', 'Transmission (TCN / Grid)'),
+                        ('ls',    'Load Shedding'),
+                        ('tcn',   'Transmission (TCN / Grid)'),
+                        ('disco', 'DisCo Fault'),
                     ],
                     help_text='Category bucket — codes not listed here are classified as DisCo faults',
                 )),
