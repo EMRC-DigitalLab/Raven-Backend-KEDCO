@@ -98,8 +98,8 @@ def build_ongoing_interruption(feeder_id, interruption_map, target_hours, from_d
     now = timezone.now()
     occurred_at = rec['occurred_at']
 
+    from django.utils.timezone import make_aware
     if occurred_at.tzinfo is None:
-        from django.utils.timezone import make_aware
         occurred_at = make_aware(occurred_at)
 
     # Period boundaries
