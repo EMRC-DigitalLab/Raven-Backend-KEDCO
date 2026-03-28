@@ -90,16 +90,17 @@ class ReportTemplateDetailView(RetrieveUpdateDestroyAPIView):
 # =============================================================================
 
 @api_view(['GET'])
-def available_sections(_request):
+def available_sections(request):
     """
-    Get list of available section types with their configurations.
+    Get list of available section types filtered by the requesting user's module access.
     """
-    sections = get_available_sections()
+    sections = get_available_sections(request.user)
     return Response({
         "sections": sections,
         "categories": [
             {"id": "general", "name": "General"},
             {"id": "technical", "name": "Technical"},
+            {"id": "hr", "name": "Human Resources"},
             {"id": "commercial", "name": "Commercial"},
             {"id": "financial", "name": "Financial"},
         ]

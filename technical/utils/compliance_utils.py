@@ -440,3 +440,89 @@ def build_compliance_summary(feeders, supply_map):
         'no_data': no_data,
         'by_band': by_band,
     }
+
+
+def calculate_turnaround_time(feeder_ids, from_date, to_date, exclude_types=None):
+    """
+    Average turnaround time (restoration duration) per feeder per day.
+
+    Logic:
+      - Sums actual outage hours per feeder within the period boundaries.
+      - Caps each feeder's total at 24h × period_days (can't exceed 100% outage).
+      - Excludes fault types in exclude_types (e.g. L/S, TCN — network faults
+        that DisCo has no control over).
+      - Returns average across all feeders normalised per day.
+
+    Args:
+        feeder_ids    : list of feeder UUIDs already scoped by the caller
+        from_date     : date
+        to_date       : date
+        exclude_types : list of interruption_type strings to exclude (optional)
+
+    Returns: float (hours, 0–24)
+    """
+    if not feeder_ids:
+        return 0.0
+
+    exclude_types = exclude_types or []
+    is_single_day = (from_date == to_date)
+    period_days = 1 if is_single_day else (to_date - from_date).days + 1
+    max_hours_per_feeder = 24.0 * period_days
+
+    start_dt = timezone.make_aware(
+        __import__('datetime').datetime.combine(from_date, __import__('datetime').time.min)
+    )
+    end_dt = timezone.make_aware(
+        __import__('datetime').datetime.combine(to_date, __import__('datetime').time.max)
+    )
+
+    feeder_placeholders = ','.join(['%s'] * len(feeder_ids))
+    excl_placeholders = ','.join(['%s'] * len(exclude_types)) if exclude_types else None
+
+    excl_clause = f"AND interruption_type NOT IN ({excl_placeholders})" if excl_placeholders else ""
+
+    query = f"""
+        SELECT COALESCE(SUM(capped_hours), 0)
+        FROM (
+            SELECT feeder_id,
+                LEAST(
+                    SUM(
+                        GREATEST(
+                            EXTRACT(EPOCH FROM (
+                                LEAST(COALESCE(restored_at, %s), %s) - GREATEST(occurred_at, %s)
+                            )) / 3600.0,
+                            0
+                        )
+                    ),
+                    %s
+                ) AS capped_hours
+            FROM technical_feederinterruption
+            WHERE (
+                occurred_at >= %s AND occurred_at <= %s
+                OR (occurred_at < %s AND (restored_at IS NULL OR restored_at >= %s))
+            )
+            AND feeder_id IN ({feeder_placeholders})
+            {excl_clause}
+            GROUP BY feeder_id
+        ) per_feeder_totals
+    """
+
+    params = (
+        [end_dt, end_dt, start_dt, max_hours_per_feeder,
+         start_dt, end_dt, start_dt, start_dt]
+        + list(feeder_ids)
+        + list(exclude_types)
+    )
+
+    with connection.cursor() as cursor:
+        cursor.execute(query, params)
+        row = cursor.fetchone()
+        total_hours = float(row[0]) if row else 0.0
+
+    total_feeders = len(feeder_ids)
+    if is_single_day:
+        avg = total_hours / total_feeders if total_feeders else 0.0
+    else:
+        avg = total_hours / (total_feeders * period_days) if (total_feeders * period_days) else 0.0
+
+    return round(max(0.0, min(avg, 24.0)), 2)

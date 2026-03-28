@@ -4,6 +4,7 @@ attrs==25.3.0
 billiard==4.2.1
 brotli==1.2.0
 celery==5.5.3
+resend==2.10.0
 cffi==2.0.0
 click==8.2.1
 click-didyoumean==0.3.1

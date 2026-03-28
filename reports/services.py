@@ -3,17 +3,20 @@
 Services for fetching report data and generating PDFs.
 """
 import logging
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 
-from django.conf import settings
-from django.db import connection
-from django.db.models import Avg, Count, Max, Q, Sum
+from django.db.models import Avg, Count, Max, Q
 from django.utils import timezone
 
-from common.models import Band, BusinessDistrict, Feeder, InjectionSubstation, State
+from common.models import Band, Feeder
 from technical.constants import TURNAROUND_EXCLUSIONS
 from technical.models import FeederInterruption, HourlyLoad
-from technical.utils.energy_utils import calculate_energy_delivered
+from technical.utils.compliance_utils import calculate_turnaround_time
+from technical.utils.energy_utils import (
+    calculate_average_load,
+    calculate_energy_delivered,
+    calculate_hours_of_supply,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -218,42 +221,132 @@ SECTION_DEFINITIONS = {
             }
         }
     },
-    'commercial_summary': {
-        'display_name': 'Commercial Summary',
-        'description': 'Commercial metrics summary (coming soon)',
+    # ── HR sections ──────────────────────────────────────────────────────────
+    'hr_overview': {
+        'display_name': 'HR Overview',
+        'description': 'Total staff, gender split, attrition rate, and new hires for the period',
+        'category': 'hr',
+        'supports_chart': False,
+        'config_options': {},
+    },
+    'staff_metrics': {
+        'display_name': 'Staff Metrics',
+        'description': 'Average tenure, grade breakdown, and headcount',
+        'category': 'hr',
+        'supports_chart': False,
+        'config_options': {},
+    },
+    'wage_bill_analysis': {
+        'display_name': 'Wage Bill Analysis',
+        'description': 'Total wage bill, average salary, and department breakdown',
+        'category': 'hr',
+        'supports_chart': False,
+        'config_options': {},
+    },
+    'department_headcount': {
+        'display_name': 'Department Headcount',
+        'description': 'Headcount per department with percentage share',
+        'category': 'hr',
+        'supports_chart': True,
+        'config_options': {},
+    },
+    'attrition_analysis': {
+        'display_name': 'Attrition Analysis',
+        'description': 'Staff exits and attrition rate for the period, broken down by department',
+        'category': 'hr',
+        'supports_chart': False,
+        'config_options': {},
+    },
+    'recruitment_summary': {
+        'display_name': 'Recruitment Summary',
+        'description': 'New hires for the period by department and grade',
+        'category': 'hr',
+        'supports_chart': False,
+        'config_options': {},
+    },
+    # ── Commercial sections ───────────────────────────────────────────────────
+    'commercial_overview': {
+        'display_name': 'Commercial Overview',
+        'description': 'Billing, coverage, AT&C loss, ARPU, and MDI/MDNI split',
         'category': 'commercial',
         'supports_chart': False,
         'config_options': {},
-        'coming_soon': True,
     },
-    'financial_summary': {
-        'display_name': 'Financial Summary',
-        'description': 'Financial metrics summary (coming soon)',
-        'category': 'financial',
-        'supports_chart': False,
-        'config_options': {},
-        'coming_soon': True,
-    },
-    'collection_efficiency': {
-        'display_name': 'Collection Efficiency',
-        'description': 'Collection efficiency metrics (coming soon)',
+    'revenue_by_district': {
+        'display_name': 'Revenue by District',
+        'description': 'Revenue and consumption breakdown per business district',
         'category': 'commercial',
         'supports_chart': True,
         'config_options': {},
-        'coming_soon': True,
+    },
+    'customer_type_summary': {
+        'display_name': 'Customer Type Summary',
+        'description': 'MDI vs MDNI headcount and revenue comparison',
+        'category': 'commercial',
+        'supports_chart': True,
+        'config_options': {},
+    },
+    # ── Financial sections ────────────────────────────────────────────────────
+    'financial_overview': {
+        'display_name': 'Financial Overview',
+        'description': 'Total cost broken down into OPEX, HQ OPEX, salaries, NBET, and MO invoices',
+        'category': 'financial',
+        'supports_chart': False,
+        'config_options': {},
+    },
+    'opex_by_category': {
+        'display_name': 'OPEX by Category',
+        'description': 'District OPEX expenditure broken down by category with percentage share',
+        'category': 'financial',
+        'supports_chart': True,
+        'config_options': {},
+    },
+    'opex_by_district': {
+        'display_name': 'OPEX by District',
+        'description': 'District OPEX expenditure per business district with percentage share',
+        'category': 'financial',
+        'supports_chart': True,
+        'config_options': {},
     },
 }
 
 
-def get_available_sections():
-    """Return list of available section types with their definitions"""
+def get_available_sections(user=None):
+    """Return section types the user is permitted to add to a report.
+
+    Access rules:
+      - 'general' category (cover, TOC, custom text) — always available.
+      - All other categories require an active UserSectionAccess or a
+        non-expired TemporaryAccess for the matching Section.name.
+      - super_admin / admin roles bypass the check and see every module.
+      - Unauthenticated or anonymous users receive general sections only.
+    """
+    from django.utils import timezone
+    from users.models import TemporaryAccess, UserSectionAccess
+
+    if user is None or not getattr(user, 'is_authenticated', False):
+        accessible_modules = set()
+    elif getattr(user, 'role', None) in ('super_admin', 'admin'):
+        accessible_modules = {'technical', 'hr', 'commercial', 'financial', 'regulatory', 'overview'}
+    else:
+        permanent = set(
+            UserSectionAccess.objects.filter(user=user, is_active=True)
+            .values_list('section__name', flat=True)
+        )
+        temporary = set(
+            TemporaryAccess.objects.filter(
+                user=user, is_active=True, expires_at__gt=timezone.now()
+            ).values_list('section__name', flat=True)
+        )
+        accessible_modules = permanent | temporary
+
+    def _allowed(category):
+        return category == 'general' or category in accessible_modules
+
     return [
-        {
-            'section_type': key,
-            **value
-        }
+        {'section_type': key, **value}
         for key, value in SECTION_DEFINITIONS.items()
-        if not value.get('coming_soon', False)
+        if not value.get('coming_soon', False) and _allowed(value.get('category', 'general'))
     ]
 
 
@@ -381,50 +474,18 @@ class ReportDataService:
         """Get technical overview metrics"""
         if not self.feeder_ids:
             return self._empty_technical_metrics()
-        
-        total_feeders = len(self.feeder_ids)
-        
-        # Hours of supply
-        hours_of_supply = self._calculate_hours_of_supply()
-        
-        # Load metrics
-        today = timezone.now().date()
-        now = timezone.now()
 
-        if self.to_date == today:
-            # For current day, calculate actual elapsed hours
-            full_days = (self.to_date - self.from_date).days
-            current_hour = now.hour
-            current_minute = now.minute
-    
-            # Include minutes for precision
-            hours_elapsed = current_hour + (current_minute / 60.0)
-            period_hours = (full_days * 24) + hours_elapsed
-    
-            # Ensure minimum period to avoid division by zero
-            if period_hours == 0:
-                period_hours = 1  # 1 hour minimum
-        else:
-            # For past periods, use full hours
-            period_days_calc = (self.to_date - self.from_date).days + 1
-            period_hours = period_days_calc * 24
-
-        # Sum total load across all feeders
-        load_data = HourlyLoad.objects.filter(
-            feeder_id__in=self.feeder_ids,
-            date__range=(self.from_date, self.to_date)
-        ).aggregate(
-            total_load=Sum('load_mw'),
-            max_load=Max('load_mw')
+        # Hours of supply — shared utility (one source of truth)
+        hours_of_supply = calculate_hours_of_supply(
+            self.feeder_ids, self.from_date, self.to_date
         )
 
-        total_load = float(load_data['total_load'] or 0)
-        peak_load = float(load_data['max_load'] or 0)
+        # Average load + peak load — shared utility (one source of truth)
+        avg_load, peak_load = calculate_average_load(
+            self.feeder_ids, self.from_date, self.to_date
+        )
 
-        # Average = Total Load / (Total Feeders × Total Hours)
-        avg_load = total_load / (total_feeders * period_hours) if (total_feeders * period_hours) > 0 else 0
-        
-        # ✅ FIXED: Use hybrid energy calculation
+        # Energy — shared hybrid utility (one source of truth)
         total_energy = self._calculate_energy_delivered_hybrid()
         daily_avg_energy = total_energy / self.period_days if self.period_days > 0 else 0
         
@@ -449,44 +510,6 @@ class ReportDataService:
             'total_interruptions': total_interruptions,
             'load_shedding_count': load_shedding_count,
         }
-    
-    def _calculate_hours_of_supply(self):
-        """
-        Calculate average hours of supply per day.
-        
-        ✅ FIXED: Handles single-day vs multi-day queries properly
-        """
-        if not self.feeder_ids:
-            return 0.0
-        
-        placeholders = ','.join(['%s'] * len(self.feeder_ids))
-        
-        query = f"""
-            SELECT 
-                COUNT(DISTINCT CONCAT(feeder_id, '-', date, '-', hour)) as total_hours
-            FROM technical_hourlyload
-            WHERE date BETWEEN %s AND %s
-                AND load_mw > 0
-                AND feeder_id IN ({placeholders})
-        """
-        
-        with connection.cursor() as cursor:
-            cursor.execute(query, [self.from_date, self.to_date] + list(self.feeder_ids))
-            result = cursor.fetchone()
-            total_hours_all_feeders = result[0] if result and result[0] else 0
-        
-        total_feeders = len(self.feeder_ids)
-        
-        # ✅ CRITICAL: Same exact calculation as calculate_hours_of_supply_network in overview_views
-        if self.from_date == self.to_date:
-            # Single day: Average hours per feeder
-            avg_hours = total_hours_all_feeders / total_feeders if total_feeders > 0 else 0
-        else:
-            # Multi-day: Average hours per day per feeder
-            period_days = (self.to_date - self.from_date).days + 1
-            avg_hours = total_hours_all_feeders / (total_feeders * period_days) if (total_feeders * period_days) > 0 else 0
-        
-        return round(min(avg_hours, 24.0), 2)
     
     def _calculate_energy_delivered_hybrid(self):
         """
@@ -528,9 +551,10 @@ class ReportDataService:
 
         total_feeders = len(self.feeder_ids)
 
-        # avg_duration = 24 - hours_of_supply (same HourlyLoad source as Technical Overview
-        # so avg_supply + avg_duration always sums to exactly 24)
-        hours_of_supply = self._calculate_hours_of_supply()
+        # avg_duration = 24 - hours_of_supply (shared utility — one source of truth)
+        hours_of_supply = calculate_hours_of_supply(
+            self.feeder_ids, self.from_date, self.to_date
+        )
         avg_duration = round(max(0.0, min(24.0 - hours_of_supply, 24.0)), 2)
 
         # Cumulative interruption hours = avg_duration × feeders × period_days
@@ -539,67 +563,11 @@ class ReportDataService:
         else:
             total_interruption_hours = avg_duration * total_feeders * self.period_days
 
-        # Turnaround time — LOCAL faults only (exclude L/S and TCN types)
-        # Same SQL approach as calculate_interruption_duration_network() in overview_views.py:
-        # per-feeder SUM capped at max_hours, then avg across feeders × period_days
-        if self.is_single_day:
-            max_hours_per_feeder = 24.0
-        else:
-            max_hours_per_feeder = self.period_days * 24.0
-
-        start_of_period = timezone.make_aware(
-            datetime.combine(self.from_date, datetime.min.time())
+        # Turnaround time — shared utility, excludes L/S and TCN (one source of truth)
+        avg_turnaround = calculate_turnaround_time(
+            self.feeder_ids, self.from_date, self.to_date,
+            exclude_types=list(TURNAROUND_EXCLUSIONS),
         )
-        end_of_period = timezone.make_aware(
-            datetime.combine(self.to_date, datetime.max.time())
-        )
-
-        feeder_placeholders = ','.join(['%s'] * len(self.feeder_ids))
-        excl_placeholders = ','.join(['%s'] * len(TURNAROUND_EXCLUSIONS))
-
-        turnaround_query = f"""
-            SELECT COALESCE(SUM(capped_hours), 0)
-            FROM (
-                SELECT
-                    feeder_id,
-                    LEAST(
-                        SUM(
-                            GREATEST(
-                                EXTRACT(EPOCH FROM (
-                                    LEAST(COALESCE(restored_at, %s), %s) - GREATEST(occurred_at, %s)
-                                )) / 3600.0,
-                                0
-                            )
-                        ),
-                        %s
-                    ) as capped_hours
-                FROM technical_feederinterruption
-                WHERE (
-                    occurred_at >= %s AND occurred_at <= %s
-                    OR (occurred_at < %s AND (restored_at IS NULL OR restored_at >= %s))
-                )
-                AND feeder_id IN ({feeder_placeholders})
-                AND interruption_type NOT IN ({excl_placeholders})
-                GROUP BY feeder_id
-            ) per_feeder_totals
-        """
-        turnaround_params = (
-            [end_of_period, end_of_period, start_of_period, max_hours_per_feeder,
-             start_of_period, end_of_period, start_of_period, start_of_period]
-            + list(self.feeder_ids)
-            + list(TURNAROUND_EXCLUSIONS)
-        )
-        with connection.cursor() as cursor:
-            cursor.execute(turnaround_query, turnaround_params)
-            result = cursor.fetchone()
-            total_turnaround_hours = float(result[0]) if result else 0.0
-
-        if self.is_single_day:
-            avg_turnaround = total_turnaround_hours / total_feeders if total_feeders > 0 else 0.0
-        else:
-            avg_turnaround = total_turnaround_hours / (total_feeders * self.period_days) if (total_feeders * self.period_days) > 0 else 0.0
-
-        avg_turnaround = round(max(0.0, min(avg_turnaround, 24.0)), 2)
 
         return {
             'cumulative_interruption_hours': round(total_interruption_hours, 2),
@@ -978,10 +946,85 @@ class ReportDataService:
         
         return sorted(result, key=lambda x: x['district_name'])
     
+    # =========================================================================
+    # LAZY SUB-SERVICE ACCESSORS
+    # Each sub-service is instantiated once on first use using self.filters
+    # mapped to the filter keys each service expects.
+    # =========================================================================
+
+    @property
+    def _hr_filters(self):
+        return {
+            'from_date':      self.from_date,
+            'to_date':        self.to_date,
+            'department_ids': self.filters.get('departments'),
+            'grade_levels':   self.filters.get('grade_levels'),
+            'district_ids':   self.filters.get('districts'),
+            'state_ids':      self.filters.get('states'),
+        }
+
+    @property
+    def _commercial_filters(self):
+        return {
+            'from_date':      self.from_date,
+            'to_date':        self.to_date,
+            'feeder_ids':     self.feeder_ids,
+            'district_ids':   self.filters.get('districts'),
+            'state_ids':      self.filters.get('states'),
+            'customer_type':  self.filters.get('customer_type'),
+            'voltage_level':  self.filters.get('voltage_level'),
+        }
+
+    @property
+    def _financial_filters(self):
+        return {
+            'from_date':      self.from_date,
+            'to_date':        self.to_date,
+            'district_ids':   self.filters.get('districts'),
+            'state_ids':      self.filters.get('states'),
+        }
+
+    def _get_hr_service(self):
+        if not hasattr(self, '_hr_service_instance'):
+            from reports.hr_service import HRReportDataService
+            self._hr_service_instance = HRReportDataService(self._hr_filters)
+        return self._hr_service_instance
+
+    def _get_commercial_service(self):
+        if not hasattr(self, '_commercial_service_instance'):
+            from reports.commercial_service import CommercialReportDataService
+            self._commercial_service_instance = CommercialReportDataService(self._commercial_filters)
+        return self._commercial_service_instance
+
+    def _get_financial_service(self):
+        if not hasattr(self, '_financial_service_instance'):
+            from reports.financial_service import FinancialReportDataService
+            self._financial_service_instance = FinancialReportDataService(self._financial_filters)
+        return self._financial_service_instance
+
+    # =========================================================================
+    # MASTER DISPATCHER
+    # =========================================================================
+
+    # Section types owned by each sub-service
+    _HR_SECTIONS         = {'hr_overview', 'staff_metrics', 'wage_bill_analysis',
+                            'department_headcount', 'attrition_analysis', 'recruitment_summary'}
+    _COMMERCIAL_SECTIONS = {'commercial_overview', 'revenue_by_district', 'customer_type_summary'}
+    _FINANCIAL_SECTIONS  = {'financial_overview', 'opex_by_category', 'opex_by_district'}
+
     def get_all_section_data(self, section_type, config=None):
         """Get data for a specific section type"""
         config = config or {}
-        
+
+        # ── Delegate to module sub-services ──────────────────────────────────
+        if section_type in self._HR_SECTIONS:
+            return self._get_hr_service().get_all_section_data(section_type, config)
+        if section_type in self._COMMERCIAL_SECTIONS:
+            return self._get_commercial_service().get_all_section_data(section_type, config)
+        if section_type in self._FINANCIAL_SECTIONS:
+            return self._get_financial_service().get_all_section_data(section_type, config)
+
+        # ── Technical / general sections ─────────────────────────────────────
         data_methods = {
             'cover_page': lambda: {
                 'from_date': self.from_date.strftime('%Y-%m-%d'),
@@ -1009,9 +1052,9 @@ class ReportDataService:
             'custom_text': lambda: config,
             'gaps_improvements': lambda: config,
         }
-        
+
         method = data_methods.get(section_type)
         if method:
             return method()
-        
+
         return {}

@@ -5,13 +5,14 @@ Shared helpers for all commercial API views.
 """
 
 from datetime import date, datetime, timedelta
+from collections import defaultdict
 from decimal import Decimal
 
 from dateutil.relativedelta import relativedelta
-from django.db.models import ExpressionWrapper, F, Sum
+from django.db.models import Count, ExpressionWrapper, F, Sum
 from django.db.models import DecimalField as DField
 
-from commercial.models import MeterReading
+from commercial.models import CommercialCustomer, MeterReading
 from technical.utils.energy_utils import calculate_energy_delivered as _tech_energy_delivered
 
 VAT_RATE = Decimal('0.075')
@@ -274,4 +275,197 @@ def metric(value, unit='', mode='actual', explanation=''):
         'unit':        unit,
         'mode':        mode,
         'explanation': explanation,
+    }
+
+
+# =============================================================================
+# PARAMETER-BASED QUERYSET BUILDERS
+# Used by reports/commercial_service.py — accept plain params, not request objects.
+# =============================================================================
+
+def get_customer_queryset(feeder_ids=None, district_ids=None, state_ids=None,
+                          customer_type=None, voltage_level=None):
+    """
+    Return a scoped CommercialCustomer queryset.
+
+    Args:
+        feeder_ids    : list of feeder UUIDs
+        district_ids  : list of BusinessDistrict UUIDs
+        state_ids     : list of state UUIDs (via district__state)
+        customer_type : 'MDI' | 'MDNI'
+        voltage_level : '11KV' | '33KV'
+
+    Returns: CommercialCustomer queryset
+    """
+    qs = CommercialCustomer.objects.all()
+    if feeder_ids:
+        qs = qs.filter(feeder_id__in=feeder_ids)
+    if district_ids:
+        qs = qs.filter(district_id__in=district_ids)
+    if state_ids:
+        qs = qs.filter(district__state_id__in=state_ids)
+    if customer_type and customer_type.upper() in ('MDI', 'MDNI'):
+        qs = qs.filter(customer_type=customer_type.upper())
+    if voltage_level and voltage_level.upper() in ('11KV', '33KV'):
+        qs = qs.filter(feeder__voltage_level__iexact=voltage_level)
+    return qs
+
+
+def get_reading_queryset(customer_qs, from_date, to_date, reading_type=None):
+    """
+    Return a scoped MeterReading queryset for the given customers and period.
+
+    Args:
+        customer_qs  : CommercialCustomer queryset (already scoped)
+        from_date    : date
+        to_date      : date
+        reading_type : 'MDI' | 'MDNI' (optional further filter)
+
+    Returns: MeterReading queryset
+    """
+    qs = MeterReading.objects.filter(
+        customer__in=customer_qs,
+        reading_date__gte=from_date,
+        reading_date__lte=to_date,
+    )
+    if reading_type and reading_type.upper() in ('MDI', 'MDNI'):
+        qs = qs.filter(reading_type=reading_type.upper())
+    return qs
+
+
+# =============================================================================
+# AGGREGATED METRIC FUNCTIONS
+# Each accepts already-scoped querysets — callers build the scope first.
+# =============================================================================
+
+def get_commercial_overview(customer_qs, reading_qs, feeder_ids, from_date, to_date):
+    """
+    Full commercial overview — delegates to existing calc_* helpers.
+
+    Args:
+        customer_qs : CommercialCustomer queryset (already scoped)
+        reading_qs  : MeterReading queryset (already scoped)
+        feeder_ids  : list of feeder UUIDs (for energy delivered lookup)
+        from_date   : date
+        to_date     : date
+
+    Returns: dict with all key commercial KPIs
+    """
+    date_range = {
+        'start_date': from_date,
+        'end_date':   to_date,
+        'days':       (to_date - from_date).days + 1,
+    }
+
+    billing   = calc_billing(reading_qs)
+    coverage  = calc_coverage(customer_qs, reading_qs)
+    estimated = calc_estimated_billing(customer_qs, coverage['read_ids'], date_range)
+    energy_del = calc_energy_delivered(feeder_ids, date_range)
+    energy_con = calc_energy_consumed(reading_qs)
+    efficiency, atc_loss = calc_atc_loss(billing['total_billed_kwh'], energy_del['total_mwh'])
+    arpu = calc_arpu(billing['total_billed_amount'], coverage['read'])
+
+    # MDI / MDNI split
+    mdi_billing  = calc_billing(reading_qs.filter(reading_type='MDI'))
+    mdni_billing = calc_billing(reading_qs.filter(reading_type='MDNI'))
+
+    return {
+        'total_customers':      coverage['total'],
+        'customers_read':       coverage['read'],
+        'customers_unread':     coverage['unread'],
+        'coverage_rate':        coverage['rate'],
+        'mdi_count':            customer_qs.filter(customer_type='MDI').count(),
+        'mdni_count':           customer_qs.filter(customer_type='MDNI').count(),
+        'total_billed_kwh':     float(billing['total_billed_kwh']),
+        'energy_charge':        float(billing['energy_charge']),
+        'vat':                  float(billing['vat']),
+        'total_billed_amount':  float(billing['total_billed_amount']),
+        'estimated_kwh':        float(estimated['estimated_kwh']),
+        'estimated_revenue':    float(estimated['estimated_revenue']),
+        'energy_delivered_mwh': energy_del['total_mwh'],
+        'energy_delivered_mode': energy_del['mode'],
+        'energy_consumed_kwh':  float(energy_con),
+        'billing_efficiency':   efficiency,
+        'atc_loss':             atc_loss,
+        'arpu':                 float(arpu),
+        'mdi_revenue':          float(mdi_billing['total_billed_amount']),
+        'mdni_revenue':         float(mdni_billing['total_billed_amount']),
+    }
+
+
+def get_revenue_by_district(customer_qs, from_date, to_date):
+    """
+    Revenue and consumption breakdown per business district for the period.
+
+    Args:
+        customer_qs : CommercialCustomer queryset (already scoped)
+        from_date   : date
+        to_date     : date
+
+    Returns: list of dicts ordered by total_billed_amount descending
+    """
+    rows = list(
+        MeterReading.objects
+        .filter(
+            customer__in=customer_qs,
+            reading_date__gte=from_date,
+            reading_date__lte=to_date,
+            billed_consumption__isnull=False,
+            tariff_rate__isnull=False,
+        )
+        .values('customer__district__name', 'billed_consumption', 'tariff_rate')
+    )
+
+    by_district = defaultdict(lambda: {'kwh': Decimal('0'), 'revenue': Decimal('0')})
+    for r in rows:
+        district = r['customer__district__name'] or 'Unassigned'
+        kwh      = Decimal(str(r['billed_consumption']))
+        rate     = Decimal(str(r['tariff_rate']))
+        charge   = kwh * rate
+        by_district[district]['kwh']     += kwh
+        by_district[district]['revenue'] += charge + (charge * VAT_RATE)
+
+    result = [
+        {
+            'district':            district,
+            'total_billed_kwh':    float(round(vals['kwh'], 2)),
+            'total_billed_amount': float(round(vals['revenue'], 2)),
+        }
+        for district, vals in by_district.items()
+    ]
+    result.sort(key=lambda x: x['total_billed_amount'], reverse=True)
+    return result
+
+
+def get_customer_type_summary(customer_qs, reading_qs):
+    """
+    MDI vs MDNI headcount and revenue summary.
+
+    Args:
+        customer_qs : CommercialCustomer queryset (already scoped)
+        reading_qs  : MeterReading queryset (already scoped)
+
+    Returns: dict with mdi and mdni sub-dicts
+    """
+    type_counts = dict(
+        customer_qs
+        .values('customer_type')
+        .annotate(count=Count('id'))
+        .values_list('customer_type', 'count')
+    )
+
+    mdi_billing  = calc_billing(reading_qs.filter(reading_type='MDI'))
+    mdni_billing = calc_billing(reading_qs.filter(reading_type='MDNI'))
+
+    return {
+        'mdi': {
+            'count':               type_counts.get('MDI', 0),
+            'total_billed_kwh':    float(mdi_billing['total_billed_kwh']),
+            'total_billed_amount': float(mdi_billing['total_billed_amount']),
+        },
+        'mdni': {
+            'count':               type_counts.get('MDNI', 0),
+            'total_billed_kwh':    float(mdni_billing['total_billed_kwh']),
+            'total_billed_amount': float(mdni_billing['total_billed_amount']),
+        },
     }

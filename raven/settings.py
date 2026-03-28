@@ -60,6 +60,7 @@ INSTALLED_APPS = [
     'analytics',
     'users',
     'reports',
+    'notifications',
 ]
 
 MIDDLEWARE = [
@@ -308,3 +309,24 @@ DATANEST_SSO_URL = config('DATANEST_SSO_URL', default='https://staging.apidatane
 
 # DataNest frontend URL — Raven redirects user here with a one-time code (Raven → DataNest)
 DATANEST_FRONTEND_URL = config('DATANEST_FRONTEND_URL', default='https://staging.apidatanest.raven-emrc.com')
+
+
+# ── Celery ────────────────────────────────────────────────────────────────────
+CELERY_BROKER_URL = config('REDIS_URL', default='redis://127.0.0.1:6379/2')
+CELERY_RESULT_BACKEND = config('REDIS_URL', default='redis://127.0.0.1:6379/2')
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TIMEZONE = 'Africa/Lagos'
+CELERY_ENABLE_UTC = True
+CELERY_TASK_TRACK_STARTED = True
+CELERY_TASK_ACKS_LATE = True
+CELERY_WORKER_PREFETCH_MULTIPLIER = 1
+
+
+# ── Resend (Email) ─────────────────────────────────────────────────────────────
+RESEND_API_KEY = config('RESEND_API_KEY', default='')
+RESEND_FROM_EMAIL = config('RESEND_FROM_EMAIL', default='Raven EMRC <noreply@raven-emrc.com>')
+
+# In staging, all outgoing emails are redirected to this address instead of real recipients
+RESEND_TEST_EMAIL = config('RESEND_TEST_EMAIL', default='test@raven-emrc.com')

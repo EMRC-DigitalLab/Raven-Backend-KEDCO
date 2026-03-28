@@ -9,6 +9,10 @@ from analytics.views.summary.technical.overview import (
     OptimizedTechnicalOverviewAPIView,
     TechnicalHealthAPIView,
 )
+from analytics.views.comparisons.compare_engine import (
+    available_metrics,
+    run_compare,
+)
 
 urlpatterns = [
     path('summary/general/', OptimizedOverviewAPIView.as_view(), name='overview'),
@@ -17,5 +21,8 @@ urlpatterns = [
     path('summary/technical/overview/', OptimizedTechnicalOverviewAPIView.as_view(), name='technical-overview'),
     path('summary/technical/health/', TechnicalHealthAPIView.as_view(), name='technical-health'),
 
+    # ── Compare Engine ────────────────────────────────────────────────────────
+    path('compare/', run_compare, name='compare'),
+    path('compare/available/', available_metrics, name='compare-available'),
 ]
 
