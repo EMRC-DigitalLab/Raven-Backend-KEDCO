@@ -1972,12 +1972,17 @@ class PDFGenerator:
 
         Uses Playwright (headless Chromium) when available — output is identical
         to the browser live preview.  Falls back to WeasyPrint if Playwright is
-        not installed.
+        not installed or its browser binary is missing.
         """
         html_content = self.generate_html()
 
         if PLAYWRIGHT_AVAILABLE:
-            return self._generate_pdf_playwright(html_content)
+            try:
+                return self._generate_pdf_playwright(html_content)
+            except Exception as pw_err:
+                logger.warning(
+                    "Playwright PDF generation failed (%s), falling back to WeasyPrint.", pw_err
+                )
 
         if WEASYPRINT_AVAILABLE:
             return self._generate_pdf_weasyprint(html_content)
