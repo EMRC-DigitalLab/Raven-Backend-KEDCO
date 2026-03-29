@@ -2,6 +2,7 @@
 import os
 
 from celery import Celery
+from celery.schedules import crontab
 from decouple import config
 
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'raven.settings')
@@ -27,6 +28,19 @@ app.conf.update(
     # Retry settings
     task_acks_late=True,
     worker_prefetch_multiplier=1,
+    # ── Celery Beat scheduled tasks ───────────────────────────────────────────
+    beat_schedule={
+        # Band A SBT check — runs every day at 23:30 Africa/Lagos
+        'daily-band-a-supply-check': {
+            'task': 'notifications.tasks.daily_band_a_supply_check',
+            'schedule': crontab(hour=23, minute=30),
+        },
+        # Pending restoration check — runs every day at 23:30 Africa/Lagos
+        'daily-restoration-check': {
+            'task': 'notifications.tasks.daily_restoration_check',
+            'schedule': crontab(hour=23, minute=30),
+        },
+    },
 )
 
 # Auto-discover tasks in all installed apps

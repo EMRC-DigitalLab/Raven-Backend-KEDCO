@@ -26,7 +26,7 @@ band_changed = Signal()         # feeder_id, feeder_name, old_band, new_band
 # ══════════════════════════════════════════════════════════════════════════════
 
 @receiver(post_save, sender='users.User')
-def on_user_created(sender, instance, created, **kwargs):
+def on_user_created(_sender, instance, created, **kwargs):
     if not created:
         return
     NotificationService.notify_role(
@@ -42,7 +42,7 @@ def on_user_created(sender, instance, created, **kwargs):
 
 
 @receiver(post_save, sender='users.User')
-def on_user_role_changed(sender, instance, created, **kwargs):
+def on_user_role_changed(_sender, instance, created, **kwargs):
     if created:
         return
     # Only fire when the role field actually changed.
@@ -69,7 +69,7 @@ def on_user_role_changed(sender, instance, created, **kwargs):
 # ══════════════════════════════════════════════════════════════════════════════
 
 @receiver(post_save, sender='commercial.CommercialCustomer')
-def on_commercial_customer_created(sender, instance, created, **kwargs):
+def on_commercial_customer_created(_sender, instance, created, **kwargs):
     if not created:
         return
     NotificationService.notify_role(
@@ -84,7 +84,7 @@ def on_commercial_customer_created(sender, instance, created, **kwargs):
 
 
 @receiver(post_save, sender='commercial.MeterReading')
-def on_meter_reading_uploaded(sender, instance, created, **kwargs):
+def on_meter_reading_uploaded(_sender, instance, created, **kwargs):
     if not created:
         return
     NotificationService.notify_role(
@@ -103,7 +103,7 @@ def on_meter_reading_uploaded(sender, instance, created, **kwargs):
 # ══════════════════════════════════════════════════════════════════════════════
 
 @receiver(post_save, sender='financial.NBETInvoice')
-def on_nbet_invoice_created(sender, instance, created, **kwargs):
+def on_nbet_invoice_created(_sender, instance, created, **kwargs):
     if not created:
         return
     NotificationService.notify_role(
@@ -118,7 +118,7 @@ def on_nbet_invoice_created(sender, instance, created, **kwargs):
 
 
 @receiver(post_save, sender='financial.MOInvoice')
-def on_mo_invoice_created(sender, instance, created, **kwargs):
+def on_mo_invoice_created(_sender, instance, created, **kwargs):
     if not created:
         return
     NotificationService.notify_role(
@@ -133,7 +133,7 @@ def on_mo_invoice_created(sender, instance, created, **kwargs):
 
 
 @receiver(post_save, sender='financial.Opex')
-def on_opex_created(sender, instance, created, **kwargs):
+def on_opex_created(_sender, instance, created, **kwargs):
     if not created:
         return
     NotificationService.notify_role(
@@ -152,7 +152,7 @@ def on_opex_created(sender, instance, created, **kwargs):
 # ══════════════════════════════════════════════════════════════════════════════
 
 @receiver(post_save, sender='hr.Staff')
-def on_staff_created(sender, instance, created, **kwargs):
+def on_staff_created(_sender, instance, created, **kwargs):
     if not created:
         return
     staff_name = getattr(instance, 'name', None) or getattr(instance, 'full_name', None) or str(instance)
@@ -167,17 +167,17 @@ def on_staff_created(sender, instance, created, **kwargs):
     )
 
 
-@receiver(post_save, sender='hr.SalaryPayment')
-def on_salary_payment_created(sender, instance, created, **kwargs):
+@receiver(post_save, sender='financial.SalaryPayment')
+def on_salary_payment_created(_sender, instance, created, **kwargs):
     if not created:
         return
     NotificationService.notify_role(
         title="Salary payment recorded",
-        message=f"A new salary payment has been recorded in HR.",
-        category='hr',
+        message="A new salary payment has been recorded.",
+        category='financial',
         roles=['super_admin', 'admin'],
         priority='medium',
-        action_url='/hr/salary',
+        action_url='/financial/salary',
         metadata={'salary_id': instance.pk},
     )
 
@@ -187,7 +187,7 @@ def on_salary_payment_created(sender, instance, created, **kwargs):
 # ══════════════════════════════════════════════════════════════════════════════
 
 @receiver(post_save, sender='technical.FeederInterruption')
-def on_feeder_interruption(sender, instance, created, **kwargs):
+def on_feeder_interruption(_sender, instance, created, **kwargs):
     if not created:
         return
     feeder_name = getattr(instance, 'feeder', None)
@@ -208,7 +208,7 @@ def on_feeder_interruption(sender, instance, created, **kwargs):
 # ══════════════════════════════════════════════════════════════════════════════
 
 @receiver(report_generated)
-def on_report_generated(sender, user, report_type, report_title, report_object_id='', **kwargs):
+def on_report_generated(_sender, user, report_type, report_title, report_object_id='', **kwargs):
     """
     Notify the requesting user that their report is ready.
     The sender here is the report instance (or None).
@@ -233,7 +233,7 @@ def on_report_generated(sender, user, report_type, report_title, report_object_i
 # ══════════════════════════════════════════════════════════════════════════════
 
 @receiver(post_save, sender='notifications.Announcement')
-def on_announcement_saved(sender, instance, created, **kwargs):
+def on_announcement_saved(_sender, instance, created, **kwargs):
     """Fan out a new announcement to all target users immediately after creation."""
     if not created:
         return
@@ -247,7 +247,7 @@ def on_announcement_saved(sender, instance, created, **kwargs):
 # ══════════════════════════════════════════════════════════════════════════════
 
 @receiver(band_changed)
-def on_band_changed(sender, feeder_id, feeder_name, old_band, new_band, **kwargs):
+def on_band_changed(_sender, feeder_id, feeder_name, old_band, new_band, **kwargs):
     NotificationService.notify_band_change(
         feeder_id=feeder_id,
         feeder_name=feeder_name,

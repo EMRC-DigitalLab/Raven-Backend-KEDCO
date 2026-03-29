@@ -247,13 +247,15 @@ def calc_atc_loss(energy_billed_kwh, energy_delivered_mwh):
     AT&C loss = 100 - billing_efficiency
     billing_efficiency = energy_billed_kwh / (energy_delivered_mwh × 1000) × 100
     energy_delivered_mwh is the total for the period (not daily).
+    Defaulting to 0 until energy_delivered data is complete across all commercial feeders.
     """
-    energy_delivered_kwh = float(energy_delivered_mwh) * 1000
-    if not energy_delivered_kwh:
-        return None, None
-    efficiency = round(float(energy_billed_kwh) / energy_delivered_kwh * 100, 2)
-    atc_loss   = round(100 - efficiency, 2)
-    return efficiency, atc_loss
+    return 0, 0
+    # energy_delivered_kwh = float(energy_delivered_mwh) * 1000
+    # if not energy_delivered_kwh:
+    #     return 0, 0
+    # efficiency = round(float(energy_billed_kwh) / energy_delivered_kwh * 100, 2)
+    # atc_loss   = round(100 - efficiency, 2)
+    # return efficiency, atc_loss
 
 
 def calc_arpu(total_billed_amount, customers_billed):
