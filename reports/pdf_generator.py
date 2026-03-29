@@ -80,8 +80,8 @@ BASE_STYLES = """
 
 body {
     font-family: 'Outfit', 'Helvetica', 'Arial', sans-serif;
-    background-color: #002050;
-    color: #ffffff;
+    background-color: #ffffff;
+    color: #002050;
     font-size: 12px;
     line-height: 1.4;
 }
@@ -163,7 +163,7 @@ body {
     flex-direction: row;
     justify-content: space-between;
     align-items: center;
-    border-top: 1px solid rgba(255, 255, 255, 0.15);
+    border-top: 1px solid rgba(0, 32, 80, 0.2);
     page-break-inside: avoid;
     page-break-before: avoid;
 }
@@ -213,7 +213,7 @@ body {
 
 /* ── Content Box ─────────────────────────────────────────────────────────── */
 .content-box {
-    border: 2px solid #ffffff;
+    border: 2px solid #e0e0e0;
     border-radius: 20px;
     overflow: hidden;
     display: flex;
@@ -221,10 +221,10 @@ body {
 }
 
 .summary-section {
-    background-color: #1e2f4a;
+    background-color: #f0f4f8;
     padding: 25px;
     flex: 0 0 260px;
-    border-right: 2px solid #636363;
+    border-right: 2px solid #e0e0e0;
 }
 
 .summary-section h2 {
@@ -267,7 +267,7 @@ table {
 }
 
 thead {
-    background-color: #005bd5;
+    background-color: #002050;
 }
 
 thead th {
@@ -288,7 +288,7 @@ tbody tr {
 
 
 tbody tr:nth-child(even) {
-    background-color: rgba(255, 255, 255, 0.04);
+    background-color: rgba(0, 32, 80, 0.04);
 }
 
 tbody td {
@@ -307,16 +307,16 @@ tbody td {
 }
 
 .table-container thead {
-    background-color: #005bd5;
+    background-color: #002050;
 }
 
 
 .table-container tbody tr {
-    background-color: #1e2f4a;
+    background-color: #ffffff;
 }
 
 .table-container tbody tr:not(:last-child) {
-    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    border-bottom: 1px solid rgba(0, 0, 0, 0.08);
 }
 
 .table-container tbody td {
@@ -369,11 +369,11 @@ tbody td {
 }
 
 .metric-card.primary {
-    background-color: #1e2f4a;
+    background-color: #f0f4f8;
 }
 
 .metric-card.secondary {
-    background-color: #14396a;
+    background-color: #e8edf5;
 }
 
 .metric-label {
@@ -390,7 +390,7 @@ tbody td {
 
 .metric-content {
     flex: 1;
-    border-left: 2px solid rgba(255, 255, 255, 0.25);
+    border-left: 2px solid rgba(0, 32, 80, 0.2);
     padding-left: 18px;
 }
 
@@ -421,7 +421,7 @@ tbody td {
 /* ── Reliability Card ─────────────────────────────────────────────────────── */
 /* gap: removed — WeasyPrint <54 unsafe; spacing done via margin-right         */
 .reliability-card {
-    background-color: #1e2f4a;
+    background-color: #f0f4f8;
     border-radius: 15px;
     padding: 25px 30px;
     display: flex;
@@ -439,7 +439,7 @@ tbody td {
     font-weight: 700;
     line-height: 1.2;
     text-transform: uppercase;
-    color: #cbffcb;
+    color: #002050;
 }
 
 .reliability-metrics {
@@ -447,7 +447,7 @@ tbody td {
     display: flex;
     gap: 0;
     padding-left: 30px;
-    border-left: 2px solid rgba(255, 255, 255, 0.25);
+    border-left: 2px solid rgba(0, 32, 80, 0.2);
 }
 
 .reliability-item {
@@ -457,7 +457,7 @@ tbody td {
 }
 
 .reliability-item:not(:last-child) {
-    border-right: 2px solid rgba(255, 255, 255, 0.2);
+    border-right: 2px solid rgba(0, 32, 80, 0.15);
 }
 
 .reliability-value {
@@ -486,7 +486,7 @@ tbody td {
 .reliability-kpi-card {
     width: 32%;
     margin: 0 0.5% 1% 0.5%;
-    background-color: #1e2f4a;
+    background-color: #f0f4f8;
     border-radius: 15px;
     padding: 30px 24px;
     text-align: center;
@@ -511,7 +511,7 @@ tbody td {
 }
 
 .reliability-highlight {
-    background-color: #0a3d6b;
+    background-color: #e8edf5;
     border-radius: 15px;
     padding: 25px 30px;
     margin-bottom: 20px;
@@ -523,7 +523,7 @@ tbody td {
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 1px;
-    color: #cbffcb;
+    color: #002050;
     margin-bottom: 6px;
 }
 
@@ -624,6 +624,8 @@ tbody td {
     flex-direction: row;
     min-height: 210mm;
     page-break-after: always;
+    background-color: #002050;
+    color: #ffffff;
 }
 
 .cover-left-accent {
@@ -745,7 +747,7 @@ tbody td {
 
 /* ── Chart placeholder ────────────────────────────────────────────────────── */
 .chart-container {
-    background-color: #1e2f4a;
+    background-color: #f0f4f8;
     border-radius: 15px;
     padding: 20px;
     margin-bottom: 20px;
@@ -777,7 +779,7 @@ tbody td {
     display: flex;
     align-items: baseline;
     padding: 11px 0;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    border-bottom: 1px solid rgba(0, 0, 0, 0.1);
 }
 
 .toc-row:last-child {
@@ -799,7 +801,7 @@ tbody td {
 
 .toc-dots {
     flex: 0 1 120px;
-    border-bottom: 1px dotted rgba(255, 255, 255, 0.35);
+    border-bottom: 1px dotted rgba(0, 0, 0, 0.3);
     margin: 0 12px;
     margin-bottom: 4px;
 }
@@ -944,20 +946,34 @@ def render_cover_page(_data, context):
     """
 
 
+_TOC_MAX_PER_PAGE = 12
+
+
 def render_table_of_contents(entries, context, page_number):
-    """Render auto-generated table of contents HTML"""
-    rows_html = ""
-    for i, entry in enumerate(entries, start=1):
-        rows_html += f"""
+    """Render auto-generated table of contents HTML.
+
+    Paginates automatically when entries exceed _TOC_MAX_PER_PAGE per page.
+    Returns (html, pages_used) so generate_html can track the real page offset.
+    """
+    import math
+    chunks = [entries[i:i + _TOC_MAX_PER_PAGE] for i in range(0, max(len(entries), 1), _TOC_MAX_PER_PAGE)]
+    pages_html = ""
+
+    for chunk_idx, chunk in enumerate(chunks):
+        pnum = page_number + chunk_idx
+        suffix = " (continued)" if chunk_idx > 0 else ""
+        rows_html = ""
+        for i, entry in enumerate(chunk, start=chunk_idx * _TOC_MAX_PER_PAGE + 1):
+            rows_html += f"""
         <div class="toc-row">
             <span class="toc-number">{i:02d}</span>
             <span class="toc-title">{entry['title']}</span>
             <span class="toc-dots"></span>
             <span class="toc-page">{entry['page']}</span>
         </div>
-        """
+            """
 
-    return f"""
+        pages_html += f"""
     <div class="page">
         <div class="page-content">
             <div class="header">
@@ -965,7 +981,7 @@ def render_table_of_contents(entries, context, page_number):
                 <div class="date">{context.get('report_date', '')}</div>
             </div>
 
-            <h1 class="page-title">Contents</h1>
+            <h1 class="page-title">Contents{suffix}</h1>
 
             <div class="toc-container">
                 {rows_html}
@@ -974,10 +990,12 @@ def render_table_of_contents(entries, context, page_number):
 
         <div class="footer">
             <img src="{context.get('footer_logo_url', '')}" alt="Powered by EMRC" />
-            <div class="page-number">{page_number}</div>
+            <div class="page-number">{pnum}</div>
         </div>
     </div>
     """
+
+    return pages_html, len(chunks)
 
 
 def render_infrastructure_overview(data, context, page_number):
@@ -1281,7 +1299,7 @@ def render_feeder_performance_table(data, context, page_number):
         if band != current_band:
             current_band = band
             row_strings.append(f"""
-        <tr style="background-color:#0d2240;">
+        <tr style="background-color:#002050;">
             <td colspan="7" style="
                 font-weight:700;
                 font-size:11px;
@@ -1849,29 +1867,16 @@ class PDFGenerator:
         logger.warning("Static file not found on disk: %s — falling back to HTTP URL", path)
         return f"{base_url.rstrip('/')}{static_url}{path}"
 
-    def _build_toc_entries(self, sections):
-        """
-        Pre-compute page numbers and build TOC entry list.
-
-        Sections excluded from the TOC listing:
-            - cover_page   (not a content section)
-            - table_of_contents  (self-referential)
-        """
-        toc_entries = []
-        for page_number, section in enumerate(sections, start=1):
-            section_type = section.get('section_type')
-            if section_type in ('cover_page', 'table_of_contents'):
-                continue
-            display_name = SECTION_DISPLAY_NAMES.get(section_type, section_type.replace('_', ' ').title())
-            toc_entries.append({
-                'title': display_name,
-                'page': page_number,
-            })
-        return toc_entries
-
     def generate_html(self):
         """Generate full HTML document. Inline per-section footers are used for
-        both HTML preview and PDF — reliable across all WeasyPrint versions."""
+        both HTML preview and PDF — reliable across all WeasyPrint versions.
+
+        Two-pass approach ensures TOC page numbers are always accurate:
+          Pass 1 — render cover + all content sections, tracking real page numbers
+                   as paginated sections may consume more than one page each.
+          Pass 2 — render TOC with the accurate page numbers collected in pass 1,
+                   then assemble: cover → TOC → content.
+        """
         sections = list(self.report_config.get('sections', []))
 
         # Auto-inject TOC as the second section (after cover page) if not already present
@@ -1880,13 +1885,29 @@ class PDFGenerator:
             insert_at = 1 if 'cover_page' in section_types else 0
             sections.insert(insert_at, {'section_type': 'table_of_contents', 'config': {}})
 
-        # Pre-build TOC entries so they are ready when the TOC section is rendered
-        toc_entries = self._build_toc_entries(sections)
+        cover_section = next((s for s in sections if s.get('section_type') == 'cover_page'), None)
+        content_sections = [s for s in sections if s.get('section_type') not in ('cover_page', 'table_of_contents')]
 
-        sections_html = ""
+        # --- Pass 1: render cover (page 1) ---
+        cover_html = ""
         page_number = 1
+        if cover_section:
+            data = self.data_service.get_all_section_data('cover_page', cover_section.get('config', {}))
+            cover_html = self.SECTION_RENDERERS['cover_page'](data, self.context)
+            page_number = 2  # TOC is always page 2
 
-        for section in sections:
+        toc_page_number = page_number
+        # Compute how many TOC pages there will be so content page numbers are correct.
+        # Every content section gets one entry — unknown sections are skipped but rare.
+        import math
+        toc_pages = max(1, math.ceil(len(content_sections) / _TOC_MAX_PER_PAGE))
+        page_number += toc_pages  # content starts after all TOC pages
+
+        # --- Pass 1 (cont): render content sections, recording actual start pages ---
+        content_html = ""
+        toc_entries = []
+
+        for section in content_sections:
             section_type = section.get('section_type')
             config = section.get('config', {})
 
@@ -1895,34 +1916,35 @@ class PDFGenerator:
                 page_number += 1
                 continue
 
-            # Get data for this section
             data = self.data_service.get_all_section_data(section_type, config)
 
-            # Pass summary_points to context for infrastructure overview
             if section_type == 'infrastructure_overview':
                 self.context['summary_points'] = config.get('summary_points', [])
 
+            # Record this section's actual starting page for the TOC
+            display_name = SECTION_DISPLAY_NAMES.get(section_type, section_type.replace('_', ' ').title())
+            toc_entries.append({'title': display_name, 'page': page_number})
+
             renderer = self.SECTION_RENDERERS[section_type]
 
-            if section_type == 'cover_page':
-                result = renderer(data, self.context)
-            elif section_type == 'table_of_contents':
-                result = renderer(toc_entries, self.context, page_number)
-            elif section_type == 'technical_metrics':
+            if section_type == 'technical_metrics':
                 result = renderer(data, self.context, page_number, config)
             else:
                 result = renderer(data, self.context, page_number)
 
             # Renderers may return (html, pages_used) for paginated sections
             if isinstance(result, tuple):
-                sections_html += result[0]
+                content_html += result[0]
                 page_number += result[1]
             else:
-                sections_html += result
+                content_html += result
                 page_number += 1
 
-        # Build full HTML
-        # Always use landscape styles — report is landscape throughout
+        # --- Pass 2: render TOC with accurate page numbers, then assemble ---
+        toc_html, _ = render_table_of_contents(toc_entries, self.context, toc_page_number)
+        sections_html = cover_html + toc_html + content_html
+
+        # Build full HTML — always landscape throughout
         orientation_css = LANDSCAPE_STYLES
 
         html = f"""

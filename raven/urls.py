@@ -35,5 +35,7 @@ urlpatterns = [
     path('api/hr/', include('hr.urls')),
     path('api/regulatory/', include('regulatory.urls')),
     path('api/reports/', include('reports.urls', namespace='reports')),
+    path('api/notifications/', include('notifications.urls', namespace='notifications')),
+    path('api/grid-view/', include('grid_view.urls', namespace='grid_view')),
 ]
 urlpatterns += static(settings.STATIC_URL, document_root=settings.STATICFILES_DIRS[0])

@@ -155,16 +155,69 @@ Three blocks are added to the existing response.
 
 > `compliant + non_compliant + no_data = total_feeders`
 
-### 2b. `interruption_breakdown` block
+### 2b. `interruption_sources` — updated shape
 
-4-period array (same structure as `interruption_sources`). Each period has 3 category objects.
+4-period array. Each period's `breakdown` is now grouped by **ls / tcn / disco** instead of raw fault codes.
+
+```json
+"interruption_sources": [
+  {
+    "month": "Cycle 1",
+    "total": 1942,
+    "delta": 0,
+    "breakdown": {
+      "ls": {
+        "total": 1500,
+        "codes": { "L/S": 1500 }
+      },
+      "tcn": {
+        "total": 322,
+        "codes": {
+          "330KV L/F": 18,
+          "132KV L/F": 7,
+          "330KV L/S": 40,
+          "tcn": 90,
+          "132KV E/F": 3,
+          "132KV CB/F": 17,
+          "132KV MTCE": 71,
+          "L/S GS": 76
+        }
+      },
+      "disco": {
+        "total": 120,
+        "codes": {
+          "E/F": 19,
+          "O/S": 46,
+          "fault": 3,
+          "B/F": 3,
+          "EM/D": 3,
+          "OFF": 6,
+          "permit": 13,
+          "MTCE": 7
+        }
+      }
+    }
+  },
+  { ... },
+  { ... },
+  { ... }
+]
+```
+
+`breakdown.ls.total + breakdown.tcn.total + breakdown.disco.total = total` always.
+
+**`codes`** — raw fault code counts within each category. Use this to drill down into what specific faults are driving the category total.
+
+### 2c. `interruption_breakdown` block
+
+4-period array. Each period has 3 category objects with aggregate stats (count, feeders, MTTR). Use this for the high-level chart — `interruption_sources` for the drill-down.
 
 ```json
 "interruption_breakdown": [
   {
-    "ls":    { "interruption_count": 5,  "feeders_affected": 4,  "mean_time_to_restore_hours": 8.0 },
-    "tcn":   { "interruption_count": 3,  "feeders_affected": 3,  "mean_time_to_restore_hours": 14.5 },
-    "disco": { "interruption_count": 47, "feeders_affected": 31, "mean_time_to_restore_hours": 3.8 }
+    "ls":    { "interruption_count": 1500, "feeders_affected": 73,  "mean_time_to_restore_hours": 11.31 },
+    "tcn":   { "interruption_count": 322,  "feeders_affected": 54,  "mean_time_to_restore_hours": 6.65 },
+    "disco": { "interruption_count": 120,  "feeders_affected": 34,  "mean_time_to_restore_hours": 10.41 }
   },
   { ... },
   { ... },
@@ -180,7 +233,7 @@ Three blocks are added to the existing response.
 | `tcn` | TCN/grid events: `TCN`, `132KV E/F`, `132KV CB/F`, `132KV MTCE`, `132KV L/F`, `330KV L/F`, `330KV L/S`, `T/LS`, `L/S GS` |
 | `disco` | Everything else — local DisCo faults under the distribution company's control |
 
-**Per category:**
+**Per category (`interruption_breakdown`):**
 
 | Field | Description |
 |---|---|

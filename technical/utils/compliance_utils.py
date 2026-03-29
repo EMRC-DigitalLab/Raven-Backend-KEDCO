@@ -77,11 +77,19 @@ def bulk_ongoing_interruptions(feeder_ids):
     return result
 
 
-def build_ongoing_interruption(feeder_id, interruption_map, target_hours):
+def build_ongoing_interruption(feeder_id, interruption_map, target_hours, from_date=None, to_date=None):
     """
     Build the ongoing_interruption block for a single feeder.
-    band_allowance_hours = 24 - target_hours (max downtime the band permits per day).
-    breaching = True when the fault has already exceeded that allowance.
+
+    duration_hours is scoped to the selected period:
+      - daily  (1 day):  capped at 24 hrs
+      - weekly (7 days): capped at 168 hrs
+      - monthly (N days): capped at N × 24 hrs
+
+    band_allowance_hours is also scaled to the period:
+      daily allowance × period_days  (e.g. Band A = 4 hrs/day → 92 hrs for 23-day month)
+
+    breaching = duration_hours > band_allowance_hours
     """
     if feeder_id not in interruption_map:
         return {'has_interruption': False}
@@ -90,13 +98,27 @@ def build_ongoing_interruption(feeder_id, interruption_map, target_hours):
     now = timezone.now()
     occurred_at = rec['occurred_at']
 
-    # Make timezone-aware if naive
+    from django.utils.timezone import make_aware
     if occurred_at.tzinfo is None:
-        from django.utils.timezone import make_aware
         occurred_at = make_aware(occurred_at)
 
-    duration_hours = round((now - occurred_at).total_seconds() / 3600, 2)
-    band_allowance = round(24.0 - target_hours, 1)
+    # Period boundaries
+    if from_date and to_date:
+        from datetime import datetime as _dt
+        period_days = (to_date - from_date).days + 1
+        period_start = make_aware(_dt.combine(from_date, _dt.min.time()))
+        period_end = now  # always count up to now (not future end of period)
+
+        # Fault might have started before the period — only count within period
+        effective_start = max(occurred_at, period_start)
+        duration_hours = round(max((period_end - effective_start).total_seconds() / 3600, 0.0), 2)
+    else:
+        # Fallback: raw duration from occurrence to now
+        period_days = 1
+        duration_hours = round((now - occurred_at).total_seconds() / 3600, 2)
+
+    daily_allowance = 24.0 - target_hours
+    band_allowance = round(daily_allowance * period_days, 1)
 
     return {
         'has_interruption': True,
@@ -182,16 +204,22 @@ def _bulk_supply_hours(feeder_ids, from_date, to_date):
     return result
 
 
+# Module-level in-process cache (avoids Redis dependency for this tiny dataset)
+_category_codes_cache = None
+_category_codes_ts = 0.0
+
+
 def _get_category_codes():
     """
     Returns (load_shedding_codes, transmission_codes) as sets, read from DB.
     'disco' = every code NOT in either set.
-    Results are cached in-process for 60 s to avoid repeated tiny queries.
+    Results are cached in-process for 60 s (no Redis dependency).
     """
-    from django.core.cache import cache
-    cached = cache.get('_fault_type_category_codes')
-    if cached is not None:
-        return cached
+    import time
+    global _category_codes_cache, _category_codes_ts
+
+    if _category_codes_cache is not None and (time.time() - _category_codes_ts) < 60:
+        return _category_codes_cache
 
     from technical.models import FaultTypeCategory
     ls_codes = set(
@@ -200,9 +228,9 @@ def _get_category_codes():
     tx_codes = set(
         FaultTypeCategory.objects.filter(category='tcn').values_list('code', flat=True)
     )
-    result = (ls_codes, tx_codes)
-    cache.set('_fault_type_category_codes', result, timeout=60)
-    return result
+    _category_codes_cache = (ls_codes, tx_codes)
+    _category_codes_ts = time.time()
+    return _category_codes_cache
 
 
 def _classify_interruption_type(itype, ls_codes, tx_codes):
@@ -412,3 +440,89 @@ def build_compliance_summary(feeders, supply_map):
         'no_data': no_data,
         'by_band': by_band,
     }
+
+
+def calculate_turnaround_time(feeder_ids, from_date, to_date, exclude_types=None):
+    """
+    Average turnaround time (restoration duration) per feeder per day.
+
+    Logic:
+      - Sums actual outage hours per feeder within the period boundaries.
+      - Caps each feeder's total at 24h × period_days (can't exceed 100% outage).
+      - Excludes fault types in exclude_types (e.g. L/S, TCN — network faults
+        that DisCo has no control over).
+      - Returns average across all feeders normalised per day.
+
+    Args:
+        feeder_ids    : list of feeder UUIDs already scoped by the caller
+        from_date     : date
+        to_date       : date
+        exclude_types : list of interruption_type strings to exclude (optional)
+
+    Returns: float (hours, 0–24)
+    """
+    if not feeder_ids:
+        return 0.0
+
+    exclude_types = exclude_types or []
+    is_single_day = (from_date == to_date)
+    period_days = 1 if is_single_day else (to_date - from_date).days + 1
+    max_hours_per_feeder = 24.0 * period_days
+
+    start_dt = timezone.make_aware(
+        __import__('datetime').datetime.combine(from_date, __import__('datetime').time.min)
+    )
+    end_dt = timezone.make_aware(
+        __import__('datetime').datetime.combine(to_date, __import__('datetime').time.max)
+    )
+
+    feeder_placeholders = ','.join(['%s'] * len(feeder_ids))
+    excl_placeholders = ','.join(['%s'] * len(exclude_types)) if exclude_types else None
+
+    excl_clause = f"AND interruption_type NOT IN ({excl_placeholders})" if excl_placeholders else ""
+
+    query = f"""
+        SELECT COALESCE(SUM(capped_hours), 0)
+        FROM (
+            SELECT feeder_id,
+                LEAST(
+                    SUM(
+                        GREATEST(
+                            EXTRACT(EPOCH FROM (
+                                LEAST(COALESCE(restored_at, %s), %s) - GREATEST(occurred_at, %s)
+                            )) / 3600.0,
+                            0
+                        )
+                    ),
+                    %s
+                ) AS capped_hours
+            FROM technical_feederinterruption
+            WHERE (
+                occurred_at >= %s AND occurred_at <= %s
+                OR (occurred_at < %s AND (restored_at IS NULL OR restored_at >= %s))
+            )
+            AND feeder_id IN ({feeder_placeholders})
+            {excl_clause}
+            GROUP BY feeder_id
+        ) per_feeder_totals
+    """
+
+    params = (
+        [end_dt, end_dt, start_dt, max_hours_per_feeder,
+         start_dt, end_dt, start_dt, start_dt]
+        + list(feeder_ids)
+        + list(exclude_types)
+    )
+
+    with connection.cursor() as cursor:
+        cursor.execute(query, params)
+        row = cursor.fetchone()
+        total_hours = float(row[0]) if row else 0.0
+
+    total_feeders = len(feeder_ids)
+    if is_single_day:
+        avg = total_hours / total_feeders if total_feeders else 0.0
+    else:
+        avg = total_hours / (total_feeders * period_days) if (total_feeders * period_days) else 0.0
+
+    return round(max(0.0, min(avg, 24.0)), 2)

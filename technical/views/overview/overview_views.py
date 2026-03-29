@@ -583,49 +583,33 @@ def calculate_average_interruption_duration_network(from_date, to_date, voltage_
     
     if not onboarded_feeder_ids:
         return 0.0
-    
-    start_of_period = timezone.make_aware(
-        datetime.combine(from_date, datetime.min.time())
-    )
-    
-    # CRITICAL: If filtering for today, use NOW instead of end of day
-    if to_date == today:
-        end_of_period = now  # Current time (e.g., 14:00)
-    else:
-        end_of_period = timezone.make_aware(
-            datetime.combine(to_date, datetime.max.time())
-        )
-    
-    # Get interruptions that are active during the period
+
     feeder_placeholders = ','.join(['%s'] * len(onboarded_feeder_ids))
     
+    # Only resolved faults that occurred within the period.
+    # Unresolved faults are excluded — their duration is open-ended and inflates MTTR.
     query = f"""
-        SELECT 
+        SELECT
             COUNT(*) as interruption_count,
             COALESCE(SUM(
-                EXTRACT(EPOCH FROM (
-                    LEAST(COALESCE(fi.restored_at, %s), %s) - GREATEST(fi.occurred_at, %s)
-                )) / 3600.0
+                EXTRACT(EPOCH FROM (fi.restored_at - fi.occurred_at)) / 3600.0
             ), 0) as total_hours
         FROM technical_feederinterruption fi
-        WHERE (
-            (fi.occurred_at AT TIME ZONE 'Africa/Lagos')::date BETWEEN %s AND %s
-            OR (fi.occurred_at < %s AND fi.restored_at IS NULL)
-        )
-        AND fi.feeder_id IN ({feeder_placeholders})
+        WHERE fi.restored_at IS NOT NULL
+            AND (fi.occurred_at AT TIME ZONE 'Africa/Lagos')::date BETWEEN %s AND %s
+            AND fi.feeder_id IN ({feeder_placeholders})
     """
-    
-    params = [now, end_of_period, start_of_period, from_date, to_date, start_of_period] + onboarded_feeder_ids
-    
+
+    params = [from_date, to_date] + onboarded_feeder_ids
+
     with connection.cursor() as cursor:
         cursor.execute(query, params)
         result = cursor.fetchone()
         interruption_count = result[0] if result else 0
         total_hours = float(result[1]) if result else 0
-    
-    # Calculate average
+
     avg_duration = total_hours / interruption_count if interruption_count > 0 else 0
-    
+
     return round(avg_duration, 2)
 
 
@@ -650,47 +634,31 @@ def calculate_average_interruption_duration_feeder(feeder_id, from_date, to_date
     now = timezone.now()
     today = now.date()
     
-    # ✨ CRITICAL: If querying future dates, return 0 (no data available yet)
     if from_date > today:
         return 0.0
-    
-    start_of_period = timezone.make_aware(
-        datetime.combine(from_date, datetime.min.time())
-    )
-    
-    # CRITICAL: If filtering for today, use NOW instead of end of day
-    if to_date == today:
-        end_of_period = now  # Current time (e.g., 14:00)
-    else:
-        end_of_period = timezone.make_aware(
-            datetime.combine(to_date, datetime.max.time())
-        )
-    
+
+    # Only resolved faults that occurred within the period.
+    # Unresolved faults are excluded — their duration is open-ended and inflates MTTR.
     query = """
-        SELECT 
+        SELECT
             COUNT(*) as interruption_count,
             COALESCE(SUM(
-                EXTRACT(EPOCH FROM (
-                    LEAST(COALESCE(restored_at, %s), %s) - GREATEST(occurred_at, %s)
-                )) / 3600.0
+                EXTRACT(EPOCH FROM (restored_at - occurred_at)) / 3600.0
             ), 0) as total_hours
         FROM technical_feederinterruption
-        WHERE (
-            (occurred_at AT TIME ZONE 'Africa/Lagos')::date BETWEEN %s AND %s
-            OR (occurred_at < %s AND restored_at IS NULL)
-        )
-        AND feeder_id = %s
+        WHERE restored_at IS NOT NULL
+            AND (occurred_at AT TIME ZONE 'Africa/Lagos')::date BETWEEN %s AND %s
+            AND feeder_id = %s
     """
-    
+
     with connection.cursor() as cursor:
-        cursor.execute(query, [now, end_of_period, start_of_period, from_date, to_date, start_of_period, feeder_id])
+        cursor.execute(query, [from_date, to_date, feeder_id])
         result = cursor.fetchone()
         interruption_count = result[0] if result else 0
         total_hours = float(result[1]) if result else 0
-    
-    # Calculate average
+
     avg_duration = total_hours / interruption_count if interruption_count > 0 else 0
-    
+
     return round(avg_duration, 2)
 
 
@@ -795,6 +763,30 @@ def get_ongoing_interruptions_info_feeder(feeder_id, from_date):
     }
 
 
+def _group_by_category(type_counts):
+    """
+    Takes {interruption_type: count} and returns counts grouped under ls/tcn/disco.
+    {
+      "ls":    {"total": N, "codes": {...}},
+      "tcn":   {"total": N, "codes": {...}},
+      "disco": {"total": N, "codes": {...}},
+    }
+    """
+    from technical.utils.compliance_utils import _get_category_codes, _classify_interruption_type
+    ls_codes, tx_codes = _get_category_codes()
+
+    groups = {
+        'ls':    {'total': 0, 'codes': {}},
+        'tcn':   {'total': 0, 'codes': {}},
+        'disco': {'total': 0, 'codes': {}},
+    }
+    for itype, count in type_counts.items():
+        cat = _classify_interruption_type(itype, ls_codes, tx_codes)
+        groups[cat]['codes'][itype] = count
+        groups[cat]['total'] += count
+    return groups
+
+
 def get_interruption_breakdown_feeder(feeder_id, start_date, end_date, period_days, period_offset=0):
     """
     Get interruption COUNT breakdown for a single feeder.
@@ -848,20 +840,18 @@ def get_interruption_breakdown_feeder(feeder_id, start_date, end_date, period_da
         cursor.execute(query, [feeder_id, start_datetime, end_datetime])
         results = cursor.fetchall()
     
-    # Process results
     type_counts = {}
     total_count = 0
-    
     for itype, count in results:
         count_val = int(count) if count else 0
         type_counts[itype or 'Unknown'] = count_val
         total_count += count_val
-    
+
     return {
         "month": label,
         "total": total_count,
         "delta": 0,
-        "breakdown": type_counts
+        "breakdown": _group_by_category(type_counts),
     }
 
 
@@ -924,12 +914,12 @@ def get_interruption_breakdown_network(start_date, end_date, period_days, period
         itype = row['interruption_type'] or 'Unknown'
         type_counts[itype] = row['count']
         total_count += row['count']
-    
+
     return {
         "month": label,
         "total": total_count,
         "delta": 0,
-        "breakdown": type_counts
+        "breakdown": _group_by_category(type_counts),
     }
 
 

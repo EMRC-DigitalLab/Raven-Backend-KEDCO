@@ -1,23 +1,27 @@
 # technical/utils/energy_utils.py
 """
-Shared smart energy delivered calculation.
+Shared technical metric calculations.
 
-Per-feeder logic:
+All functions accept feeder_ids as a parameter so they work with any scope
+(network-wide, per state, per district, per report filter set, etc.).
+Callers are responsible for scoping feeder IDs before calling.
+
+Energy delivered:
   PRIMARY  (meter)  — EnergyDelivered.energy_mwh when records exist and the
-                      average daily value is within the balloon limit.
-  FALLBACK (system) — avg_load_mw × supply_hours from HourlyLoad when
-                      EnergyDelivered is missing or contains outliers.
+                      MAX single-day value is within the balloon limit.
+  FALLBACK (system) — avg_load_mw × supply_hours from HourlyLoad.
 
 Usage:
-    from technical.utils.energy_utils import calculate_energy_delivered
-
-    result = calculate_energy_delivered(feeder_ids, from_date, to_date)
-    total  = result['total_mwh']          # float, MWh
-    meter  = result['meter_feeders']      # int
-    system = result['system_feeders']     # int
+    from technical.utils.energy_utils import (
+        calculate_energy_delivered,
+        calculate_hours_of_supply,
+        calculate_average_load,
+    )
 """
 
+from django.db import connection
 from django.db.models import Avg, Count, Max, Sum
+from django.utils import timezone
 
 from technical.models import EnergyDelivered, HourlyLoad
 
@@ -170,3 +174,87 @@ def calculate_energy_delivered_per_feeder(feeder_ids, from_date, to_date):
             result[fid] = {'mwh': round(mwh, 2), 'source': 'system'}
 
     return result
+
+
+def calculate_hours_of_supply(feeder_ids, from_date, to_date):
+    """
+    Average hours of supply per day for the given feeder IDs.
+
+    Single-day  → avg hours per feeder for that day   (max 24)
+    Multi-day   → avg hours per day per feeder         (max 24)
+
+    Uses the same SQL used by calculate_hours_of_supply_network() in
+    overview_views — one implementation, many callers.
+
+    Args:
+        feeder_ids : list of feeder UUIDs already scoped by the caller
+        from_date  : date
+        to_date    : date
+
+    Returns: float (hours, 0–24)
+    """
+    if not feeder_ids:
+        return 0.0
+
+    placeholders = ','.join(['%s'] * len(feeder_ids))
+    query = f"""
+        SELECT COUNT(DISTINCT CONCAT(feeder_id, '-', date, '-', hour))
+        FROM technical_hourlyload
+        WHERE date BETWEEN %s AND %s
+          AND load_mw > 0
+          AND feeder_id IN ({placeholders})
+    """
+    with connection.cursor() as cursor:
+        cursor.execute(query, [from_date, to_date] + list(feeder_ids))
+        row = cursor.fetchone()
+        total_hours = row[0] if row and row[0] else 0
+
+    total_feeders = len(feeder_ids)
+    if from_date == to_date:
+        avg = total_hours / total_feeders if total_feeders else 0.0
+    else:
+        period_days = (to_date - from_date).days + 1
+        avg = total_hours / (total_feeders * period_days) if (total_feeders * period_days) else 0.0
+
+    return round(min(avg, 24.0), 2)
+
+
+def calculate_average_load(feeder_ids, from_date, to_date):
+    """
+    Average load per feeder per hour for the given feeder IDs.
+
+    Formula: total_load_mw / (total_feeders × period_hours)
+    For current-day periods, period_hours uses actual elapsed hours so the
+    average is not diluted by future hours that haven't happened yet.
+
+    Args:
+        feeder_ids : list of feeder UUIDs already scoped by the caller
+        from_date  : date
+        to_date    : date
+
+    Returns: float (MW)
+    """
+    if not feeder_ids:
+        return 0.0
+
+    today = timezone.now().date()
+    now = timezone.now()
+
+    if to_date == today:
+        full_days = (to_date - from_date).days
+        hours_elapsed = now.hour + (now.minute / 60.0)
+        period_hours = (full_days * 24) + hours_elapsed or 1.0
+    else:
+        period_hours = ((to_date - from_date).days + 1) * 24
+
+    result = HourlyLoad.objects.filter(
+        feeder_id__in=feeder_ids,
+        date__range=(from_date, to_date),
+    ).aggregate(total_load=Sum('load_mw'), peak_load=Max('load_mw'))
+
+    total_load = float(result['total_load'] or 0)
+    peak_load = float(result['peak_load'] or 0)
+    total_feeders = len(feeder_ids)
+
+    avg = total_load / (total_feeders * period_hours) if (total_feeders * period_hours) else 0.0
+    return round(avg, 2), round(peak_load, 2)
