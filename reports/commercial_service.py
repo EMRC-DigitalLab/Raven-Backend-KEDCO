@@ -7,11 +7,14 @@ dashboard views and this report service.
 from datetime import datetime
 
 from commercial.analytics_utils import (
+    get_commercial_coverage,
+    get_commercial_energy,
     get_commercial_overview,
     get_customer_queryset,
     get_customer_type_summary,
     get_reading_queryset,
     get_revenue_by_district,
+    get_revenue_by_feeder,
 )
 
 
@@ -78,6 +81,19 @@ class CommercialReportDataService:
     def section_customer_type_summary(self):
         return get_customer_type_summary(self.customer_qs, self.reading_qs)
 
+    def section_commercial_coverage(self):
+        return get_commercial_coverage(
+            self.customer_qs, self.reading_qs, self.from_date, self.to_date
+        )
+
+    def section_commercial_energy(self):
+        return get_commercial_energy(
+            self.reading_qs, self.feeder_ids, self.from_date, self.to_date
+        )
+
+    def section_revenue_by_feeder(self):
+        return get_revenue_by_feeder(self.customer_qs, self.from_date, self.to_date)
+
     # =========================================================================
     # MASTER DISPATCHER
     # =========================================================================
@@ -87,6 +103,9 @@ class CommercialReportDataService:
             'commercial_overview':    self.section_commercial_overview,
             'revenue_by_district':    self.section_revenue_by_district,
             'customer_type_summary':  self.section_customer_type_summary,
+            'commercial_coverage':    self.section_commercial_coverage,
+            'commercial_energy':      self.section_commercial_energy,
+            'revenue_by_feeder':      self.section_revenue_by_feeder,
         }
         method = dispatch.get(section_type)
         return method() if method else {}

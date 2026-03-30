@@ -439,6 +439,118 @@ def get_revenue_by_district(customer_qs, from_date, to_date):
     return result
 
 
+def get_commercial_coverage(customer_qs, reading_qs, from_date, to_date):
+    """
+    Reading coverage detail — how many customers were read vs unread,
+    and the estimated revenue at risk from unread customers.
+
+    Args:
+        customer_qs : CommercialCustomer queryset (already scoped)
+        reading_qs  : MeterReading queryset (already scoped)
+        from_date   : date
+        to_date     : date
+
+    Returns: dict
+    """
+    date_range = {
+        'start_date': from_date,
+        'end_date':   to_date,
+        'days':       (to_date - from_date).days + 1,
+    }
+    billing   = calc_billing(reading_qs)
+    coverage  = calc_coverage(customer_qs, reading_qs)
+    estimated = calc_estimated_billing(customer_qs, coverage['read_ids'], date_range)
+
+    return {
+        'total_customers':      coverage['total'],
+        'customers_read':       coverage['read'],
+        'customers_unread':     coverage['unread'],
+        'coverage_rate':        coverage['rate'],
+        'total_billed_amount':  float(billing['total_billed_amount']),
+        'total_billed_kwh':     float(billing['total_billed_kwh']),
+        'estimated_kwh':        float(estimated['estimated_kwh']),
+        'estimated_revenue':    float(estimated['estimated_revenue']),
+    }
+
+
+def get_commercial_energy(reading_qs, feeder_ids, from_date, to_date):
+    """
+    Energy analysis — delivered vs consumed vs billed, with AT&C loss.
+
+    Args:
+        reading_qs : MeterReading queryset (already scoped)
+        feeder_ids : list of feeder UUIDs
+        from_date  : date
+        to_date    : date
+
+    Returns: dict
+    """
+    date_range = {
+        'start_date': from_date,
+        'end_date':   to_date,
+        'days':       (to_date - from_date).days + 1,
+    }
+    billing    = calc_billing(reading_qs)
+    energy_del = calc_energy_delivered(feeder_ids, date_range)
+    energy_con = calc_energy_consumed(reading_qs)
+    efficiency, atc_loss = calc_atc_loss(billing['total_billed_kwh'], energy_del['total_mwh'])
+
+    return {
+        'energy_delivered_mwh':  energy_del['total_mwh'],
+        'energy_delivered_mode': energy_del['mode'],
+        'energy_consumed_kwh':   float(energy_con),
+        'total_billed_kwh':      float(billing['total_billed_kwh']),
+        'billing_efficiency':    efficiency,
+        'atc_loss':              atc_loss,
+    }
+
+
+def get_revenue_by_feeder(customer_qs, from_date, to_date):
+    """
+    Revenue and consumption breakdown per feeder for the period.
+
+    Args:
+        customer_qs : CommercialCustomer queryset (already scoped)
+        from_date   : date
+        to_date     : date
+
+    Returns: list of dicts ordered by total_billed_amount descending
+    """
+    rows = list(
+        MeterReading.objects
+        .filter(
+            customer__in=customer_qs,
+            reading_date__gte=from_date,
+            reading_date__lte=to_date,
+            billed_consumption__isnull=False,
+            tariff_rate__isnull=False,
+        )
+        .values('customer__feeder__name', 'billed_consumption', 'tariff_rate')
+    )
+
+    by_feeder = defaultdict(lambda: {'kwh': Decimal('0'), 'revenue': Decimal('0'), 'readings': 0})
+    for r in rows:
+        feeder  = r['customer__feeder__name'] or 'Unassigned'
+        kwh     = Decimal(str(r['billed_consumption']))
+        rate    = Decimal(str(r['tariff_rate']))
+        charge  = kwh * rate
+        by_feeder[feeder]['kwh']      += kwh
+        by_feeder[feeder]['revenue']  += charge + (charge * VAT_RATE)
+        by_feeder[feeder]['readings'] += 1
+
+    result = [
+        {
+            'feeder':              feeder,
+            'readings':            vals['readings'],
+            'total_billed_kwh':    float(round(vals['kwh'], 2)),
+            'total_billed_amount': float(round(vals['revenue'], 2)),
+        }
+        for feeder, vals in by_feeder.items()
+    ]
+    result.sort(key=lambda x: x['total_billed_amount'], reverse=True)
+    return result
+
+
 def get_customer_type_summary(customer_qs, reading_qs):
     """
     MDI vs MDNI headcount and revenue summary.

@@ -63,7 +63,10 @@ SECTION_DISPLAY_NAMES = {
     'recruitment_summary':  'Recruitment Summary',
     # Commercial
     'commercial_overview':   'Commercial Overview',
+    'commercial_coverage':   'Reading Coverage',
+    'commercial_energy':     'Energy Analysis',
     'revenue_by_district':   'Revenue by District',
+    'revenue_by_feeder':     'Revenue by Feeder',
     'customer_type_summary': 'Customer Type Summary',
     # Financial
     'financial_overview': 'Financial Overview',
@@ -511,7 +514,7 @@ tbody td {
 .reliability-kpi-value {
     font-size: 42px;
     font-weight: 700;
-    color: #fcd300;
+    color: #002050;
     line-height: 1;
     margin-bottom: 10px;
 }
@@ -2156,6 +2159,144 @@ def render_commercial_overview(data, context, page_number):
     """
 
 
+def render_commercial_coverage(data, context, page_number):
+    """Render reading coverage detail with estimated revenue at risk."""
+    total    = data.get('total_customers', 0)
+    read     = data.get('customers_read', 0)
+    unread   = data.get('customers_unread', 0)
+    rate     = data.get('coverage_rate', 0.0)
+    billed   = data.get('total_billed_amount', 0.0)
+    est_rev  = data.get('estimated_revenue', 0.0)
+    est_kwh  = data.get('estimated_kwh', 0.0)
+
+    return f"""
+    <div class="page">
+        <div class="page-content">
+            <div class="header">
+                <div class="company-name">{context.get('company_name', '')} | {context.get('report_scope', '')}</div>
+                <div class="date">{context.get('report_date', '')}</div>
+            </div>
+            <h1 class="page-title">Reading Coverage</h1>
+            <div class="reliability-highlight">
+                <h2>Meter Reading Coverage</h2>
+                <p>Customer reading status and estimated revenue at risk from unread meters</p>
+            </div>
+            <div class="reliability-kpi-grid">
+                <div class="reliability-kpi-card">
+                    <div class="reliability-kpi-value">{total:,}</div>
+                    <div class="reliability-kpi-label">Total<br/>Customers</div>
+                </div>
+                <div class="reliability-kpi-card">
+                    <div class="reliability-kpi-value">{read:,}</div>
+                    <div class="reliability-kpi-label">Customers<br/>Read</div>
+                </div>
+                <div class="reliability-kpi-card">
+                    <div class="reliability-kpi-value">{unread:,}</div>
+                    <div class="reliability-kpi-label">Customers<br/>Unread</div>
+                </div>
+                <div class="reliability-kpi-card">
+                    <div class="reliability-kpi-value">{rate}%</div>
+                    <div class="reliability-kpi-label">Coverage<br/>Rate</div>
+                </div>
+                <div class="reliability-kpi-card">
+                    <div class="reliability-kpi-value">₦{billed:,.0f}</div>
+                    <div class="reliability-kpi-label">Actual Billed<br/>Revenue</div>
+                </div>
+                <div class="reliability-kpi-card">
+                    <div class="reliability-kpi-value">₦{est_rev:,.0f}</div>
+                    <div class="reliability-kpi-label">Estimated Revenue<br/>at Risk</div>
+                </div>
+                <div class="reliability-kpi-card">
+                    <div class="reliability-kpi-value">{est_kwh:,.0f}</div>
+                    <div class="reliability-kpi-label">Estimated Unbilled<br/>(kWh)</div>
+                </div>
+            </div>
+        </div>
+        <div class="footer">
+            <img src="{context.get('footer_logo_url', '')}" alt="Powered by EMRC" />
+            <div class="page-number">{page_number}</div>
+        </div>
+    </div>
+    """
+
+
+def render_commercial_energy(data, context, page_number):
+    """Render energy analysis: delivered vs consumed vs billed + AT&C."""
+    delivered   = data.get('energy_delivered_mwh', 0.0)
+    mode        = data.get('energy_delivered_mode', '—')
+    consumed    = data.get('energy_consumed_kwh', 0.0)
+    billed_kwh  = data.get('total_billed_kwh', 0.0)
+    efficiency  = data.get('billing_efficiency', 0)
+    atc         = data.get('atc_loss', 0)
+
+    return f"""
+    <div class="page">
+        <div class="page-content">
+            <div class="header">
+                <div class="company-name">{context.get('company_name', '')} | {context.get('report_scope', '')}</div>
+                <div class="date">{context.get('report_date', '')}</div>
+            </div>
+            <h1 class="page-title">Energy Analysis</h1>
+            <div class="reliability-highlight">
+                <h2>Energy Flow &amp; Losses</h2>
+                <p>Energy delivered, consumed, and billed with AT&amp;C loss analysis</p>
+            </div>
+            <div class="reliability-kpi-grid">
+                <div class="reliability-kpi-card">
+                    <div class="reliability-kpi-value">{delivered:,.1f}</div>
+                    <div class="reliability-kpi-label">Energy Delivered<br/>(MWh) [{mode}]</div>
+                </div>
+                <div class="reliability-kpi-card">
+                    <div class="reliability-kpi-value">{consumed:,.0f}</div>
+                    <div class="reliability-kpi-label">Energy Consumed<br/>(kWh)</div>
+                </div>
+                <div class="reliability-kpi-card">
+                    <div class="reliability-kpi-value">{billed_kwh:,.0f}</div>
+                    <div class="reliability-kpi-label">Energy Billed<br/>(kWh)</div>
+                </div>
+                <div class="reliability-kpi-card">
+                    <div class="reliability-kpi-value">{efficiency if efficiency is not None else '—'}{'%' if efficiency is not None else ''}</div>
+                    <div class="reliability-kpi-label">Billing<br/>Efficiency</div>
+                </div>
+                <div class="reliability-kpi-card">
+                    <div class="reliability-kpi-value">{atc if atc is not None else '—'}{'%' if atc is not None else ''}</div>
+                    <div class="reliability-kpi-label">AT&amp;C<br/>Loss</div>
+                </div>
+            </div>
+        </div>
+        <div class="footer">
+            <img src="{context.get('footer_logo_url', '')}" alt="Powered by EMRC" />
+            <div class="page-number">{page_number}</div>
+        </div>
+    </div>
+    """
+
+
+def render_revenue_by_feeder(data, context, page_number):
+    """Render revenue by feeder as a paginated table."""
+    rows_data = data if isinstance(data, list) else []
+
+    header_html = """
+        <thead>
+            <tr>
+                <th>Feeder</th>
+                <th style="text-align:right">Readings</th>
+                <th style="text-align:right">Billed (kWh)</th>
+                <th style="text-align:right">Revenue (₦)</th>
+            </tr>
+        </thead>"""
+
+    rows = [
+        f"<tr><td>{r.get('feeder','—')}</td>"
+        f"<td style='text-align:right'>{r.get('readings',0)}</td>"
+        f"<td style='text-align:right'>{r.get('total_billed_kwh',0):,.0f}</td>"
+        f"<td style='text-align:right'>{r.get('total_billed_amount',0):,.0f}</td></tr>"
+        for r in rows_data
+    ]
+
+    return _paginate_table(rows, header_html, 'Revenue by Feeder', context, page_number)
+
+
 def render_revenue_by_district(data, context, page_number):
     """Render revenue by district as a paginated table."""
     rows_data = data if isinstance(data, list) else []
@@ -2369,7 +2510,10 @@ class PDFGenerator:
         'recruitment_summary':  render_recruitment_summary,
         # Commercial
         'commercial_overview':   render_commercial_overview,
+        'commercial_coverage':   render_commercial_coverage,
+        'commercial_energy':     render_commercial_energy,
         'revenue_by_district':   render_revenue_by_district,
+        'revenue_by_feeder':     render_revenue_by_feeder,
         'customer_type_summary': render_customer_type_summary,
         # Financial
         'financial_overview': render_financial_overview,

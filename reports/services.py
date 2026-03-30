@@ -272,9 +272,30 @@ SECTION_DEFINITIONS = {
         'supports_chart': False,
         'config_options': {},
     },
+    'commercial_coverage': {
+        'display_name': 'Reading Coverage',
+        'description': 'Customers read vs unread with estimated revenue at risk from unread meters',
+        'category': 'commercial',
+        'supports_chart': False,
+        'config_options': {},
+    },
+    'commercial_energy': {
+        'display_name': 'Energy Analysis',
+        'description': 'Energy delivered vs consumed vs billed, with AT&C loss and billing efficiency',
+        'category': 'commercial',
+        'supports_chart': False,
+        'config_options': {},
+    },
     'revenue_by_district': {
         'display_name': 'Revenue by District',
         'description': 'Revenue and consumption breakdown per business district',
+        'category': 'commercial',
+        'supports_chart': True,
+        'config_options': {},
+    },
+    'revenue_by_feeder': {
+        'display_name': 'Revenue by Feeder',
+        'description': 'Revenue and consumption breakdown per feeder',
         'category': 'commercial',
         'supports_chart': True,
         'config_options': {},
@@ -1009,7 +1030,10 @@ class ReportDataService:
     # Section types owned by each sub-service
     _HR_SECTIONS         = {'hr_overview', 'staff_metrics', 'wage_bill_analysis',
                             'department_headcount', 'attrition_analysis', 'recruitment_summary'}
-    _COMMERCIAL_SECTIONS = {'commercial_overview', 'revenue_by_district', 'customer_type_summary'}
+    _COMMERCIAL_SECTIONS = {
+        'commercial_overview', 'commercial_coverage', 'commercial_energy',
+        'revenue_by_district', 'revenue_by_feeder', 'customer_type_summary',
+    }
     _FINANCIAL_SECTIONS  = {'financial_overview', 'opex_by_category', 'opex_by_district'}
 
     def get_all_section_data(self, section_type, config=None):
