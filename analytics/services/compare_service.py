@@ -135,20 +135,23 @@ def resolve_entities(entity_type: str, entity_ids: list) -> list:
     if not Model:
         raise ValueError(f"Unknown entity_type: {entity_type!r}")
 
-    uuid_ids, name_ids = [], []
+    uuid_ids, str_ids = [], []
     for eid in entity_ids:
         try:
             _uuid.UUID(str(eid))
             uuid_ids.append(str(eid))
         except (ValueError, AttributeError):
-            name_ids.append(str(eid))
+            str_ids.append(str(eid))
 
     from django.db.models import Q
     q = Q()
     if uuid_ids:
         q |= Q(id__in=uuid_ids)
-    if name_ids:
-        q |= Q(name__in=name_ids)
+    if str_ids:
+        q |= Q(name__in=str_ids)
+        # Also try slug if the model has one
+        if hasattr(Model, 'slug'):
+            q |= Q(slug__in=str_ids)
 
     if not q:
         return []
@@ -158,10 +161,11 @@ def resolve_entities(entity_type: str, entity_ids: list) -> list:
     # Preserve input order
     by_id   = {str(o.id): o for o in objs}
     by_name = {o.name: o for o in objs}
+    by_slug = {o.slug: o for o in objs if hasattr(o, 'slug')}
     result  = []
     seen    = set()
     for eid in entity_ids:
-        obj = by_id.get(str(eid)) or by_name.get(str(eid))
+        obj = by_id.get(str(eid)) or by_name.get(str(eid)) or by_slug.get(str(eid))
         if obj and str(obj.id) not in seen:
             result.append(obj)
             seen.add(str(obj.id))

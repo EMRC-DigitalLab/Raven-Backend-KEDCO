@@ -1030,10 +1030,7 @@ class ReportDataService:
     # Section types owned by each sub-service
     _HR_SECTIONS         = {'hr_overview', 'staff_metrics', 'wage_bill_analysis',
                             'department_headcount', 'attrition_analysis', 'recruitment_summary'}
-    _COMMERCIAL_SECTIONS = {
-        'commercial_overview', 'commercial_coverage', 'commercial_energy',
-        'revenue_by_district', 'revenue_by_feeder', 'customer_type_summary',
-    }
+    _COMMERCIAL_SECTIONS = {'commercial_overview', 'revenue_by_district', 'customer_type_summary'}
     _FINANCIAL_SECTIONS  = {'financial_overview', 'opex_by_category', 'opex_by_district'}
 
     def get_all_section_data(self, section_type, config=None):
