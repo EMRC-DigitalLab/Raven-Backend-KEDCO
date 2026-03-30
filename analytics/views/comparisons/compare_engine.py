@@ -52,12 +52,15 @@ Metrics from modules the user cannot access are silently moved to
 The frontend should read `metrics_denied` and grey-out / hide those fields.
 """
 
+import logging
 from datetime import datetime
 
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
-from analytics.compare_metrics import METRICS_BY_MODULE, METRICS_REGISTRY
+logger = logging.getLogger(__name__)
+
+from analytics.compare_metrics import METRICS_BY_MODULE
 from analytics.services.compare_service import (
     compare_entities,
     compare_periods,
@@ -176,17 +179,21 @@ def _handle_entities(user, entity_type, metrics, feeder_type, body):
     if granularity not in VALID_GRANULARITIES:
         granularity = 'monthly'
 
-    result = compare_entities(
-        user          = user,
-        entity_type   = entity_type,
-        entity_ids    = entity_ids,
-        metrics       = metrics,
-        from_date     = from_date,
-        to_date       = to_date,
-        feeder_type   = feeder_type,
-        granularity   = granularity,
-        include_trend = bool(include_trend),
-    )
+    try:
+        result = compare_entities(
+            user          = user,
+            entity_type   = entity_type,
+            entity_ids    = entity_ids,
+            metrics       = metrics,
+            from_date     = from_date,
+            to_date       = to_date,
+            feeder_type   = feeder_type,
+            granularity   = granularity,
+            include_trend = bool(include_trend),
+        )
+    except Exception as exc:
+        logger.exception("compare_entities failed: %s", exc)
+        return Response({'error': str(exc)}, status=500)
 
     if 'error' in result:
         return Response(result, status=400)
@@ -206,14 +213,18 @@ def _handle_periods(user, entity_type, metrics, feeder_type, body):
             status=400,
         )
 
-    result = compare_periods(
-        user        = user,
-        entity_type = entity_type,
-        entity_id   = entity_id,
-        metrics     = metrics,
-        periods     = periods,
-        feeder_type = feeder_type,
-    )
+    try:
+        result = compare_periods(
+            user        = user,
+            entity_type = entity_type,
+            entity_id   = entity_id,
+            metrics     = metrics,
+            periods     = periods,
+            feeder_type = feeder_type,
+        )
+    except Exception as exc:
+        logger.exception("compare_periods failed: %s", exc)
+        return Response({'error': str(exc)}, status=500)
 
     if 'error' in result:
         return Response(result, status=400)
