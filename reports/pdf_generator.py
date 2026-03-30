@@ -54,6 +54,21 @@ SECTION_DISPLAY_NAMES = {
     'service_band_summary': 'Service Band Summary',
     'custom_text': 'Notes',
     'gaps_improvements': 'Gaps & Improvement Areas',
+    # HR
+    'hr_overview':          'HR Overview',
+    'staff_metrics':        'Staff Metrics',
+    'wage_bill_analysis':   'Wage Bill Analysis',
+    'department_headcount': 'Department Headcount',
+    'attrition_analysis':   'Attrition Analysis',
+    'recruitment_summary':  'Recruitment Summary',
+    # Commercial
+    'commercial_overview':   'Commercial Overview',
+    'revenue_by_district':   'Revenue by District',
+    'customer_type_summary': 'Customer Type Summary',
+    # Financial
+    'financial_overview': 'Financial Overview',
+    'opex_by_category':   'OPEX by Category',
+    'opex_by_district':   'OPEX by District',
 }
 
 
@@ -1752,6 +1767,577 @@ def render_energy_delivered_chart(data, context, page_number):
 
 
 # =============================================================================
+# HR SECTION RENDERERS
+# =============================================================================
+
+def render_hr_overview(data, context, page_number):
+    """Render HR overview KPI cards."""
+    total        = data.get('total_staff', 0)
+    male         = data.get('male_count', 0)
+    female       = data.get('female_count', 0)
+    depts        = data.get('departments_count', 0)
+    attr_count   = data.get('attrition_count', 0)
+    attr_rate    = data.get('attrition_rate', 0.0)
+    new_hires    = data.get('new_hires', 0)
+
+    return f"""
+    <div class="page">
+        <div class="page-content">
+            <div class="header">
+                <div class="company-name">{context.get('company_name', '')} | {context.get('report_scope', '')}</div>
+                <div class="date">{context.get('report_date', '')}</div>
+            </div>
+            <h1 class="page-title">HR Overview</h1>
+            <div class="reliability-highlight">
+                <h2>Human Resources Summary</h2>
+                <p>Workforce snapshot for the reporting period</p>
+            </div>
+            <div class="reliability-kpi-grid">
+                <div class="reliability-kpi-card">
+                    <div class="reliability-kpi-value">{total}</div>
+                    <div class="reliability-kpi-label">Total Active<br/>Staff</div>
+                </div>
+                <div class="reliability-kpi-card">
+                    <div class="reliability-kpi-value">{male}</div>
+                    <div class="reliability-kpi-label">Male<br/>Employees</div>
+                </div>
+                <div class="reliability-kpi-card">
+                    <div class="reliability-kpi-value">{female}</div>
+                    <div class="reliability-kpi-label">Female<br/>Employees</div>
+                </div>
+                <div class="reliability-kpi-card">
+                    <div class="reliability-kpi-value">{depts}</div>
+                    <div class="reliability-kpi-label">Active<br/>Departments</div>
+                </div>
+                <div class="reliability-kpi-card">
+                    <div class="reliability-kpi-value">{attr_count}</div>
+                    <div class="reliability-kpi-label">Attritions<br/>This Period</div>
+                </div>
+                <div class="reliability-kpi-card">
+                    <div class="reliability-kpi-value">{attr_rate}%</div>
+                    <div class="reliability-kpi-label">Attrition<br/>Rate</div>
+                </div>
+                <div class="reliability-kpi-card">
+                    <div class="reliability-kpi-value">{new_hires}</div>
+                    <div class="reliability-kpi-label">New Hires<br/>This Period</div>
+                </div>
+            </div>
+        </div>
+        <div class="footer">
+            <img src="{context.get('footer_logo_url', '')}" alt="Powered by EMRC" />
+            <div class="page-number">{page_number}</div>
+        </div>
+    </div>
+    """
+
+
+def render_staff_metrics(data, context, page_number):
+    """Render staff metrics: tenure + grade breakdown table."""
+    total        = data.get('total_staff', 0)
+    avg_tenure   = data.get('avg_tenure_years', 0.0)
+    grade_rows   = data.get('grade_breakdown', [])
+
+    row_html = "".join(
+        f"<tr><td>{r.get('grade') or '—'}</td><td style='text-align:right'>{r.get('count', 0)}</td></tr>"
+        for r in grade_rows
+    )
+
+    header_html = """
+        <thead>
+            <tr>
+                <th>Grade</th>
+                <th style="text-align:right">Headcount</th>
+            </tr>
+        </thead>"""
+
+    return f"""
+    <div class="page">
+        <div class="page-content">
+            <div class="header">
+                <div class="company-name">{context.get('company_name', '')} | {context.get('report_scope', '')}</div>
+                <div class="date">{context.get('report_date', '')}</div>
+            </div>
+            <h1 class="page-title">Staff Metrics</h1>
+            <div class="reliability-kpi-grid">
+                <div class="reliability-kpi-card">
+                    <div class="reliability-kpi-value">{total}</div>
+                    <div class="reliability-kpi-label">Total Active Staff</div>
+                </div>
+                <div class="reliability-kpi-card">
+                    <div class="reliability-kpi-value">{avg_tenure} yrs</div>
+                    <div class="reliability-kpi-label">Average Tenure</div>
+                </div>
+            </div>
+            <h2 style="margin:16px 0 8px;font-size:13px;">Grade Breakdown</h2>
+            <div class="table-container">
+                <table>
+                    {header_html}
+                    <tbody>{row_html}</tbody>
+                </table>
+            </div>
+        </div>
+        <div class="footer">
+            <img src="{context.get('footer_logo_url', '')}" alt="Powered by EMRC" />
+            <div class="page-number">{page_number}</div>
+        </div>
+    </div>
+    """
+
+
+def render_wage_bill_analysis(data, context, page_number):
+    """Render wage bill: summary cards + paginated department breakdown."""
+    total_bill   = data.get('total_wage_bill', 0.0)
+    avg_salary   = data.get('avg_salary', 0.0)
+    dept_rows    = data.get('department_breakdown', [])
+
+    header_html = """
+        <thead>
+            <tr>
+                <th>Department</th>
+                <th style="text-align:right">Headcount</th>
+                <th style="text-align:right">Total Wages (₦)</th>
+                <th style="text-align:right">Share (%)</th>
+            </tr>
+        </thead>"""
+
+    rows = [
+        f"<tr><td>{r.get('department','—')}</td>"
+        f"<td style='text-align:right'>{r.get('headcount',0)}</td>"
+        f"<td style='text-align:right'>{r.get('total_wages',0):,.0f}</td>"
+        f"<td style='text-align:right'>{r.get('percentage',0.0)}</td></tr>"
+        for r in dept_rows
+    ]
+
+    # First page — summary cards + first chunk of table
+    summary_html = f"""
+    <div class="page">
+        <div class="page-content">
+            <div class="header">
+                <div class="company-name">{context.get('company_name', '')} | {context.get('report_scope', '')}</div>
+                <div class="date">{context.get('report_date', '')}</div>
+            </div>
+            <h1 class="page-title">Wage Bill Analysis</h1>
+            <div class="reliability-kpi-grid">
+                <div class="reliability-kpi-card">
+                    <div class="reliability-kpi-value">₦{total_bill:,.0f}</div>
+                    <div class="reliability-kpi-label">Total Wage Bill</div>
+                </div>
+                <div class="reliability-kpi-card">
+                    <div class="reliability-kpi-value">₦{avg_salary:,.0f}</div>
+                    <div class="reliability-kpi-label">Average Salary</div>
+                </div>
+            </div>
+        </div>
+        <div class="footer">
+            <img src="{context.get('footer_logo_url', '')}" alt="Powered by EMRC" />
+            <div class="page-number">{page_number}</div>
+        </div>
+    </div>"""
+
+    table_html, table_pages = _paginate_table(
+        rows, header_html, 'Wage Bill by Department', context, page_number + 1
+    )
+
+    return summary_html + table_html, 1 + table_pages
+
+
+def render_department_headcount(data, context, page_number):
+    """Render department headcount as a paginated table."""
+    rows_data = data if isinstance(data, list) else []
+
+    header_html = """
+        <thead>
+            <tr>
+                <th>Department</th>
+                <th style="text-align:right">Headcount</th>
+                <th style="text-align:right">Share (%)</th>
+            </tr>
+        </thead>"""
+
+    rows = [
+        f"<tr><td>{r.get('department','—')}</td>"
+        f"<td style='text-align:right'>{r.get('total',0)}</td>"
+        f"<td style='text-align:right'>{r.get('percentage',0.0)}</td></tr>"
+        for r in rows_data
+    ]
+
+    return _paginate_table(rows, header_html, 'Department Headcount', context, page_number)
+
+
+def render_attrition_analysis(data, context, page_number):
+    """Render attrition summary cards + department breakdown table."""
+    total_exits  = data.get('total_exits', 0)
+    attr_rate    = data.get('attrition_rate', 0.0)
+    dept_rows    = data.get('by_department', [])
+
+    header_html = """
+        <thead>
+            <tr>
+                <th>Department</th>
+                <th style="text-align:right">Exits</th>
+            </tr>
+        </thead>"""
+
+    rows = [
+        f"<tr><td>{r.get('department','—')}</td>"
+        f"<td style='text-align:right'>{r.get('exits',0)}</td></tr>"
+        for r in dept_rows
+    ]
+
+    summary_html = f"""
+    <div class="page">
+        <div class="page-content">
+            <div class="header">
+                <div class="company-name">{context.get('company_name', '')} | {context.get('report_scope', '')}</div>
+                <div class="date">{context.get('report_date', '')}</div>
+            </div>
+            <h1 class="page-title">Attrition Analysis</h1>
+            <div class="reliability-kpi-grid">
+                <div class="reliability-kpi-card">
+                    <div class="reliability-kpi-value">{total_exits}</div>
+                    <div class="reliability-kpi-label">Total Exits<br/>This Period</div>
+                </div>
+                <div class="reliability-kpi-card">
+                    <div class="reliability-kpi-value">{attr_rate}%</div>
+                    <div class="reliability-kpi-label">Attrition<br/>Rate</div>
+                </div>
+            </div>
+        </div>
+        <div class="footer">
+            <img src="{context.get('footer_logo_url', '')}" alt="Powered by EMRC" />
+            <div class="page-number">{page_number}</div>
+        </div>
+    </div>"""
+
+    if rows:
+        table_html, table_pages = _paginate_table(
+            rows, header_html, 'Attrition by Department', context, page_number + 1
+        )
+        return summary_html + table_html, 1 + table_pages
+
+    return summary_html
+
+
+def render_recruitment_summary(data, context, page_number):
+    """Render recruitment summary: new hires by department and grade."""
+    total_hires  = data.get('total_new_hires', 0)
+    dept_rows    = data.get('by_department', [])
+    grade_rows   = data.get('by_grade', [])
+
+    dept_row_html = "".join(
+        f"<tr><td>{r.get('department','—')}</td><td style='text-align:right'>{r.get('count',0)}</td></tr>"
+        for r in dept_rows
+    )
+    grade_row_html = "".join(
+        f"<tr><td>{r.get('grade') or '—'}</td><td style='text-align:right'>{r.get('count',0)}</td></tr>"
+        for r in grade_rows
+    )
+
+    return f"""
+    <div class="page">
+        <div class="page-content">
+            <div class="header">
+                <div class="company-name">{context.get('company_name', '')} | {context.get('report_scope', '')}</div>
+                <div class="date">{context.get('report_date', '')}</div>
+            </div>
+            <h1 class="page-title">Recruitment Summary</h1>
+            <div class="reliability-kpi-grid">
+                <div class="reliability-kpi-card">
+                    <div class="reliability-kpi-value">{total_hires}</div>
+                    <div class="reliability-kpi-label">New Hires<br/>This Period</div>
+                </div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px;">
+                <div>
+                    <h2 style="font-size:13px;margin-bottom:8px;">By Department</h2>
+                    <div class="table-container">
+                        <table>
+                            <thead><tr><th>Department</th><th style="text-align:right">Hires</th></tr></thead>
+                            <tbody>{dept_row_html}</tbody>
+                        </table>
+                    </div>
+                </div>
+                <div>
+                    <h2 style="font-size:13px;margin-bottom:8px;">By Grade</h2>
+                    <div class="table-container">
+                        <table>
+                            <thead><tr><th>Grade</th><th style="text-align:right">Hires</th></tr></thead>
+                            <tbody>{grade_row_html}</tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="footer">
+            <img src="{context.get('footer_logo_url', '')}" alt="Powered by EMRC" />
+            <div class="page-number">{page_number}</div>
+        </div>
+    </div>
+    """
+
+
+# =============================================================================
+# COMMERCIAL SECTION RENDERERS
+# =============================================================================
+
+def render_commercial_overview(data, context, page_number):
+    """Render commercial overview KPI cards."""
+    total_c      = data.get('total_customers', 0)
+    coverage     = data.get('coverage_rate', 0.0)
+    billed_kwh   = data.get('total_billed_kwh', 0.0)
+    billed_amt   = data.get('total_billed_amount', 0.0)
+    arpu         = data.get('arpu', 0.0)
+    atc          = data.get('atc_loss', 0)
+    mdi_rev      = data.get('mdi_revenue', 0.0)
+    mdni_rev     = data.get('mdni_revenue', 0.0)
+    mdi_c        = data.get('mdi_count', 0)
+    mdni_c       = data.get('mdni_count', 0)
+
+    return f"""
+    <div class="page">
+        <div class="page-content">
+            <div class="header">
+                <div class="company-name">{context.get('company_name', '')} | {context.get('report_scope', '')}</div>
+                <div class="date">{context.get('report_date', '')}</div>
+            </div>
+            <h1 class="page-title">Commercial Overview</h1>
+            <div class="reliability-highlight">
+                <h2>Commercial Performance Summary</h2>
+                <p>Billing, coverage, and revenue metrics for the reporting period</p>
+            </div>
+            <div class="reliability-kpi-grid">
+                <div class="reliability-kpi-card">
+                    <div class="reliability-kpi-value">{total_c:,}</div>
+                    <div class="reliability-kpi-label">Total<br/>Customers</div>
+                </div>
+                <div class="reliability-kpi-card">
+                    <div class="reliability-kpi-value">{coverage}%</div>
+                    <div class="reliability-kpi-label">Reading<br/>Coverage</div>
+                </div>
+                <div class="reliability-kpi-card">
+                    <div class="reliability-kpi-value">{billed_kwh:,.0f}</div>
+                    <div class="reliability-kpi-label">Total Billed<br/>(kWh)</div>
+                </div>
+                <div class="reliability-kpi-card">
+                    <div class="reliability-kpi-value">₦{billed_amt:,.0f}</div>
+                    <div class="reliability-kpi-label">Total Billed<br/>Amount</div>
+                </div>
+                <div class="reliability-kpi-card">
+                    <div class="reliability-kpi-value">₦{float(arpu):,.0f}</div>
+                    <div class="reliability-kpi-label">ARPU</div>
+                </div>
+                <div class="reliability-kpi-card">
+                    <div class="reliability-kpi-value">{atc if atc is not None else '—'}{'%' if atc is not None else ''}</div>
+                    <div class="reliability-kpi-label">AT&amp;C<br/>Loss</div>
+                </div>
+            </div>
+            <h2 style="margin:16px 0 8px;font-size:13px;">MDI vs MDNI Split</h2>
+            <div class="table-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Type</th>
+                            <th style="text-align:right">Customers</th>
+                            <th style="text-align:right">Revenue (₦)</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr><td>MDI</td><td style="text-align:right">{mdi_c:,}</td><td style="text-align:right">{mdi_rev:,.0f}</td></tr>
+                        <tr><td>MDNI</td><td style="text-align:right">{mdni_c:,}</td><td style="text-align:right">{mdni_rev:,.0f}</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        <div class="footer">
+            <img src="{context.get('footer_logo_url', '')}" alt="Powered by EMRC" />
+            <div class="page-number">{page_number}</div>
+        </div>
+    </div>
+    """
+
+
+def render_revenue_by_district(data, context, page_number):
+    """Render revenue by district as a paginated table."""
+    rows_data = data if isinstance(data, list) else []
+
+    header_html = """
+        <thead>
+            <tr>
+                <th>District</th>
+                <th style="text-align:right">Billed (kWh)</th>
+                <th style="text-align:right">Revenue (₦)</th>
+            </tr>
+        </thead>"""
+
+    rows = [
+        f"<tr><td>{r.get('district','—')}</td>"
+        f"<td style='text-align:right'>{r.get('total_billed_kwh',0):,.0f}</td>"
+        f"<td style='text-align:right'>{r.get('total_billed_amount',0):,.0f}</td></tr>"
+        for r in rows_data
+    ]
+
+    return _paginate_table(rows, header_html, 'Revenue by District', context, page_number)
+
+
+def render_customer_type_summary(data, context, page_number):
+    """Render MDI vs MDNI summary cards."""
+    mdi  = data.get('mdi', {})
+    mdni = data.get('mdni', {})
+
+    return f"""
+    <div class="page">
+        <div class="page-content">
+            <div class="header">
+                <div class="company-name">{context.get('company_name', '')} | {context.get('report_scope', '')}</div>
+                <div class="date">{context.get('report_date', '')}</div>
+            </div>
+            <h1 class="page-title">Customer Type Summary</h1>
+            <div class="reliability-kpi-grid">
+                <div class="reliability-kpi-card">
+                    <div class="reliability-kpi-value">{mdi.get('count',0):,}</div>
+                    <div class="reliability-kpi-label">MDI<br/>Customers</div>
+                </div>
+                <div class="reliability-kpi-card">
+                    <div class="reliability-kpi-value">{mdi.get('total_billed_kwh',0):,.0f}</div>
+                    <div class="reliability-kpi-label">MDI Billed<br/>(kWh)</div>
+                </div>
+                <div class="reliability-kpi-card">
+                    <div class="reliability-kpi-value">₦{mdi.get('total_billed_amount',0):,.0f}</div>
+                    <div class="reliability-kpi-label">MDI<br/>Revenue</div>
+                </div>
+                <div class="reliability-kpi-card">
+                    <div class="reliability-kpi-value">{mdni.get('count',0):,}</div>
+                    <div class="reliability-kpi-label">MDNI<br/>Customers</div>
+                </div>
+                <div class="reliability-kpi-card">
+                    <div class="reliability-kpi-value">{mdni.get('total_billed_kwh',0):,.0f}</div>
+                    <div class="reliability-kpi-label">MDNI Billed<br/>(kWh)</div>
+                </div>
+                <div class="reliability-kpi-card">
+                    <div class="reliability-kpi-value">₦{mdni.get('total_billed_amount',0):,.0f}</div>
+                    <div class="reliability-kpi-label">MDNI<br/>Revenue</div>
+                </div>
+            </div>
+        </div>
+        <div class="footer">
+            <img src="{context.get('footer_logo_url', '')}" alt="Powered by EMRC" />
+            <div class="page-number">{page_number}</div>
+        </div>
+    </div>
+    """
+
+
+# =============================================================================
+# FINANCIAL SECTION RENDERERS
+# =============================================================================
+
+def render_financial_overview(data, context, page_number):
+    """Render financial overview cost breakdown KPI cards."""
+    opex     = data.get('opex', 0.0)
+    hq_opex  = data.get('hq_opex', 0.0)
+    salaries = data.get('salaries', 0.0)
+    nbet     = data.get('nbet_invoice', 0.0)
+    mo       = data.get('mo_invoice', 0.0)
+    total    = data.get('total_cost', 0.0)
+
+    return f"""
+    <div class="page">
+        <div class="page-content">
+            <div class="header">
+                <div class="company-name">{context.get('company_name', '')} | {context.get('report_scope', '')}</div>
+                <div class="date">{context.get('report_date', '')}</div>
+            </div>
+            <h1 class="page-title">Financial Overview</h1>
+            <div class="reliability-highlight">
+                <h2>Cost Summary</h2>
+                <p>Expenditure breakdown for the reporting period</p>
+            </div>
+            <div class="reliability-kpi-grid">
+                <div class="reliability-kpi-card">
+                    <div class="reliability-kpi-value">₦{opex:,.0f}</div>
+                    <div class="reliability-kpi-label">District<br/>OPEX</div>
+                </div>
+                <div class="reliability-kpi-card">
+                    <div class="reliability-kpi-value">₦{hq_opex:,.0f}</div>
+                    <div class="reliability-kpi-label">HQ<br/>OPEX</div>
+                </div>
+                <div class="reliability-kpi-card">
+                    <div class="reliability-kpi-value">₦{salaries:,.0f}</div>
+                    <div class="reliability-kpi-label">Salaries</div>
+                </div>
+                <div class="reliability-kpi-card">
+                    <div class="reliability-kpi-value">₦{nbet:,.0f}</div>
+                    <div class="reliability-kpi-label">NBET<br/>Invoice</div>
+                </div>
+                <div class="reliability-kpi-card">
+                    <div class="reliability-kpi-value">₦{mo:,.0f}</div>
+                    <div class="reliability-kpi-label">Market Operator<br/>Invoice</div>
+                </div>
+                <div class="reliability-kpi-card">
+                    <div class="reliability-kpi-value">₦{total:,.0f}</div>
+                    <div class="reliability-kpi-label">Total<br/>Cost</div>
+                </div>
+            </div>
+        </div>
+        <div class="footer">
+            <img src="{context.get('footer_logo_url', '')}" alt="Powered by EMRC" />
+            <div class="page-number">{page_number}</div>
+        </div>
+    </div>
+    """
+
+
+def render_opex_by_category(data, context, page_number):
+    """Render OPEX by category as a paginated table."""
+    rows_data = data if isinstance(data, list) else []
+
+    header_html = """
+        <thead>
+            <tr>
+                <th>Category</th>
+                <th style="text-align:right">Transactions</th>
+                <th style="text-align:right">Total (₦)</th>
+                <th style="text-align:right">Share (%)</th>
+            </tr>
+        </thead>"""
+
+    rows = [
+        f"<tr><td>{r.get('category','—')}</td>"
+        f"<td style='text-align:right'>{r.get('count',0)}</td>"
+        f"<td style='text-align:right'>{r.get('total',0):,.0f}</td>"
+        f"<td style='text-align:right'>{r.get('percentage',0.0)}</td></tr>"
+        for r in rows_data
+    ]
+
+    return _paginate_table(rows, header_html, 'OPEX by Category', context, page_number)
+
+
+def render_opex_by_district(data, context, page_number):
+    """Render OPEX by district as a paginated table."""
+    rows_data = data if isinstance(data, list) else []
+
+    header_html = """
+        <thead>
+            <tr>
+                <th>District</th>
+                <th style="text-align:right">Transactions</th>
+                <th style="text-align:right">Total (₦)</th>
+                <th style="text-align:right">Share (%)</th>
+            </tr>
+        </thead>"""
+
+    rows = [
+        f"<tr><td>{r.get('district','—')}</td>"
+        f"<td style='text-align:right'>{r.get('count',0)}</td>"
+        f"<td style='text-align:right'>{r.get('total',0):,.0f}</td>"
+        f"<td style='text-align:right'>{r.get('percentage',0.0)}</td></tr>"
+        for r in rows_data
+    ]
+
+    return _paginate_table(rows, header_html, 'OPEX by District', context, page_number)
+
+
+# =============================================================================
 # MAIN PDF GENERATOR CLASS
 # =============================================================================
 
@@ -1774,6 +2360,21 @@ class PDFGenerator:
         'service_band_summary': render_service_band_summary,
         'custom_text': render_custom_text,
         'gaps_improvements': render_gaps_improvements,
+        # HR
+        'hr_overview':          render_hr_overview,
+        'staff_metrics':        render_staff_metrics,
+        'wage_bill_analysis':   render_wage_bill_analysis,
+        'department_headcount': render_department_headcount,
+        'attrition_analysis':   render_attrition_analysis,
+        'recruitment_summary':  render_recruitment_summary,
+        # Commercial
+        'commercial_overview':   render_commercial_overview,
+        'revenue_by_district':   render_revenue_by_district,
+        'customer_type_summary': render_customer_type_summary,
+        # Financial
+        'financial_overview': render_financial_overview,
+        'opex_by_category':   render_opex_by_category,
+        'opex_by_district':   render_opex_by_district,
     }
 
     def __init__(self, report_config, data_service):
