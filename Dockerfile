@@ -46,18 +46,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=builder /wheels /wheels
 RUN pip install --no-cache /wheels/* && rm -rf /wheels
 
-# Download Playwright's Chromium browser binary + its OS dependencies
-RUN python -m playwright install chromium && \
-    python -m playwright install-deps chromium
-
 # Copy application source
 COPY . .
 
 # Create non-root user
 RUN adduser --disabled-password --gecos '' appuser \
     && mkdir -p /app/staticfiles \
-    && chown -R appuser:appuser /app \
-    && chown -R appuser:appuser /root/.cache/ms-playwright
+    && chown -R appuser:appuser /app
+
+# Download Playwright's Chromium browser binary + its OS dependencies
+# Run as appuser so the cache lands in /home/appuser/.cache/ms-playwright
+USER appuser
+RUN python -m playwright install chromium
+USER root
+RUN python -m playwright install-deps chromium
+RUN chown -R appuser:appuser /home/appuser/.cache/ms-playwright
 
 COPY scripts/docker-entrypoint.sh /docker-entrypoint.sh
 RUN sed -i 's/\r//' /docker-entrypoint.sh && chmod +x /docker-entrypoint.sh
