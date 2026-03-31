@@ -199,7 +199,7 @@ def on_feeder_interruption(sender, instance, created, **kwargs):
         roles=['super_admin', 'admin', 'manager'],
         priority='high',
         action_url='/technical/interruptions',
-        metadata={'interruption_id': instance.pk},
+        metadata={'interruption_id': str(instance.pk)},
     )
 
 
