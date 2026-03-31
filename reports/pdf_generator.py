@@ -226,7 +226,7 @@ body {
 .stat-item .value {
     font-size: 34px;
     font-weight: 700;
-    color: #fcd300;
+    color: #002050;
 }
 
 /* ── Content Box ─────────────────────────────────────────────────────────── */
@@ -415,7 +415,7 @@ tbody td {
 .metric-value {
     font-size: 30px;
     font-weight: 700;
-    color: #fcd300;
+    color: #002050;
     margin-bottom: 4px;
     line-height: 1;
 }
@@ -2478,6 +2478,42 @@ def render_opex_by_district(data, context, page_number):
     return _paginate_table(rows, header_html, 'OPEX by District', context, page_number)
 
 
+def render_back_page(context):
+    """Render the always-last branded back/closing page."""
+    company_name = context.get('company_name', 'KANO ELECTRICITY DISTRIBUTION COMPANY')
+    report_date  = context.get('report_date', '')
+    return f"""
+    <div class="cover-page" style="justify-content: center; align-items: center; text-align: center;">
+        <div class="cover-left-accent"></div>
+        <div class="cover-body" style="justify-content: center; align-items: center;">
+
+            <div class="cover-logo-wrap" style="margin-bottom: 40px;">
+                <img src="{context.get('logo_gray_url', '')}" alt="Company Logo" />
+            </div>
+
+            <div style="margin-bottom: 32px;">
+                <div class="cover-eyebrow" style="text-align:center; margin-bottom: 20px;">End of Report</div>
+                <h2 style="font-size:36px; font-weight:800; color:#ffffff; text-transform:uppercase;
+                            letter-spacing:-0.5px; margin:0 0 8px 0; line-height:1.1;">
+                    {company_name}
+                </h2>
+                <div class="cover-accent-rule" style="margin: 24px auto;"></div>
+                <div style="font-size:13px; color:#ffffff; opacity:0.55; letter-spacing:1.5px;
+                             text-transform:uppercase; font-weight:600;">
+                    {report_date}
+                </div>
+            </div>
+
+            <div style="font-size:11px; color:#ffffff; opacity:0.35; text-transform:uppercase;
+                         letter-spacing:2px; margin-top: 60px;">
+                Powered by RAVEN &mdash; Performance Monitoring Tool
+            </div>
+
+        </div>
+    </div>
+    """
+
+
 # =============================================================================
 # MAIN PDF GENERATOR CLASS
 # =============================================================================
@@ -2572,16 +2608,43 @@ class PDFGenerator:
         }
 
     def _format_report_date(self):
-        """Format the report date for display"""
-        from_date = self.data_service.from_date
-        to_date = self.data_service.to_date
+        """Format the report period label for the cover page.
 
+        Rules (in order):
+          single day          → "31 October 2025"
+          full calendar month → "October 2025"
+          7 days (1 week)     → "Week 12, 2025"
+          multi-week range    → "Week 12 – Week 15, 2025"
+          any other range     → "01 Jan 2025 – 31 Mar 2025"
+        """
+        import calendar as _cal
+        from_date = self.data_service.from_date
+        to_date   = self.data_service.to_date
+        days      = (to_date - from_date).days + 1
+
+        # Single day
         if from_date == to_date:
             return from_date.strftime('%d %B %Y')
-        elif from_date.month == to_date.month and from_date.year == to_date.year:
+
+        # Full calendar month
+        last_day = _cal.monthrange(from_date.year, from_date.month)[1]
+        if (from_date.day == 1
+                and from_date.month == to_date.month
+                and from_date.year == to_date.year
+                and to_date.day == last_day):
             return from_date.strftime('%B %Y')
-        else:
-            return f"{from_date.strftime('%d %b %Y')} \u2013 {to_date.strftime('%d %b %Y')}"
+
+        # Week(s)
+        if days <= 49:  # up to 7 weeks — show week numbers
+            w_start = from_date.isocalendar()[1]
+            w_end   = to_date.isocalendar()[1]
+            year    = from_date.year
+            if w_start == w_end:
+                return f"Week {w_start}, {year}"
+            return f"Week {w_start} \u2013 Week {w_end}, {year}"
+
+        # Long range
+        return f"{from_date.strftime('%d %b %Y')} \u2013 {to_date.strftime('%d %b %Y')}"
 
     def _get_static_url(self, path):
         """Return image as a base64 data URI so it renders in both HTML preview
@@ -2687,7 +2750,8 @@ class PDFGenerator:
 
         # --- Pass 2: render TOC with accurate page numbers, then assemble ---
         toc_html, _ = render_table_of_contents(toc_entries, self.context, toc_page_number)
-        sections_html = cover_html + toc_html + content_html
+        back_html   = render_back_page(self.context)
+        sections_html = cover_html + toc_html + content_html + back_html
 
         # Build full HTML — always landscape throughout
         orientation_css = LANDSCAPE_STYLES

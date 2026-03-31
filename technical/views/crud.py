@@ -389,6 +389,9 @@ class FeederInterruptionViewSet(viewsets.ModelViewSet):
         logger = logging.getLogger(__name__)
         try:
             serializer = self.get_serializer(data=request.data)
+            # Strip unique_together validators — duplicates are handled by get_or_create below
+            from rest_framework.validators import UniqueTogetherValidator
+            serializer.validators = [v for v in serializer.validators if not isinstance(v, UniqueTogetherValidator)]
             serializer.is_valid(raise_exception=True)
 
             feeder = serializer.validated_data['feeder']
