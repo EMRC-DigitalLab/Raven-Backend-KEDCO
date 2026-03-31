@@ -1125,43 +1125,43 @@ def render_technical_metrics(data, context, page_number, config=None):
     metric_definitions = {
         'hours_of_supply': {
             'label': 'HOURS OF<br/>SUPPLY',
-            'value': f"{data.get('hours_of_supply', 0)} Hrs",
+            'value': f"{data.get('hours_of_supply', 0):,.2f} Hrs",
             'subtitle': 'Average per Feeder per Day',
             'description': 'Average hours of supply per feeder per day',
         },
         'average_load': {
             'label': 'AVERAGE<br/>LOAD',
-            'value': f"{data.get('average_load', 0)} MW",
+            'value': f"{data.get('average_load', 0):,.2f} MW",
             'subtitle': 'Average',
             'description': 'Average load across all monitored feeders',
         },
         'peak_load': {
             'label': 'PEAK<br/>LOAD',
-            'value': f"{data.get('peak_load', 0)} MW",
+            'value': f"{data.get('peak_load', 0):,.2f} MW",
             'subtitle': 'Maximum',
             'description': 'Maximum load recorded during the period',
         },
         'energy_delivered': {
             'label': 'ENERGY<br/>DELIVERED',
-            'value': f"{data.get('energy_delivered', 0)} MWh",
+            'value': f"{data.get('energy_delivered', 0):,.2f} MWh",
             'subtitle': 'Total (Meter + System estimate)',
             'description': 'Total energy delivered through monitored feeders',
         },
         'daily_average_consumption': {
             'label': 'DAILY AVG<br/>CONSUMPTION',
-            'value': f"{data.get('daily_average_consumption', 0)} MWh",
+            'value': f"{data.get('daily_average_consumption', 0):,.2f} MWh",
             'subtitle': 'Average per Day',
             'description': 'Average daily energy consumption across the period',
         },
         'total_interruptions': {
             'label': 'TOTAL<br/>INTERRUPTIONS',
-            'value': f"{data.get('total_interruptions', 0)} Times",
+            'value': f"{data.get('total_interruptions', 0):,} Times",
             'subtitle': 'Count',
             'description': 'Total number of feeder interruptions in the period',
         },
         'load_shedding_count': {
             'label': 'LOAD SHEDDING<br/>COUNT',
-            'value': f"{data.get('load_shedding_count', 0)} Times",
+            'value': f"{data.get('load_shedding_count', 0):,} Times",
             'subtitle': 'Count',
             'description': 'Interruptions classified as load shedding (L/S)',
         },
@@ -1336,12 +1336,12 @@ def render_feeder_performance_table(data, context, page_number):
         <tr>
             <td>{feeder['name']}</td>
             <td>{feeder['band']}</td>
-            <td style="text-align:right;">{feeder['hours_of_supply']} hrs</td>
-            <td style="text-align:right;">{feeder['availability_percentage']}%</td>
-            <td style="text-align:right;">{feeder['duration_hours']} hrs</td>
-            <td style="text-align:right;">{feeder['peak_load']} MW</td>
+            <td style="text-align:right;">{float(feeder['hours_of_supply']):,.2f} hrs</td>
+            <td style="text-align:right;">{float(feeder['availability_percentage']):,.1f}%</td>
+            <td style="text-align:right;">{float(feeder['duration_hours']):,.2f} hrs</td>
+            <td style="text-align:right;">{float(feeder['peak_load']):,.2f} MW</td>
             <td style="text-align:right; white-space:nowrap;">
-                <span style="color:{dot_color}; font-size:10px;">&#9679;</span> {feeder['energy_delivered']} MWh
+                <span style="color:{dot_color}; font-size:10px;">&#9679;</span> {float(feeder['energy_delivered']):,.2f} MWh
             </td>
         </tr>""")
 
@@ -1432,11 +1432,11 @@ def render_state_performance_table(data, context, page_number):
         rows_html += f"""
         <tr>
             <td>{state['state_name']}</td>
-            <td style="text-align:right;">{state['feeder_count']}</td>
-            <td style="text-align:right;">{state['hours_of_supply']} hrs</td>
-            <td style="text-align:right;">{state['availability_percentage']}%</td>
-            <td style="text-align:right;">{state['interruptions']}</td>
-            <td style="text-align:right;">{state['peak_load']} MW</td>
+            <td style="text-align:right;">{state['feeder_count']:,}</td>
+            <td style="text-align:right;">{float(state['hours_of_supply']):,.2f} hrs</td>
+            <td style="text-align:right;">{float(state['availability_percentage']):,.1f}%</td>
+            <td style="text-align:right;">{state['interruptions']:,}</td>
+            <td style="text-align:right;">{float(state['peak_load']):,.2f} MW</td>
         </tr>
         """
 
@@ -1493,11 +1493,11 @@ def render_district_performance_table(data, context, page_number):
         <tr>
             <td>{district['district_name']}</td>
             <td>{district['state_name']}</td>
-            <td style="text-align:right;">{district['feeder_count']}</td>
-            <td style="text-align:right;">{district['hours_of_supply']} hrs</td>
-            <td style="text-align:right;">{district['availability_percentage']}%</td>
-            <td style="text-align:right;">{district['interruptions']}</td>
-            <td style="text-align:right;">{district['peak_load']} MW</td>
+            <td style="text-align:right;">{district['feeder_count']:,}</td>
+            <td style="text-align:right;">{float(district['hours_of_supply']):,.2f} hrs</td>
+            <td style="text-align:right;">{float(district['availability_percentage']):,.1f}%</td>
+            <td style="text-align:right;">{district['interruptions']:,}</td>
+            <td style="text-align:right;">{float(district['peak_load']):,.2f} MW</td>
         </tr>
         """
 
