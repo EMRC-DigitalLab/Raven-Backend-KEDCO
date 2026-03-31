@@ -296,6 +296,7 @@ thead th {
     text-transform: uppercase;
     letter-spacing: 0.5px;
     white-space: nowrap;
+    color: #ffffff;
 }
 
 tbody tr {
