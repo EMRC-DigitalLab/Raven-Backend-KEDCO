@@ -385,25 +385,31 @@ class FeederInterruptionViewSet(viewsets.ModelViewSet):
     permission_classes = [AllowAny]
 
     def create(self, request, *args, **kwargs):
-        serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
+        import logging, traceback
+        logger = logging.getLogger(__name__)
+        try:
+            serializer = self.get_serializer(data=request.data)
+            serializer.is_valid(raise_exception=True)
 
-        feeder = serializer.validated_data['feeder']
-        occurred_at = serializer.validated_data['occurred_at']
-        interruption_type = serializer.validated_data.get('interruption_type', '')
+            feeder = serializer.validated_data['feeder']
+            occurred_at = serializer.validated_data['occurred_at']
+            interruption_type = serializer.validated_data.get('interruption_type', '')
 
-        interruption, created = FeederInterruption.objects.get_or_create(
-            feeder=feeder,
-            occurred_at=occurred_at,
-            interruption_type=interruption_type,
-            defaults={
-                'description': serializer.validated_data.get('description', ''),
-                'restored_at': serializer.validated_data.get('restored_at'),
-            }
-        )
+            interruption, created = FeederInterruption.objects.get_or_create(
+                feeder=feeder,
+                occurred_at=occurred_at,
+                interruption_type=interruption_type,
+                defaults={
+                    'description': serializer.validated_data.get('description', ''),
+                    'restored_at': serializer.validated_data.get('restored_at'),
+                }
+            )
 
-        out = self.get_serializer(interruption)
-        return Response(out.data, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
+            out = self.get_serializer(interruption)
+            return Response(out.data, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
+        except Exception as e:
+            logger.error(f"FeederInterruption create error: {e}\nData: {request.data}\n{traceback.format_exc()}")
+            raise
 
     def get_queryset(self):
         feeders = get_filtered_feeders(self.request)
