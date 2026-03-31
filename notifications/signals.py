@@ -187,7 +187,7 @@ def on_salary_payment_created(_sender, instance, created, **kwargs):
 # ══════════════════════════════════════════════════════════════════════════════
 
 @receiver(post_save, sender='technical.FeederInterruption')
-def on_feeder_interruption(_sender, instance, created, **kwargs):
+def on_feeder_interruption(sender, instance, created, **kwargs):
     if not created:
         return
     feeder_name = getattr(instance, 'feeder', None)
