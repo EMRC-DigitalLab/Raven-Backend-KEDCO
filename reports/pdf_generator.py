@@ -414,11 +414,13 @@ tbody td {
 }
 
 .metric-value {
-    font-size: 30px;
+    font-size: 24px;
     font-weight: 700;
     color: #002050;
     margin-bottom: 4px;
-    line-height: 1;
+    line-height: 1.1;
+    word-break: break-word;
+    overflow-wrap: break-word;
 }
 
 .metric-subtitle {
