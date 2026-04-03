@@ -163,31 +163,58 @@ def calc_coverage(customers_qs, readings_qs):
 def calc_estimated_billing(customers_qs, read_ids, date_range):
     """
     For unread customers: estimate their energy and revenue for the period
-    using their last known daily average (last_billed_consumption ÷ 7 × period_days).
+    using their last known daily average:
+      daily_kwh = last_billed_consumption / reading_interval_days
+      estimate  = daily_kwh * period_days
+
+    reading_interval_days is derived from the gap between the customer's last
+    two positive readings. If only one reading exists, falls back to the number
+    of days in that reading's month (e.g. 31 for January, 28 for February).
 
     Returns:
-      estimated_kwh      — estimated energy that should have been billed (mode: estimated)
-      estimated_revenue  — estimated revenue at risk including VAT (mode: estimated)
+      estimated_kwh           — estimated energy (mode: estimated)
+      estimated_revenue       — estimated revenue incl VAT (mode: estimated)
       estimated_energy_charge — estimated energy charge excl VAT
     """
+    from calendar import monthrange
+    from collections import defaultdict
+
     days       = date_range['days']
     unread_ids = list(customers_qs.exclude(id__in=read_ids).values_list('id', flat=True))
 
-    last_readings = (
+    # Fetch the last 2 positive readings per customer to calculate interval
+    all_readings = list(
         MeterReading.objects
-        .filter(customer_id__in=unread_ids, billed_consumption__isnull=False, tariff_rate__isnull=False)
+        .filter(customer_id__in=unread_ids, billed_consumption__gt=0, tariff_rate__isnull=False)
         .order_by('customer_id', '-reading_date')
-        .distinct('customer_id')
-        .values('customer_id', 'billed_consumption', 'tariff_rate')
+        .values('customer_id', 'billed_consumption', 'tariff_rate', 'reading_date')
     )
+
+    # Group by customer, keep only the latest 2 per customer
+    by_customer = defaultdict(list)
+    for r in all_readings:
+        if len(by_customer[r['customer_id']]) < 2:
+            by_customer[r['customer_id']].append(r)
 
     est_kwh           = Decimal('0')
     est_energy_charge = Decimal('0')
     est_revenue       = Decimal('0')
 
-    for r in last_readings:
-        daily_kwh      = Decimal(str(r['billed_consumption'])) / 7
-        daily_charge   = daily_kwh * Decimal(str(r['tariff_rate']))
+    for readings in by_customer.values():
+        latest = readings[0]
+        bc     = Decimal(str(latest['billed_consumption']))
+        rate   = Decimal(str(latest['tariff_rate']))
+
+        if len(readings) == 2:
+            interval = (readings[0]['reading_date'] - readings[1]['reading_date']).days
+        else:
+            _, interval = monthrange(latest['reading_date'].year, latest['reading_date'].month)
+
+        if interval <= 0:
+            interval = 30
+
+        daily_kwh      = bc / interval
+        daily_charge   = daily_kwh * rate
         daily_total    = daily_charge * (1 + VAT_RATE)
         est_kwh           += daily_kwh * days
         est_energy_charge += daily_charge * days

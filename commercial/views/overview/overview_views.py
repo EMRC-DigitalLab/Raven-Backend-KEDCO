@@ -269,19 +269,33 @@ def commercial_overview(request):
             'actual_total_billed': metric(
                 float(billing['total_billed_amount']),
                 unit='NGN',
-                explanation='Total amount billed from real readings including VAT.',
+                explanation=(
+                    'Revenue confirmed from customers who were physically read this period. '
+                    'Calculated as: billed consumption (kWh) x tariff rate per customer, plus 7.5% VAT. '
+                    'This is hard fact — sourced directly from DataNest meter readings.'
+                ),
             ),
             'estimated_revenue': metric(
                 float(estimated['estimated_revenue']),
                 unit='NGN',
                 mode='estimated',
-                explanation='Estimated revenue at risk — unread customers x last known daily billed amount (inc. VAT) x days in period.',
+                explanation=(
+                    'Revenue estimated for customers who were NOT read this period. '
+                    'For each unread customer, we take their last known billing amount, divide by the number of days '
+                    'that reading covered to get a daily rate, then multiply by the days in this period. '
+                    'Billing correction entries (negative consumption) are excluded. '
+                    'This figure shrinks as more customers get read.'
+                ),
             ),
             'total_projected_revenue': metric(
                 float(billing['total_billed_amount'] + estimated['estimated_revenue']),
                 unit='NGN',
                 mode='estimated',
-                explanation='Actual billed + estimated for unread customers. Total KEDCO should be collecting if all customers were read.',
+                explanation=(
+                    'The full revenue picture: actual billed (from read customers) + estimated (for unread customers). '
+                    'This is what KEDCO should expect to collect if every registered customer were read and billed this period. '
+                    'As reading coverage improves, the actual portion grows and the estimated portion shrinks.'
+                ),
             ),
             'mdi_revenue_split': metric(
                 mdi_split,
