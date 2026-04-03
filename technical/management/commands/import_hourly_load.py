@@ -131,11 +131,14 @@ class Command(BaseCommand):
             
             # Build query
             query = """
-                SELECT 
+                SELECT
                     feeder_id,
                     Date,
                     Hour_d,
-                    LoadS
+                    LoadS,
+                    submission_type,
+                    is_late,
+                    original_submit_time
                 FROM Technicalhourlydata
                 WHERE 1=1
             """
@@ -170,10 +173,13 @@ class Command(BaseCommand):
             for row in cursor:
                 stats['total_records'] += 1
                 
-                feeder_slug_val = row['feeder_id']
-                date = row['Date']
-                hour = row['Hour_d']
-                load_value = row['LoadS']
+                feeder_slug_val   = row['feeder_id']
+                date              = row['Date']
+                hour              = row['Hour_d']
+                load_value        = row['LoadS']
+                submission_type   = row.get('submission_type') or 'dso'
+                is_late           = bool(row.get('is_late', 0))
+                original_submit_time = row.get('original_submit_time')  # datetime or None
                 
                 # Get feeder from pre-loaded map (already filtered for onboarded)
                 feeder = feeder_map.get(feeder_slug_val)
@@ -225,10 +231,17 @@ class Command(BaseCommand):
                         date=date,
                         hour=hour
                     ).first()
-                    
-                    if existing and existing.load_mw != load_mw:
-                        # Value changed - update it
-                        existing.load_mw = load_mw
+
+                    if existing and (
+                        existing.load_mw != load_mw
+                        or existing.is_late != is_late
+                        or existing.submission_type != submission_type
+                        or existing.original_submit_time != original_submit_time
+                    ):
+                        existing.load_mw             = load_mw
+                        existing.is_late             = is_late
+                        existing.submission_type     = submission_type
+                        existing.original_submit_time = original_submit_time
                         loads_to_update.append(existing)
                     else:
                         stats['loads_skipped'] += 1
@@ -239,7 +252,10 @@ class Command(BaseCommand):
                             feeder=feeder,
                             date=date,
                             hour=hour,
-                            load_mw=load_mw
+                            load_mw=load_mw,
+                            is_late=is_late,
+                            submission_type=submission_type,
+                            original_submit_time=original_submit_time,
                         )
                     )
                     # Add to existing set to prevent duplicates within same batch
@@ -359,7 +375,7 @@ class Command(BaseCommand):
     def _bulk_update_loads(self, loads, stats):
         """Bulk update load records"""
         try:
-            HourlyLoad.objects.bulk_update(loads, ['load_mw'], batch_size=1000)
+            HourlyLoad.objects.bulk_update(loads, ['load_mw', 'is_late', 'submission_type', 'original_submit_time'], batch_size=1000)
             stats['loads_updated'] += len(loads)
             self.stdout.write(f"Updated {len(loads):,} load records")
         except Exception as e:

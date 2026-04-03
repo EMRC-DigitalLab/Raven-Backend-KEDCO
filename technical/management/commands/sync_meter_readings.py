@@ -81,13 +81,17 @@ class Command(BaseCommand):
 
             # Build query
             query = """
-                SELECT 
+                SELECT
                     energy_id,
                     Feeder_id,
                     Date,
                     Energy_Reading,
                     User_id,
-                    Submitted_at
+                    Submitted_at,
+                    submission_type,
+                    is_late,
+                    original_submit_time,
+                    is_suspicious
                 FROM techicalenergyreadingdailydta
                 WHERE 1=1
             """
@@ -126,7 +130,7 @@ class Command(BaseCommand):
             # Process records in batches
             batch = []
             for idx, row in enumerate(rows, 1):
-                energy_id, feeder_id, date, energy_reading, user_id, submitted_at = row
+                energy_id, feeder_id, date, energy_reading, user_id, submitted_at, submission_type, is_late, original_submit_time, is_suspicious = row
 
                 try:
                     # Validate and convert data
@@ -192,6 +196,10 @@ class Command(BaseCommand):
                         'reading_time': reading_time,
                         'is_estimated': False,
                         'notes': f'Synced from external DB (energy_id: {energy_id}, user_id: {user_id})',
+                        'is_late': bool(is_late),
+                        'submission_type': submission_type or 'dso',
+                        'original_submit_time': original_submit_time,
+                        'is_suspicious': bool(is_suspicious),
                     }
 
                     batch.append(reading_data)

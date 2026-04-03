@@ -14,6 +14,13 @@ from .views.executive_kpis.performance_views import (
     update_kpi_performance,
 )
 from .views.executive_kpis.role_views import cco_kpis, cfo_kpis, chro_kpis, cto_kpis
+from .views.dso_compliance.views import (
+    dso_compliance_bands,
+    dso_compliance_districts,
+    dso_compliance_feeders,
+    dso_compliance_overview,
+    dso_compliance_states,
+)
 from .views.overview.overview_views import StaffSummaryView
 
 router = DefaultRouter()
@@ -42,4 +49,11 @@ urlpatterns = [
     path('executive-kpis/performance/bulk-update/', bulk_update_performance, name='bulk-update-kpi-performance'),
     path('executive-kpis/performance/<uuid:kpi_id>/history/', kpi_performance_history, name='kpi-performance-history'),
     path('executive-kpis/performance/<uuid:performance_id>/delete/', delete_kpi_performance, name='delete-kpi-performance'),
+
+    # DSO Submission Compliance
+    path('dso-compliance/overview/',   dso_compliance_overview,   name='dso-compliance-overview'),
+    path('dso-compliance/states/',     dso_compliance_states,     name='dso-compliance-states'),
+    path('dso-compliance/districts/',  dso_compliance_districts,  name='dso-compliance-districts'),
+    path('dso-compliance/feeders/',    dso_compliance_feeders,    name='dso-compliance-feeders'),
+    path('dso-compliance/bands/',      dso_compliance_bands,      name='dso-compliance-bands'),
 ]
