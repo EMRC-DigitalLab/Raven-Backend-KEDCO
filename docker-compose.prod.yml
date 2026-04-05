@@ -29,11 +29,11 @@ services:
       - prod_net
     restart: always
     healthcheck:
-      test: ["CMD-SHELL", "curl -s -o /dev/null http://localhost:8000/api/auth/token/"]
+      test: ["CMD-SHELL", "curl -sf --max-time 5 http://localhost:8000/admin/ -o /dev/null -w '%{http_code}' | grep -qE '^(200|301|302)$'"]
       interval: 30s
       timeout: 10s
-      retries: 3
-      start_period: 40s
+      retries: 5
+      start_period: 90s
 
   # ── Celery: general worker (notifications + analytics) ─────────────────────
   celery-worker:

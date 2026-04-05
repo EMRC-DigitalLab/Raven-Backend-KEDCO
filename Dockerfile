@@ -40,6 +40,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libffi8 \
     shared-mime-info \
     fonts-liberation \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Install pre-built wheels from builder stage
