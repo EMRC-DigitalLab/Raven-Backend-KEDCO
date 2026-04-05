@@ -7,6 +7,7 @@ from django.utils.html import format_html
 
 from .models import (
     CumulativeMeterReading,
+    DataSyncLog,
     DailyHoursOfSupply,
     EnergyDelivered,
     FaultTypeCategory,
@@ -948,3 +949,48 @@ class FaultTypeCategoryAdmin(admin.ModelAdmin):
             obj.get_category_display(),
         )
     category_badge.short_description = 'Category'
+
+
+@admin.register(DataSyncLog)
+class DataSyncLogAdmin(admin.ModelAdmin):
+    """
+    Monitor every DataNest → Raven sync run.
+
+    The error_message column surfaces unrecognised fault codes so you can
+    add them to FaultTypeCategory and they'll be normalised on the next run.
+    """
+    list_display = [
+        'data_type', 'status_badge', 'started_at', 'completed_at',
+        'records_fetched', 'records_created', 'records_updated',
+        'records_skipped', 'records_errored',
+    ]
+    list_filter = ['data_type', 'status']
+    readonly_fields = [
+        'data_type', 'status', 'started_at', 'completed_at',
+        'window_start', 'window_end',
+        'records_fetched', 'records_created', 'records_updated',
+        'records_skipped', 'records_errored', 'error_message',
+    ]
+    ordering = ['-started_at']
+    list_per_page = 50
+
+    def has_add_permission(self, _request):
+        return False
+
+    def has_change_permission(self, _request, _obj=None):
+        return False
+
+    def status_badge(self, obj):
+        colors = {
+            'success': '#22c55e',
+            'partial': '#f59e0b',
+            'error':   '#ef4444',
+            'running': '#3b82f6',
+        }
+        color = colors.get(obj.status, '#6b7280')
+        return format_html(
+            '<span style="background:{};color:#fff;padding:2px 10px;border-radius:4px;font-weight:bold">{}</span>',
+            color,
+            obj.status.upper(),
+        )
+    status_badge.short_description = 'Status'
