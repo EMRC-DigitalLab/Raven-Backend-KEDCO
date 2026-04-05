@@ -1,8 +1,11 @@
 version: "3.9"
 
 # ── Staging environment ───────────────────────────────────────────────────────
-#   nginx → host:8094  (system nginx proxies here for staging subdomain)
-#   raven → internal only (port 8000 inside the network)
+#   nginx          → host:8094  (system nginx proxies here for staging subdomain)
+#   raven          → internal only (port 8000 inside the network)
+#   celery-worker  → handles notifications + analytics queues
+#   celery-sync    → handles datanest_sync queue (DataNest → Raven data pull)
+#   celery-beat    → fires all scheduled tasks (every 15 min sync, daily checks)
 #   Keycloak: uses shared instance at http://31.97.56.29:8083/realms/KEDCO
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -12,6 +15,7 @@ networks:
 
 volumes:
   static_staging:
+  celerybeat_staging:    # persists beat schedule file across container restarts
 
 services:
 
@@ -30,6 +34,53 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
+
+  # ── Celery: general worker (notifications + analytics) ─────────────────────
+  celery-worker:
+    image: ghcr.io/${GITHUB_REPOSITORY}/raven:staging
+    container_name: celery_worker_staging
+    env_file: .env
+    entrypoint: ["celery", "-A", "raven", "worker",
+                 "-Q", "default,notifications,analytics",
+                 "--concurrency=2", "-l", "info"]
+    networks:
+      - staging_net
+    restart: unless-stopped
+    depends_on:
+      raven:
+        condition: service_healthy
+
+  # ── Celery: DataNest sync worker (datanest_sync queue) ────────────────────
+  celery-sync:
+    image: ghcr.io/${GITHUB_REPOSITORY}/raven:staging
+    container_name: celery_sync_staging
+    env_file: .env
+    entrypoint: ["celery", "-A", "raven", "worker",
+                 "-Q", "datanest_sync",
+                 "--concurrency=2", "-l", "info"]
+    networks:
+      - staging_net
+    restart: unless-stopped
+    depends_on:
+      raven:
+        condition: service_healthy
+
+  # ── Celery Beat: task scheduler ───────────────────────────────────────────
+  celery-beat:
+    image: ghcr.io/${GITHUB_REPOSITORY}/raven:staging
+    container_name: celery_beat_staging
+    env_file: .env
+    entrypoint: ["celery", "-A", "raven", "beat",
+                 "-l", "info",
+                 "--schedule", "/celerybeat/celerybeat-schedule"]
+    volumes:
+      - celerybeat_staging:/celerybeat
+    networks:
+      - staging_net
+    restart: unless-stopped
+    depends_on:
+      raven:
+        condition: service_healthy
 
   nginx:
     image: nginx:1.25-alpine

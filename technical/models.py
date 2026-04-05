@@ -560,3 +560,73 @@ class FaultTypeCategory(models.Model):
 
     def __str__(self):
         return f"{self.code} → {self.get_category_display()}"
+
+
+class DataSyncLog(models.Model):
+    """
+    Tracks every DataNest → Raven sync run for a given data type.
+
+    The `watermark` field records the upper bound of the last successful
+    sync window.  The next run starts from (watermark − look_back_hours)
+    to catch late submissions, while staying incremental for performance.
+    """
+
+    DATA_TYPE_CHOICES = [
+        # Technical
+        ('technical_hourly_load',    'Technical — Hourly Load'),
+        ('technical_meter_readings', 'Technical — Meter Readings'),
+        ('technical_interruptions',  'Technical — Interruptions'),
+        # Future modules slot in here
+        # ('commercial_billing',    'Commercial — Billing'),
+        # ('hr_staff',              'HR — Staff'),
+    ]
+
+    STATUS_CHOICES = [
+        ('running', 'Running'),
+        ('success', 'Success'),
+        ('partial', 'Partial'),   # completed but with some errors
+        ('error',   'Error'),
+    ]
+
+    data_type = models.CharField(max_length=60, choices=DATA_TYPE_CHOICES, db_index=True)
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='running')
+
+    started_at = models.DateTimeField(auto_now_add=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    # Incremental window: this run covered [window_start, window_end]
+    window_start = models.DateTimeField(null=True, blank=True)
+    window_end = models.DateTimeField(null=True, blank=True)
+
+    records_fetched = models.PositiveIntegerField(default=0)
+    records_created = models.PositiveIntegerField(default=0)
+    records_updated = models.PositiveIntegerField(default=0)
+    records_skipped = models.PositiveIntegerField(default=0)
+    records_errored = models.PositiveIntegerField(default=0)
+
+    error_message = models.TextField(blank=True)
+
+    class Meta:
+        verbose_name = 'Data Sync Log'
+        verbose_name_plural = 'Data Sync Logs'
+        ordering = ['-started_at']
+        indexes = [
+            models.Index(fields=['data_type', '-started_at']),
+        ]
+
+    def __str__(self):
+        return f"{self.get_data_type_display()} | {self.status} | {self.started_at:%Y-%m-%d %H:%M}"
+
+    @classmethod
+    def get_last_watermark(cls, data_type):
+        """
+        Return the window_end of the most recent successful run for this
+        data_type, or None if no successful run exists yet.
+        """
+        last = (
+            cls.objects
+            .filter(data_type=data_type, status__in=['success', 'partial'])
+            .order_by('-started_at')
+            .first()
+        )
+        return last.window_end if last else None
