@@ -1,14 +1,13 @@
 """
 technical/sync/hourly_load.py
 
-Incremental sync: DataNest `Technicalhourlydata` → Raven `HourlyLoad`.
+Full CRUD incremental sync: DataNest `Technicalhourlydata` → Raven `HourlyLoad`.
 
-Rules agreed with the team:
-  - Non-numeric LoadS values (fault codes) are stored as load_mw = 0.
-  - Runs every 15 minutes via Celery Beat.
-  - Each run covers [watermark - 24 h, now] to catch late DSO submissions.
-  - Uses Django's `connections['external']` (MySQL) — no hardcoded credentials.
-  - Streams rows in server-side chunks to handle large volumes without OOM.
+Rules:
+  - Non-numeric LoadS values (fault codes) → load_mw = 0
+  - Every 5 minutes via Celery Beat
+  - Window = [watermark - look_back, now]
+  - DELETE: Raven records in the window that no longer exist in DataNest are removed
 """
 
 from datetime import datetime
@@ -20,15 +19,11 @@ from common.models import Feeder
 from technical.models import HourlyLoad
 from technical.sync.base import get_sync_window
 
-# MySQL chunk size — rows fetched per round-trip
 MYSQL_CHUNK = 50_000
-
-# Django bulk_create / bulk_update batch size
 BULK_BATCH = 10_000
 
 
 def _to_decimal_or_zero(value) -> Decimal:
-    """Return the numeric value as Decimal, or Decimal(0) for fault codes."""
     if value is None or value == '':
         return Decimal('0')
     try:
@@ -38,11 +33,6 @@ def _to_decimal_or_zero(value) -> Decimal:
 
 
 def run_sync() -> dict:
-    """
-    Perform one incremental sync of hourly load data.
-
-    Returns a stats dict consumed by the Celery task to write the DataSyncLog.
-    """
     window_start, window_end, _ = get_sync_window('technical_hourly_load')
     start_date = window_start.date()
     end_date = window_end.date()
@@ -54,20 +44,18 @@ def run_sync() -> dict:
         'records_created': 0,
         'records_updated': 0,
         'records_skipped': 0,
+        'records_deleted': 0,
         'records_errored': 0,
         'errors': [],
     }
 
-    # Pre-load onboarded feeders (slug → Feeder)
     feeder_map = {f.slug: f for f in Feeder.objects.filter(is_onboarded=True)}
     if not feeder_map:
         stats['errors'].append('No onboarded feeders found — skipping sync.')
         return stats
 
-    # Load existing (feeder_id, date, hour) keys for the window to drive
-    # create-vs-update decisions without per-row DB hits.
     feeder_ids = [f.id for f in feeder_map.values()]
-    existing = {}  # (feeder_id, date, hour) → HourlyLoad pk
+    existing = {}
     for hl in HourlyLoad.objects.filter(
         feeder_id__in=feeder_ids,
         date__gte=start_date,
@@ -76,13 +64,12 @@ def run_sync() -> dict:
         existing[(hl['feeder_id'], hl['date'], hl['hour'])] = hl
 
     to_create = []
-    to_update = []   # list of (HourlyLoad instance to update, changed fields)
-    seen_keys = set()
+    to_update = []
+    seen_keys = set()   # all keys seen in DataNest this run (for delete pass)
 
     conn = connections['external']
 
     with conn.cursor() as cursor:
-        # Stream in chunks ordered by feeder + date + hour
         offset = 0
         while True:
             cursor.execute(
@@ -110,7 +97,7 @@ def run_sync() -> dict:
                     continue
 
                 if not isinstance(date, datetime) and hasattr(date, 'year'):
-                    pass  # already a date
+                    pass
                 hour = int(hour) if hour is not None else 0
                 if hour < 0 or hour > 23:
                     stats['records_skipped'] += 1
@@ -128,7 +115,6 @@ def run_sync() -> dict:
 
                 existing_row = existing.get(key)
                 if existing_row:
-                    # Only queue update when something actually changed
                     if (
                         existing_row['load_mw'] != load_mw
                         or existing_row['is_late'] != is_late
@@ -159,23 +145,35 @@ def run_sync() -> dict:
                         original_submit_time=orig_submit,
                     ))
 
-                # Flush creates
                 if len(to_create) >= BULK_BATCH:
                     _flush_create(to_create, stats)
                     to_create = []
 
-                # Flush updates
                 if len(to_update) >= BULK_BATCH:
                     _flush_update(to_update, stats)
                     to_update = []
 
             offset += len(rows)
 
-    # Final flush
     if to_create:
         _flush_create(to_create, stats)
     if to_update:
         _flush_update(to_update, stats)
+
+    # ── DELETE pass ───────────────────────────────────────────────────────────
+    # Any Raven record in the window whose key was NOT seen in DataNest
+    # no longer exists upstream — delete it.
+    stale_ids = [
+        row['id']
+        for key, row in existing.items()
+        if key not in seen_keys
+    ]
+    if stale_ids:
+        try:
+            deleted, _ = HourlyLoad.objects.filter(id__in=stale_ids).delete()
+            stats['records_deleted'] = deleted
+        except Exception as exc:
+            stats['errors'].append(f'delete error: {exc}')
 
     return stats
 

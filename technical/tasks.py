@@ -48,6 +48,7 @@ def _run_sync(data_type: str, sync_fn):
         log.records_created = stats.get('records_created', 0)
         log.records_updated = stats.get('records_updated', 0)
         log.records_skipped = stats.get('records_skipped', 0)
+        log.records_deleted = stats.get('records_deleted', 0)
         log.records_errored = stats.get('records_errored', 0)
         log.error_message = '\n'.join(stats.get('errors', []))
         log.save()

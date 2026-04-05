@@ -36,6 +36,7 @@ def run_sync() -> dict:
         'records_created': 0,
         'records_updated': 0,
         'records_skipped': 0,
+        'records_deleted': 0,
         'records_errored': 0,
         'errors': [],
     }
@@ -48,8 +49,9 @@ def run_sync() -> dict:
     # Build normaliser once — loads FaultTypeCategory from DB once per run
     normaliser = FaultNormalizer()
 
-    _pass1_new_faults(stats, feeder_map, window_start, window_end, normaliser)
+    datanest_keys = _pass1_new_faults(stats, feeder_map, window_start, window_end, normaliser)
     _pass2_resolve_open(stats, feeder_map, normaliser)
+    _pass3_delete_stale(stats, window_start, window_end, datanest_keys)
 
     # Log any unrecognised fault codes so they can be reviewed in admin
     if normaliser.unrecognised:
@@ -65,9 +67,12 @@ def run_sync() -> dict:
 # Pass 1: new faults
 # ──────────────────────────────────────────────────────────────────────────────
 
-def _pass1_new_faults(stats, feeder_map, window_start, window_end, normaliser):
-    """Fetch DataNest faults in the window and create missing Raven records."""
-
+def _pass1_new_faults(stats, feeder_map, window_start, window_end, normaliser) -> set:
+    """
+    Fetch DataNest faults in the window, create missing Raven records.
+    Returns the set of (feeder_id, occurred_at, interruption_type) keys
+    seen in DataNest — used by _pass3 to detect stale Raven records.
+    """
     existing_keys = set(
         FeederInterruption.objects
         .filter(occurred_at__gte=window_start)
@@ -144,6 +149,8 @@ def _pass1_new_faults(stats, feeder_map, window_start, window_end, normaliser):
     if to_create:
         _flush_create(to_create, stats)
 
+    return seen
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Pass 2: resolve open faults
@@ -214,6 +221,35 @@ def _pass2_resolve_open(stats, _, normaliser):
         except Exception as exc:
             stats['records_errored'] += len(to_update)
             stats['errors'].append(f'bulk_update (resolve) error: {exc}')
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Pass 3: delete stale faults
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _pass3_delete_stale(stats, window_start, window_end, datanest_keys: set):
+    """
+    Delete Raven interruptions in the window whose
+    (feeder_id, occurred_at, interruption_type) key was NOT seen in DataNest.
+    These records were removed upstream and should be removed from Raven too.
+    """
+    raven_in_window = FeederInterruption.objects.filter(
+        occurred_at__gte=window_start,
+        occurred_at__lte=window_end,
+    ).values('id', 'feeder_id', 'occurred_at', 'interruption_type')
+
+    stale_ids = []
+    for row in raven_in_window:
+        key = (row['feeder_id'], row['occurred_at'], row['interruption_type'])
+        if key not in datanest_keys:
+            stale_ids.append(row['id'])
+
+    if stale_ids:
+        try:
+            deleted, _ = FeederInterruption.objects.filter(id__in=stale_ids).delete()
+            stats['records_deleted'] = deleted
+        except Exception as exc:
+            stats['errors'].append(f'delete (stale) error: {exc}')
 
 
 # ──────────────────────────────────────────────────────────────────────────────

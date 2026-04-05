@@ -35,6 +35,7 @@ def run_sync() -> dict:
         'records_created': 0,
         'records_updated': 0,
         'records_skipped': 0,
+        'records_deleted': 0,
         'records_errored': 0,
         'errors': [],
     }
@@ -170,42 +171,43 @@ def run_sync() -> dict:
     if to_update:
         _flush_update(to_update, stats)
 
+    # ── DELETE pass ───────────────────────────────────────────────────────────
+    stale_ids = [row['id'] for key, row in existing.items() if key not in seen_keys]
+    if stale_ids:
+        try:
+            deleted, _ = CumulativeMeterReading.objects.filter(id__in=stale_ids).delete()
+            stats['records_deleted'] = deleted
+        except Exception as exc:
+            stats['errors'].append(f'delete error: {exc}')
+
     return stats
 
 
 def _flush_create(batch: list, stats: dict):
-    try:
-        # Use individual saves so the model's auto EnergyDelivered calculation fires
-        created = 0
-        errored = 0
-        for obj in batch:
-            try:
-                obj.save()
-                created += 1
-            except Exception as exc:
-                errored += 1
-                stats['errors'].append(f'save error ({obj.feeder_id}/{obj.reading_date}): {exc}')
-        stats['records_created'] += created
-        stats['records_errored'] += errored
-    except Exception as exc:
-        stats['records_errored'] += len(batch)
-        stats['errors'].append(f'create batch error: {exc}')
+    created = 0
+    errored = 0
+    for obj in batch:
+        try:
+            obj.save(force_insert=True)
+            created += 1
+        except Exception as exc:
+            errored += 1
+            stats['errors'].append(f'save error ({obj.feeder_id}/{obj.reading_date}): {exc}')
+    stats['records_created'] += created
+    stats['records_errored'] += errored
 
 
 def _flush_update(batch: list, stats: dict):
-    try:
-        # Also use individual saves so EnergyDelivered recalculation fires
-        updated = 0
-        errored = 0
-        for obj in batch:
-            try:
-                obj.save()
-                updated += 1
-            except Exception as exc:
-                errored += 1
-                stats['errors'].append(f'update error ({obj.feeder_id}/{obj.reading_date}): {exc}')
-        stats['records_updated'] += updated
-        stats['records_errored'] += errored
-    except Exception as exc:
-        stats['records_errored'] += len(batch)
-        stats['errors'].append(f'update batch error: {exc}')
+    updated = 0
+    errored = 0
+    for obj in batch:
+        try:
+            # force_update=True ensures Django issues UPDATE not INSERT
+            # even when the instance was constructed manually with an existing pk
+            obj.save(force_update=True)
+            updated += 1
+        except Exception as exc:
+            errored += 1
+            stats['errors'].append(f'update error ({obj.feeder_id}/{obj.reading_date}): {exc}')
+    stats['records_updated'] += updated
+    stats['records_errored'] += errored

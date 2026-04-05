@@ -602,6 +602,7 @@ class DataSyncLog(models.Model):
     records_created = models.PositiveIntegerField(default=0)
     records_updated = models.PositiveIntegerField(default=0)
     records_skipped = models.PositiveIntegerField(default=0)
+    records_deleted = models.PositiveIntegerField(default=0)
     records_errored = models.PositiveIntegerField(default=0)
 
     error_message = models.TextField(blank=True)
