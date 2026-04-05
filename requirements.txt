@@ -28,6 +28,7 @@ iniconfig==2.1.0
 jsonschema==4.23.0
 jsonschema-specifications==2024.10.1
 kombu==5.5.4
+redis==5.2.1
 lxml==6.0.2
 mysql-connector-python==9.5.0
 numpy==2.3.4

@@ -10,10 +10,8 @@ Two passes per run:
             has restored_at=NULL, check DataNest to see if it has now been
             resolved and update accordingly.
 
-This is the most time-sensitive sync (runs every 15 min) so operators can
-see new faults and restorations as quickly as possible.
-
-Uses Django's `connections['external']` — no hardcoded credentials.
+Fault types are normalised via FaultNormalizer (5-step resolution, never N/A).
+Unrecognised codes are stored raw and logged so admin can review & map them.
 """
 
 from django.db import connections
@@ -22,6 +20,7 @@ from django.utils.timezone import make_aware, is_naive
 from common.models import Feeder
 from technical.models import FeederInterruption
 from technical.sync.base import get_sync_window
+from technical.sync.fault_normalizer import FaultNormalizer
 
 MYSQL_CHUNK = 50_000
 BULK_BATCH = 10_000
@@ -46,8 +45,18 @@ def run_sync() -> dict:
         stats['errors'].append('No feeders found — skipping.')
         return stats
 
-    _pass1_new_faults(stats, feeder_map, window_start, window_end)
-    _pass2_resolve_open(stats, feeder_map)
+    # Build normaliser once — loads FaultTypeCategory from DB once per run
+    normaliser = FaultNormalizer()
+
+    _pass1_new_faults(stats, feeder_map, window_start, window_end, normaliser)
+    _pass2_resolve_open(stats, feeder_map, normaliser)
+
+    # Log any unrecognised fault codes so they can be reviewed in admin
+    if normaliser.unrecognised:
+        stats['errors'].append(
+            f'Unrecognised fault codes stored raw (add to FaultTypeCategory): '
+            f'{", ".join(sorted(normaliser.unrecognised))}'
+        )
 
     return stats
 
@@ -56,10 +65,9 @@ def run_sync() -> dict:
 # Pass 1: new faults
 # ──────────────────────────────────────────────────────────────────────────────
 
-def _pass1_new_faults(stats, feeder_map, window_start, window_end):
+def _pass1_new_faults(stats, feeder_map, window_start, window_end, normaliser):
     """Fetch DataNest faults in the window and create missing Raven records."""
 
-    # Pre-load existing interruptions in the window for O(1) dedup
     existing_keys = set(
         FeederInterruption.objects
         .filter(occurred_at__gte=window_start)
@@ -102,7 +110,7 @@ def _pass1_new_faults(stats, feeder_map, window_start, window_end):
                     stats['records_skipped'] += 1
                     continue
 
-                fault_type = (fault_type or '').strip() or 'N/A'
+                fault_type = normaliser.normalise(fault_type)
                 occurred_at = _aware(occurred_at)
                 restored_at = _aware(restored_at) if restored_at else None
 
@@ -112,7 +120,6 @@ def _pass1_new_faults(stats, feeder_map, window_start, window_end):
 
                 key = (feeder.id, occurred_at, fault_type)
                 if key in seen or key in existing_keys:
-                    # Still update restored_at if it was previously NULL
                     if key in existing_keys and restored_at:
                         _update_restoration(feeder.id, occurred_at, fault_type, restored_at, stats)
                     else:
@@ -142,10 +149,10 @@ def _pass1_new_faults(stats, feeder_map, window_start, window_end):
 # Pass 2: resolve open faults
 # ──────────────────────────────────────────────────────────────────────────────
 
-def _pass2_resolve_open(stats, feeder_map):
+def _pass2_resolve_open(stats, _, normaliser):
     """
-    For every Raven interruption that is still open (restored_at=NULL),
-    check DataNest to see if it has been resolved, and update if so.
+    For every Raven interruption still open (restored_at=NULL),
+    check DataNest and update if now resolved.
     """
     open_interruptions = list(
         FeederInterruption.objects
@@ -156,18 +163,15 @@ def _pass2_resolve_open(stats, feeder_map):
     if not open_interruptions:
         return
 
-    # Build slug→list of open interruptions
     slug_to_open = {}
     for intr in open_interruptions:
-        slug = intr.feeder.slug
-        slug_to_open.setdefault(slug, []).append(intr)
+        slug_to_open.setdefault(intr.feeder.slug, []).append(intr)
 
     feeder_slugs = list(slug_to_open.keys())
     to_update = []
 
     conn = connections['external']
     with conn.cursor() as cursor:
-        # Batch the feeder slugs to avoid overly large IN clauses
         SLUG_CHUNK = 200
         for i in range(0, len(feeder_slugs), SLUG_CHUNK):
             batch_slugs = feeder_slugs[i:i + SLUG_CHUNK]
@@ -184,7 +188,7 @@ def _pass2_resolve_open(stats, feeder_map):
             for feeder_slug, occurred_at, fault_type, restored_at in cursor.fetchall():
                 occurred_at = _aware(occurred_at)
                 restored_at = _aware(restored_at)
-                fault_type = (fault_type or '').strip() or 'N/A'
+                fault_type = normaliser.normalise(fault_type)
 
                 if not occurred_at or not restored_at:
                     continue

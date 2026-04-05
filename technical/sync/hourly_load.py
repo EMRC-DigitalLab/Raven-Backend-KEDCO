@@ -11,6 +11,7 @@ Rules agreed with the team:
   - Streams rows in server-side chunks to handle large volumes without OOM.
 """
 
+from datetime import datetime
 from decimal import Decimal, InvalidOperation
 
 from django.db import connections

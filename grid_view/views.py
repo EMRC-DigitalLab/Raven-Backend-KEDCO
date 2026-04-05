@@ -1,7 +1,6 @@
 # grid_view/views.py
 from math import ceil
 from datetime import date, datetime
-from uuid import UUID
 
 from django.db.models import Count, Sum
 from rest_framework.permissions import IsAuthenticated
@@ -40,6 +39,18 @@ def _parse_month(month_str):
             pass
     today = date.today()
     return date(today.year, today.month, 1)
+
+
+def _parse_uuid(value):
+    """Return value unchanged if it looks like a valid UUID, else None."""
+    if not value:
+        return None
+    try:
+        from uuid import UUID as _UUID
+        _UUID(str(value))
+        return value
+    except (ValueError, AttributeError):
+        return None
 
 
 def _build_columns(sections):
@@ -90,6 +101,9 @@ def _fetch_technical(month_date, feeder_ids):
     qs = MonthlyTechnicalSummary.objects.filter(
         month=month_date,
         feeder_id__in=feeder_ids,
+        feeder__isnull=False,
+        state__isnull=True,
+        business_district__isnull=True,
     ).only(
         'feeder_id', 'total_energy_delivered', 'avg_hours_of_supply',
         'avg_peak_load', 'total_interruptions', 'avg_interruption_duration',
@@ -119,11 +133,10 @@ def _fetch_commercial(month_date, feeder_ids):
         for r in CommercialCustomer.objects
             .filter(feeder_id__in=feeder_ids)
             .values('feeder')
-            .annotate(cnt=__import__('django.db.models', fromlist=['Count']).Count('id'))
+            .annotate(cnt=Count('id'))
     }
 
     # Meter readings aggregated per feeder for the given month
-    from django.db.models import Count, Sum
     reading_map = {}
     for r in (
         MeterReading.objects
@@ -253,8 +266,8 @@ class GridViewAPIView(APIView):
             group_by = 'feeder'
 
         month_date  = _parse_month(request.query_params.get('month'))
-        state_id    = request.query_params.get('state_id')
-        district_id = request.query_params.get('district_id')
+        state_id    = _parse_uuid(request.query_params.get('state_id'))
+        district_id = _parse_uuid(request.query_params.get('district_id'))
 
         try:
             page      = max(1, int(request.query_params.get('page', 1)))

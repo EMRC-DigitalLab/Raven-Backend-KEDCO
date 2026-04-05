@@ -184,11 +184,11 @@ jobs:
           E_VISUALIZATION_API_URL: ${{ secrets.VISUALIZATION_API_URL }}
           E_GUNICORN_WORKERS: ${{ secrets.GUNICORN_WORKERS }}
           E_GUNICORN_TIMEOUT: ${{ secrets.GUNICORN_TIMEOUT }}
-          E_STAGING_EX_DB_NAME: ${{ secrets.STAGING_EX_DB_NAME }}
-          E_STAGING_EX_DB_USER: ${{ secrets.STAGING_EX_DB_USER }}
-          E_STAGING_EX_DB_PASSWORD: ${{ secrets.STAGING_EX_DB_PASSWORD }}
-          E_STAGING_EX_DB_HOST: ${{ secrets.STAGING_EX_DB_HOST }}
-          E_STAGING_EX_DB_PORT: ${{ secrets.STAGING_EX_DB_PORT }}
+          E_STAGING_EX_DB_NAME: ${{ secrets.PRODUCTION_EX_DB_NAME }}
+          E_STAGING_EX_DB_USER: ${{ secrets.PRODUCTION_EX_DB_USER }}
+          E_STAGING_EX_DB_PASSWORD: ${{ secrets.PRODUCTION_EX_DB_PASSWORD }}
+          E_STAGING_EX_DB_HOST: ${{ secrets.PRODUCTION_EX_DB_HOST }}
+          E_STAGING_EX_DB_PORT: ${{ secrets.PRODUCTION_EX_DB_PORT }}
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
@@ -221,7 +221,7 @@ jobs:
               echo "PRODUCTION_DB_PORT=${E_PRODUCTION_DB_PORT}"
               echo "STAGING_EX_DB_NAME=${E_STAGING_EX_DB_NAME}"
               echo "STAGING_EX_DB_USER=${E_STAGING_EX_DB_USER}"
-              echo "STAGING_EX_DB_PASSWORD=${E_STAGING_EX_DB_PASSWORD}"
+              echo "STAGING_EX_DB_PASSWORD='${E_STAGING_EX_DB_PASSWORD}'"
               echo "STAGING_EX_DB_HOST=${E_STAGING_EX_DB_HOST}"
               echo "STAGING_EX_DB_PORT=${E_STAGING_EX_DB_PORT}"
               echo "KEYCLOAK_REALM_URL=${E_KEYCLOAK_REALM_URL}"
@@ -317,7 +317,7 @@ jobs:
               echo "PRODUCTION_DB_PORT=${E_PRODUCTION_DB_PORT}"
               echo "PRODUCTION_EX_DB_NAME=${E_PRODUCTION_EX_DB_NAME}"
               echo "PRODUCTION_EX_DB_USER=${E_PRODUCTION_EX_DB_USER}"
-              echo "PRODUCTION_EX_DB_PASSWORD=${E_PRODUCTION_EX_DB_PASSWORD}"
+              echo "PRODUCTION_EX_DB_PASSWORD='${E_PRODUCTION_EX_DB_PASSWORD}'"
               echo "PRODUCTION_EX_DB_HOST=${E_PRODUCTION_EX_DB_HOST}"
               echo "PRODUCTION_EX_DB_PORT=${E_PRODUCTION_EX_DB_PORT}"
               echo "KEYCLOAK_REALM_URL=${E_KEYCLOAK_REALM_URL}"
