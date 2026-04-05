@@ -16,18 +16,38 @@ networks:
 volumes:
   static_staging:
   celerybeat_staging:    # persists beat schedule file across container restarts
+  redis_staging:
 
 services:
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis_staging
+    volumes:
+      - redis_staging:/data
+    networks:
+      - staging_net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   raven:
     image: ghcr.io/${GITHUB_REPOSITORY}/raven:staging
     container_name: raven_staging
     env_file: .env
+    environment:
+      - REDIS_URL=redis://redis:6379/2
     volumes:
       - static_staging:/app/staticfiles
     networks:
       - staging_net
     restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "curl -sf --max-time 5 http://localhost:8000/admin/ -o /dev/null -w '%{http_code}' | grep -qE '^(200|301|302)$'"]
       interval: 30s
@@ -40,6 +60,8 @@ services:
     image: ghcr.io/${GITHUB_REPOSITORY}/raven:staging
     container_name: celery_worker_staging
     env_file: .env
+    environment:
+      - REDIS_URL=redis://redis:6379/2
     entrypoint: ["celery", "-A", "raven", "worker",
                  "-Q", "default,notifications,analytics",
                  "--concurrency=2", "-l", "info"]
@@ -47,6 +69,8 @@ services:
       - staging_net
     restart: unless-stopped
     depends_on:
+      redis:
+        condition: service_healthy
       raven:
         condition: service_healthy
 
@@ -55,6 +79,8 @@ services:
     image: ghcr.io/${GITHUB_REPOSITORY}/raven:staging
     container_name: celery_sync_staging
     env_file: .env
+    environment:
+      - REDIS_URL=redis://redis:6379/2
     entrypoint: ["celery", "-A", "raven", "worker",
                  "-Q", "datanest_sync",
                  "--concurrency=2", "-l", "info"]
@@ -62,6 +88,8 @@ services:
       - staging_net
     restart: unless-stopped
     depends_on:
+      redis:
+        condition: service_healthy
       raven:
         condition: service_healthy
 
@@ -70,6 +98,8 @@ services:
     image: ghcr.io/${GITHUB_REPOSITORY}/raven:staging
     container_name: celery_beat_staging
     env_file: .env
+    environment:
+      - REDIS_URL=redis://redis:6379/2
     entrypoint: ["celery", "-A", "raven", "beat",
                  "-l", "info",
                  "--schedule", "/celerybeat/celerybeat-schedule"]
@@ -79,6 +109,8 @@ services:
       - staging_net
     restart: unless-stopped
     depends_on:
+      redis:
+        condition: service_healthy
       raven:
         condition: service_healthy
 
