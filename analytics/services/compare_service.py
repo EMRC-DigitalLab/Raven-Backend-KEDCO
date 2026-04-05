@@ -23,7 +23,7 @@ from datetime import date, datetime, timedelta
 from dateutil.relativedelta import relativedelta
 from django.db import connection
 from django.db.models import (
-    Count, ExpressionWrapper, F, Max, Sum,
+    ExpressionWrapper, F, Sum,
     DecimalField as DField,
 )
 from django.utils import timezone
@@ -125,13 +125,51 @@ def generate_time_buckets(from_date: date, to_date: date, granularity: str):
 # ─── Entity resolution ─────────────────────────────────────────────────────────
 
 def resolve_entities(entity_type: str, entity_ids: list) -> list:
-    """Resolve UUID strings to model objects, preserving input order."""
+    """
+    Resolve entity identifiers to model objects, preserving input order.
+    Accepts UUIDs or name strings — whichever the caller provides.
+    """
+    import uuid as _uuid
+
     Model = ENTITY_MODELS.get(entity_type)
     if not Model:
         raise ValueError(f"Unknown entity_type: {entity_type!r}")
 
-    obj_map = {str(o.id): o for o in Model.objects.filter(id__in=entity_ids)}
-    return [obj_map[str(eid)] for eid in entity_ids if str(eid) in obj_map]
+    uuid_ids, str_ids = [], []
+    for eid in entity_ids:
+        try:
+            _uuid.UUID(str(eid))
+            uuid_ids.append(str(eid))
+        except (ValueError, AttributeError):
+            str_ids.append(str(eid))
+
+    from django.db.models import Q
+    q = Q()
+    if uuid_ids:
+        q |= Q(id__in=uuid_ids)
+    if str_ids:
+        q |= Q(name__in=str_ids)
+        # Also try slug if the model has one
+        if hasattr(Model, 'slug'):
+            q |= Q(slug__in=str_ids)
+
+    if not q:
+        return []
+
+    objs = list(Model.objects.filter(q))
+
+    # Preserve input order
+    by_id   = {str(o.id): o for o in objs}
+    by_name = {o.name: o for o in objs}
+    by_slug = {o.slug: o for o in objs if hasattr(o, 'slug')}
+    result  = []
+    seen    = set()
+    for eid in entity_ids:
+        obj = by_id.get(str(eid)) or by_name.get(str(eid)) or by_slug.get(str(eid))
+        if obj and str(obj.id) not in seen:
+            result.append(obj)
+            seen.add(str(obj.id))
+    return result
 
 
 def entity_name(entity_type: str, entity) -> str:

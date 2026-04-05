@@ -40,6 +40,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libffi8 \
     shared-mime-info \
     fonts-liberation \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Install pre-built wheels from builder stage
@@ -53,6 +54,14 @@ COPY . .
 RUN adduser --disabled-password --gecos '' appuser \
     && mkdir -p /app/staticfiles \
     && chown -R appuser:appuser /app
+
+# Download Playwright's Chromium browser binary + its OS dependencies
+# Run as appuser so the cache lands in /home/appuser/.cache/ms-playwright
+USER appuser
+RUN python -m playwright install chromium
+USER root
+RUN python -m playwright install-deps chromium
+RUN chown -R appuser:appuser /home/appuser/.cache/ms-playwright
 
 COPY scripts/docker-entrypoint.sh /docker-entrypoint.sh
 RUN sed -i 's/\r//' /docker-entrypoint.sh && chmod +x /docker-entrypoint.sh

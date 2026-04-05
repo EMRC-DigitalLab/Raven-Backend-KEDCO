@@ -199,22 +199,42 @@ def bulk_estimated_billing(customers_qs, coverage_by_dim, date_range, feeder_to_
         if dim_id is not None:
             customer_dim[c['id']] = dim_id
 
-    # Last reading per unread customer (0 JOINs — customer_id is direct FK)
-    last_readings = (
+    # Fetch last 2 positive readings per unread customer to calculate interval
+    from calendar import monthrange
+    from collections import defaultdict as _defaultdict
+
+    all_readings = list(
         MeterReading.objects
-        .filter(customer_id__in=unread_ids, billed_consumption__isnull=False, tariff_rate__isnull=False)
+        .filter(customer_id__in=unread_ids, billed_consumption__gt=0, tariff_rate__isnull=False)
         .order_by('customer_id', '-reading_date')
-        .distinct('customer_id')
-        .values('customer_id', 'billed_consumption', 'tariff_rate')
+        .values('customer_id', 'billed_consumption', 'tariff_rate', 'reading_date')
     )
 
+    by_customer = _defaultdict(list)
+    for r in all_readings:
+        if len(by_customer[r['customer_id']]) < 2:
+            by_customer[r['customer_id']].append(r)
+
     result = {}
-    for r in last_readings:
-        dim_id = customer_dim.get(r['customer_id'])
+    for cid, readings in by_customer.items():
+        dim_id = customer_dim.get(cid)
         if dim_id is None:
             continue
-        daily_kwh    = Decimal(str(r['billed_consumption'])) / 7
-        daily_charge = daily_kwh * Decimal(str(r['tariff_rate']))
+
+        latest = readings[0]
+        bc     = Decimal(str(latest['billed_consumption']))
+        rate   = Decimal(str(latest['tariff_rate']))
+
+        if len(readings) == 2:
+            interval = (readings[0]['reading_date'] - readings[1]['reading_date']).days
+        else:
+            _, interval = monthrange(latest['reading_date'].year, latest['reading_date'].month)
+
+        if interval <= 0:
+            interval = 30
+
+        daily_kwh    = bc / interval
+        daily_charge = daily_kwh * rate
         daily_total  = daily_charge * (1 + VAT_RATE)
         if dim_id not in result:
             result[dim_id] = {'estimated_kwh': ZERO, 'estimated_energy_charge': ZERO, 'estimated_revenue': ZERO}

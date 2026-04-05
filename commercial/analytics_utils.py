@@ -163,31 +163,58 @@ def calc_coverage(customers_qs, readings_qs):
 def calc_estimated_billing(customers_qs, read_ids, date_range):
     """
     For unread customers: estimate their energy and revenue for the period
-    using their last known daily average (last_billed_consumption ÷ 7 × period_days).
+    using their last known daily average:
+      daily_kwh = last_billed_consumption / reading_interval_days
+      estimate  = daily_kwh * period_days
+
+    reading_interval_days is derived from the gap between the customer's last
+    two positive readings. If only one reading exists, falls back to the number
+    of days in that reading's month (e.g. 31 for January, 28 for February).
 
     Returns:
-      estimated_kwh      — estimated energy that should have been billed (mode: estimated)
-      estimated_revenue  — estimated revenue at risk including VAT (mode: estimated)
+      estimated_kwh           — estimated energy (mode: estimated)
+      estimated_revenue       — estimated revenue incl VAT (mode: estimated)
       estimated_energy_charge — estimated energy charge excl VAT
     """
+    from calendar import monthrange
+    from collections import defaultdict
+
     days       = date_range['days']
     unread_ids = list(customers_qs.exclude(id__in=read_ids).values_list('id', flat=True))
 
-    last_readings = (
+    # Fetch the last 2 positive readings per customer to calculate interval
+    all_readings = list(
         MeterReading.objects
-        .filter(customer_id__in=unread_ids, billed_consumption__isnull=False, tariff_rate__isnull=False)
+        .filter(customer_id__in=unread_ids, billed_consumption__gt=0, tariff_rate__isnull=False)
         .order_by('customer_id', '-reading_date')
-        .distinct('customer_id')
-        .values('customer_id', 'billed_consumption', 'tariff_rate')
+        .values('customer_id', 'billed_consumption', 'tariff_rate', 'reading_date')
     )
+
+    # Group by customer, keep only the latest 2 per customer
+    by_customer = defaultdict(list)
+    for r in all_readings:
+        if len(by_customer[r['customer_id']]) < 2:
+            by_customer[r['customer_id']].append(r)
 
     est_kwh           = Decimal('0')
     est_energy_charge = Decimal('0')
     est_revenue       = Decimal('0')
 
-    for r in last_readings:
-        daily_kwh      = Decimal(str(r['billed_consumption'])) / 7
-        daily_charge   = daily_kwh * Decimal(str(r['tariff_rate']))
+    for readings in by_customer.values():
+        latest = readings[0]
+        bc     = Decimal(str(latest['billed_consumption']))
+        rate   = Decimal(str(latest['tariff_rate']))
+
+        if len(readings) == 2:
+            interval = (readings[0]['reading_date'] - readings[1]['reading_date']).days
+        else:
+            _, interval = monthrange(latest['reading_date'].year, latest['reading_date'].month)
+
+        if interval <= 0:
+            interval = 30
+
+        daily_kwh      = bc / interval
+        daily_charge   = daily_kwh * rate
         daily_total    = daily_charge * (1 + VAT_RATE)
         est_kwh           += daily_kwh * days
         est_energy_charge += daily_charge * days
@@ -434,6 +461,118 @@ def get_revenue_by_district(customer_qs, from_date, to_date):
             'total_billed_amount': float(round(vals['revenue'], 2)),
         }
         for district, vals in by_district.items()
+    ]
+    result.sort(key=lambda x: x['total_billed_amount'], reverse=True)
+    return result
+
+
+def get_commercial_coverage(customer_qs, reading_qs, from_date, to_date):
+    """
+    Reading coverage detail — how many customers were read vs unread,
+    and the estimated revenue at risk from unread customers.
+
+    Args:
+        customer_qs : CommercialCustomer queryset (already scoped)
+        reading_qs  : MeterReading queryset (already scoped)
+        from_date   : date
+        to_date     : date
+
+    Returns: dict
+    """
+    date_range = {
+        'start_date': from_date,
+        'end_date':   to_date,
+        'days':       (to_date - from_date).days + 1,
+    }
+    billing   = calc_billing(reading_qs)
+    coverage  = calc_coverage(customer_qs, reading_qs)
+    estimated = calc_estimated_billing(customer_qs, coverage['read_ids'], date_range)
+
+    return {
+        'total_customers':      coverage['total'],
+        'customers_read':       coverage['read'],
+        'customers_unread':     coverage['unread'],
+        'coverage_rate':        coverage['rate'],
+        'total_billed_amount':  float(billing['total_billed_amount']),
+        'total_billed_kwh':     float(billing['total_billed_kwh']),
+        'estimated_kwh':        float(estimated['estimated_kwh']),
+        'estimated_revenue':    float(estimated['estimated_revenue']),
+    }
+
+
+def get_commercial_energy(reading_qs, feeder_ids, from_date, to_date):
+    """
+    Energy analysis — delivered vs consumed vs billed, with AT&C loss.
+
+    Args:
+        reading_qs : MeterReading queryset (already scoped)
+        feeder_ids : list of feeder UUIDs
+        from_date  : date
+        to_date    : date
+
+    Returns: dict
+    """
+    date_range = {
+        'start_date': from_date,
+        'end_date':   to_date,
+        'days':       (to_date - from_date).days + 1,
+    }
+    billing    = calc_billing(reading_qs)
+    energy_del = calc_energy_delivered(feeder_ids, date_range)
+    energy_con = calc_energy_consumed(reading_qs)
+    efficiency, atc_loss = calc_atc_loss(billing['total_billed_kwh'], energy_del['total_mwh'])
+
+    return {
+        'energy_delivered_mwh':  energy_del['total_mwh'],
+        'energy_delivered_mode': energy_del['mode'],
+        'energy_consumed_kwh':   float(energy_con),
+        'total_billed_kwh':      float(billing['total_billed_kwh']),
+        'billing_efficiency':    efficiency,
+        'atc_loss':              atc_loss,
+    }
+
+
+def get_revenue_by_feeder(customer_qs, from_date, to_date):
+    """
+    Revenue and consumption breakdown per feeder for the period.
+
+    Args:
+        customer_qs : CommercialCustomer queryset (already scoped)
+        from_date   : date
+        to_date     : date
+
+    Returns: list of dicts ordered by total_billed_amount descending
+    """
+    rows = list(
+        MeterReading.objects
+        .filter(
+            customer__in=customer_qs,
+            reading_date__gte=from_date,
+            reading_date__lte=to_date,
+            billed_consumption__isnull=False,
+            tariff_rate__isnull=False,
+        )
+        .values('customer__feeder__name', 'billed_consumption', 'tariff_rate')
+    )
+
+    by_feeder = defaultdict(lambda: {'kwh': Decimal('0'), 'revenue': Decimal('0'), 'readings': 0})
+    for r in rows:
+        feeder  = r['customer__feeder__name'] or 'Unassigned'
+        kwh     = Decimal(str(r['billed_consumption']))
+        rate    = Decimal(str(r['tariff_rate']))
+        charge  = kwh * rate
+        by_feeder[feeder]['kwh']      += kwh
+        by_feeder[feeder]['revenue']  += charge + (charge * VAT_RATE)
+        by_feeder[feeder]['readings'] += 1
+
+    result = [
+        {
+            'feeder':              feeder,
+            'readings':            vals['readings'],
+            'total_billed_kwh':    float(round(vals['kwh'], 2)),
+            'total_billed_amount': float(round(vals['revenue'], 2)),
+        }
+        for feeder, vals in by_feeder.items()
     ]
     result.sort(key=lambda x: x['total_billed_amount'], reverse=True)
     return result

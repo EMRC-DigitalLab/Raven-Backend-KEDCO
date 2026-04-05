@@ -24,6 +24,7 @@ app.conf.update(
     task_routes={
         'notifications.tasks.*': {'queue': 'notifications'},
         'analytics.tasks.*': {'queue': 'analytics'},
+        'technical.tasks.*': {'queue': 'datanest_sync'},
     },
     # Retry settings
     task_acks_late=True,
@@ -39,6 +40,23 @@ app.conf.update(
         'daily-restoration-check': {
             'task': 'notifications.tasks.daily_restoration_check',
             'schedule': crontab(hour=23, minute=30),
+        },
+
+        # ── DataNest → Raven Technical Sync ───────────────────────────────────
+        # Hourly load: every 15 minutes
+        'datanest-sync-hourly-load': {
+            'task': 'technical.tasks.sync_hourly_load_task',
+            'schedule': crontab(minute='*/15'),
+        },
+        # Interruptions/faults: every 15 minutes (most time-sensitive)
+        'datanest-sync-interruptions': {
+            'task': 'technical.tasks.sync_interruptions_task',
+            'schedule': crontab(minute='*/15'),
+        },
+        # Cumulative meter readings: every 4 hours
+        'datanest-sync-meter-readings': {
+            'task': 'technical.tasks.sync_meter_readings_task',
+            'schedule': crontab(minute=0, hour='*/4'),
         },
     },
 )

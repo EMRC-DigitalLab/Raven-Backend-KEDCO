@@ -9,20 +9,25 @@ class CumulativeMeterReading(UUIDModel, models.Model):
     """
     Stores the raw cumulative meter readings as received from the meter.
     This is the source of truth from the physical meter.
-    
+
     IMPORTANT: Store readings in the same units your meters use!
     - If meters report in MWh, use cumulative_mwh field
     - If meters report in kWh, convert and use cumulative_mwh (divide by 1000)
     """
+    SUBMISSION_TYPE_CHOICES = [
+        ('dso', 'DSO'),
+        ('admin_override', 'Admin Override'),
+    ]
+
     feeder = models.ForeignKey(Feeder, on_delete=models.CASCADE, related_name='meter_readings')
     reading_date = models.DateField(db_index=True)
     cumulative_mwh = models.DecimalField(
-        max_digits=15, 
+        max_digits=15,
         decimal_places=4,
         help_text="Cumulative meter reading in MWh (like an odometer)"
     )
     reading_time = models.DateTimeField(
-        null=True, 
+        null=True,
         blank=True,
         help_text="Exact time of meter reading"
     )
@@ -31,13 +36,38 @@ class CumulativeMeterReading(UUIDModel, models.Model):
         help_text="Flag if this reading is estimated (e.g., for missing data)"
     )
     notes = models.TextField(blank=True)
-    
+
+    # DSO submission compliance fields — synced from DataNest
+    is_late = models.BooleanField(
+        default=False,
+        help_text="True if this submission was made after the allowed submission window"
+    )
+    submission_type = models.CharField(
+        max_length=20,
+        choices=SUBMISSION_TYPE_CHOICES,
+        default='dso',
+        null=True,
+        blank=True,
+        help_text="Who submitted this record: dso (field officer) or admin_override"
+    )
+    original_submit_time = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="The actual datetime the DSO submitted this record in DataNest"
+    )
+    is_suspicious = models.BooleanField(
+        default=False,
+        help_text="Flagged by DataNest as a suspicious reading (e.g. abnormal value)"
+    )
+
     class Meta:
         unique_together = ('feeder', 'reading_date')
         ordering = ['feeder', 'reading_date']
         indexes = [
             models.Index(fields=['feeder', 'reading_date']),
             models.Index(fields=['reading_date']),
+            models.Index(fields=['is_late']),
+            models.Index(fields=['submission_type']),
         ]
     
     def __str__(self):
@@ -131,15 +161,40 @@ class EnergyDelivered(UUIDModel, models.Model):
 
 
 class HourlyLoad(UUIDModel, models.Model):
+    SUBMISSION_TYPE_CHOICES = [
+        ('dso', 'DSO'),
+        ('admin_override', 'Admin Override'),
+        ('auto_cron', 'Auto Cron'),
+    ]
+
     feeder = models.ForeignKey(Feeder, on_delete=models.CASCADE)
     date = models.DateField()
     hour = models.PositiveSmallIntegerField()  # 0 to 23
     load_mw = models.DecimalField(max_digits=10, decimal_places=2)
 
     reading_time = models.TimeField(
-        null=True, 
+        null=True,
         blank=True,
         help_text="Precise time of reading (HH:MM:SS) for sub-hour accuracy"
+    )
+
+    # DSO submission compliance fields — synced from DataNest
+    is_late = models.BooleanField(
+        default=False,
+        help_text="True if this submission was made after the allowed submission window"
+    )
+    submission_type = models.CharField(
+        max_length=20,
+        choices=SUBMISSION_TYPE_CHOICES,
+        default='dso',
+        null=True,
+        blank=True,
+        help_text="Who submitted this record: dso (field officer), admin_override, or auto_cron"
+    )
+    original_submit_time = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="The actual datetime the DSO submitted this record in DataNest"
     )
 
     class Meta:
@@ -149,6 +204,8 @@ class HourlyLoad(UUIDModel, models.Model):
             models.Index(fields=['date', 'hour']),
             models.Index(fields=['feeder', 'date']),
             models.Index(fields=['date']),
+            models.Index(fields=['is_late']),
+            models.Index(fields=['submission_type']),
         ]
 
     def save(self, *args, **kwargs):
@@ -503,3 +560,73 @@ class FaultTypeCategory(models.Model):
 
     def __str__(self):
         return f"{self.code} → {self.get_category_display()}"
+
+
+class DataSyncLog(models.Model):
+    """
+    Tracks every DataNest → Raven sync run for a given data type.
+
+    The `watermark` field records the upper bound of the last successful
+    sync window.  The next run starts from (watermark − look_back_hours)
+    to catch late submissions, while staying incremental for performance.
+    """
+
+    DATA_TYPE_CHOICES = [
+        # Technical
+        ('technical_hourly_load',    'Technical — Hourly Load'),
+        ('technical_meter_readings', 'Technical — Meter Readings'),
+        ('technical_interruptions',  'Technical — Interruptions'),
+        # Future modules slot in here
+        # ('commercial_billing',    'Commercial — Billing'),
+        # ('hr_staff',              'HR — Staff'),
+    ]
+
+    STATUS_CHOICES = [
+        ('running', 'Running'),
+        ('success', 'Success'),
+        ('partial', 'Partial'),   # completed but with some errors
+        ('error',   'Error'),
+    ]
+
+    data_type = models.CharField(max_length=60, choices=DATA_TYPE_CHOICES, db_index=True)
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='running')
+
+    started_at = models.DateTimeField(auto_now_add=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    # Incremental window: this run covered [window_start, window_end]
+    window_start = models.DateTimeField(null=True, blank=True)
+    window_end = models.DateTimeField(null=True, blank=True)
+
+    records_fetched = models.PositiveIntegerField(default=0)
+    records_created = models.PositiveIntegerField(default=0)
+    records_updated = models.PositiveIntegerField(default=0)
+    records_skipped = models.PositiveIntegerField(default=0)
+    records_errored = models.PositiveIntegerField(default=0)
+
+    error_message = models.TextField(blank=True)
+
+    class Meta:
+        verbose_name = 'Data Sync Log'
+        verbose_name_plural = 'Data Sync Logs'
+        ordering = ['-started_at']
+        indexes = [
+            models.Index(fields=['data_type', '-started_at']),
+        ]
+
+    def __str__(self):
+        return f"{self.get_data_type_display()} | {self.status} | {self.started_at:%Y-%m-%d %H:%M}"
+
+    @classmethod
+    def get_last_watermark(cls, data_type):
+        """
+        Return the window_end of the most recent successful run for this
+        data_type, or None if no successful run exists yet.
+        """
+        last = (
+            cls.objects
+            .filter(data_type=data_type, status__in=['success', 'partial'])
+            .order_by('-started_at')
+            .first()
+        )
+        return last.window_end if last else None
