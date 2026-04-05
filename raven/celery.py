@@ -43,20 +43,22 @@ app.conf.update(
         },
 
         # ── DataNest → Raven Technical Sync ───────────────────────────────────
-        # Hourly load: every 15 minutes
+        # TEMPORARY: all set to every 1 minute for initial testing.
+        # After confirming data flows, revert to production schedules:
+        #   hourly_load      → crontab(minute='*/15')
+        #   interruptions    → crontab(minute='*/15')
+        #   meter_readings   → crontab(minute=0, hour='*/4')
         'datanest-sync-hourly-load': {
             'task': 'technical.tasks.sync_hourly_load_task',
-            'schedule': crontab(minute='*/15'),
+            'schedule': crontab(minute='*/1'),
         },
-        # Interruptions/faults: every 15 minutes (most time-sensitive)
         'datanest-sync-interruptions': {
             'task': 'technical.tasks.sync_interruptions_task',
-            'schedule': crontab(minute='*/15'),
+            'schedule': crontab(minute='*/1'),
         },
-        # Cumulative meter readings: every 4 hours
         'datanest-sync-meter-readings': {
             'task': 'technical.tasks.sync_meter_readings_task',
-            'schedule': crontab(minute=0, hour='*/4'),
+            'schedule': crontab(minute='*/1'),
         },
     },
 )
