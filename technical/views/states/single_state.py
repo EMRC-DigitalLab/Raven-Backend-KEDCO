@@ -185,32 +185,20 @@ def calculate_state_hours_of_supply_sql(state_id, from_date, to_date, voltage_le
     """
     Calculate average hours of supply per day for a state.
 
-    For single-day queries (especially today): Returns total hours per feeder (not daily average)
-    For multi-day queries: Returns average hours per day per feeder
+    For single-day queries: Returns average hours per feeder for that day (max 24)
+    For multi-day queries: Returns average hours per day per feeder (max 24)
 
-    UPDATED Logic:
-    - Only considers ONBOARDED feeders
-    - Numerator: Sum of all hours supplied across all ONBOARDED feeders with data in the state
-    - Denominator: Total ONBOARDED feeders in state × Days (or just feeders for single day)
-    - This properly accounts for onboarded feeders with no data (they contribute 0)
+    Denominator = feeders that transmitted ANY data in the period (not all
+    onboarded feeders). Feeders with no rows are excluded so sync gaps don't
+    deflate the average. A feeder with rows but load_mw=0 throughout is
+    correctly counted with 0 supply hours.
     """
     voltage_clause = "AND f.voltage_level = %s" if voltage_level else ""
 
-    # Get total ONBOARDED feeders in state
-    feeder_count_query = f"""
-        SELECT COUNT(DISTINCT f.id)
-        FROM common_feeder f
-        INNER JOIN common_businessdistrict bd ON f.business_district_id = bd.id
-        WHERE bd.state_id = %s
-            AND f.is_onboarded = TRUE
-            AND (f.onboarded_at IS NULL OR f.onboarded_at <= %s)
-            {voltage_clause}
-    """
-
-    # Get total hours supplied across ONBOARDED feeders only
-    hours_query = f"""
+    query = f"""
         SELECT
-            COUNT(DISTINCT CONCAT(hl.feeder_id, '-', hl.date, '-', hl.hour)) as total_hours
+            COUNT(DISTINCT CASE WHEN hl.load_mw > 0 THEN CONCAT(hl.feeder_id, '-', hl.date, '-', hl.hour) END) AS supply_hours,
+            COUNT(DISTINCT hl.feeder_id) AS feeders_with_data
         FROM technical_hourlyload hl
         INNER JOIN common_feeder f ON hl.feeder_id = f.id
         INNER JOIN common_businessdistrict bd ON f.business_district_id = bd.id
@@ -219,36 +207,25 @@ def calculate_state_hours_of_supply_sql(state_id, from_date, to_date, voltage_le
             AND (f.onboarded_at IS NULL OR f.onboarded_at <= %s)
             {voltage_clause}
             AND hl.date BETWEEN %s AND %s
-            AND hl.load_mw > 0
     """
 
-    feeder_count_params = [state_id, to_date] + ([voltage_level] if voltage_level else [])
-    hours_params = [state_id, to_date] + ([voltage_level] if voltage_level else []) + [from_date, to_date]
+    params = [state_id, to_date] + ([voltage_level] if voltage_level else []) + [from_date, to_date]
 
     with connection.cursor() as cursor:
-        # Get onboarded feeder count
-        cursor.execute(feeder_count_query, feeder_count_params)
-        result = cursor.fetchone()
-        total_feeders = result[0] if result and result[0] else 0
+        cursor.execute(query, params)
+        row = cursor.fetchone()
+        total_hours = row[0] if row and row[0] else 0
+        feeders_with_data = row[1] if row and row[1] else 0
 
-        if total_feeders == 0:
-            return 0.0
+    if feeders_with_data == 0:
+        return 0.0
 
-        # Get total hours
-        cursor.execute(hours_query, hours_params)
-        result = cursor.fetchone()
-        total_hours = result[0] if result and result[0] else 0
-    
-    # ✅ CRITICAL: For single-day queries, return average hours per feeder (not daily average)
-    # For multi-day queries, return average hours per day per feeder
     if from_date == to_date:
-        # Single day: Average hours per feeder
-        avg_hours = total_hours / total_feeders if total_feeders > 0 else 0
+        avg_hours = total_hours / feeders_with_data
     else:
-        # Multi-day: Average hours per day per feeder
         period_days = (to_date - from_date).days + 1
-        avg_hours = total_hours / (total_feeders * period_days) if (total_feeders * period_days) > 0 else 0
-    
+        avg_hours = total_hours / (feeders_with_data * period_days)
+
     return round(min(avg_hours, 24.0), 2)
 
 

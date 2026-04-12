@@ -114,21 +114,17 @@ def calculate_state_hours_of_supply_sql(state_id, from_date, to_date, voltage_le
     """
     Calculate average hours of supply per day for a state using raw SQL.
     Optionally filtered by voltage_level ('11kv' or '33kv').
+
+    Denominator = feeders that transmitted ANY data in the period (not all
+    onboarded feeders). Feeders with no rows are excluded so sync gaps don't
+    deflate the average.
     """
     voltage_clause = "AND f.voltage_level = %s" if voltage_level else ""
-    feeder_count_query = f"""
-        SELECT COUNT(DISTINCT f.id)
-        FROM common_feeder f
-        INNER JOIN common_businessdistrict bd ON f.business_district_id = bd.id
-        WHERE bd.state_id = %s
-            AND f.is_onboarded = TRUE
-            AND (f.onboarded_at IS NULL OR f.onboarded_at <= %s)
-            {voltage_clause}
-    """
-    
-    hours_query = f"""
-        SELECT 
-            COUNT(DISTINCT CONCAT(hl.feeder_id, '-', hl.date, '-', hl.hour)) as total_hours
+
+    query = f"""
+        SELECT
+            COUNT(DISTINCT CASE WHEN hl.load_mw > 0 THEN CONCAT(hl.feeder_id, '-', hl.date, '-', hl.hour) END) AS supply_hours,
+            COUNT(DISTINCT hl.feeder_id) AS feeders_with_data
         FROM technical_hourlyload hl
         INNER JOIN common_feeder f ON hl.feeder_id = f.id
         INNER JOIN common_businessdistrict bd ON f.business_district_id = bd.id
@@ -137,30 +133,25 @@ def calculate_state_hours_of_supply_sql(state_id, from_date, to_date, voltage_le
             AND (f.onboarded_at IS NULL OR f.onboarded_at <= %s)
             {voltage_clause}
             AND hl.date BETWEEN %s AND %s
-            AND hl.load_mw > 0
     """
-    
-    count_params = [state_id, to_date] + ([voltage_level] if voltage_level else [])
-    hours_params = [state_id, to_date] + ([voltage_level] if voltage_level else []) + [from_date, to_date]
-    
+
+    params = [state_id, to_date] + ([voltage_level] if voltage_level else []) + [from_date, to_date]
+
     with connection.cursor() as cursor:
-        cursor.execute(feeder_count_query, count_params)
-        result = cursor.fetchone()
-        total_feeders = result[0] if result and result[0] else 0
-        
-        if total_feeders == 0:
-            return 0.0
-        
-        cursor.execute(hours_query, hours_params)
-        result = cursor.fetchone()
-        total_hours = result[0] if result and result[0] else 0
-    
+        cursor.execute(query, params)
+        row = cursor.fetchone()
+        total_hours = row[0] if row and row[0] else 0
+        feeders_with_data = row[1] if row and row[1] else 0
+
+    if feeders_with_data == 0:
+        return 0.0
+
     if from_date == to_date:
-        avg_hours = total_hours / total_feeders if total_feeders > 0 else 0
+        avg_hours = total_hours / feeders_with_data
     else:
         period_days = (to_date - from_date).days + 1
-        avg_hours = total_hours / (total_feeders * period_days) if (total_feeders * period_days) > 0 else 0
-    
+        avg_hours = total_hours / (feeders_with_data * period_days)
+
     return round(min(avg_hours, 24.0), 2)
 
 
@@ -733,21 +724,23 @@ def calculate_avg_supply_orm(state_id, from_date, to_date, feeder_ids):
         # For past periods, use full days
         period_days = (to_date - from_date).days + 1
     
-    total_feeders = len(feeder_ids)
-    
-    if total_feeders == 0:
+    if not feeder_ids:
         return 0.0
-    
-    # Count total hours supplied (feeder_ids already filtered for onboarded)
-    total_hours = HourlyLoad.objects.filter(
-        date__range=(from_date, to_date), 
-        load_mw__gt=0, 
-        feeder_id__in=feeder_ids
-    ).values('feeder_id', 'date', 'hour').distinct().count()
-    
-    # Average = Total hours / (Total onboarded feeders × Days)
-    avg_hours_per_day = total_hours / (total_feeders * period_days)
-    
+
+    # Count total supply hours and feeders with data (feeder_ids already filtered for onboarded)
+    hl_qs = HourlyLoad.objects.filter(
+        date__range=(from_date, to_date),
+        feeder_id__in=feeder_ids,
+    )
+    total_hours = hl_qs.filter(load_mw__gt=0).values('feeder_id', 'date', 'hour').distinct().count()
+    feeders_with_data = hl_qs.values('feeder_id').distinct().count()
+
+    if feeders_with_data == 0:
+        return 0.0
+
+    # Average = Total supply hours / (feeders with data × period days)
+    avg_hours_per_day = total_hours / (feeders_with_data * period_days)
+
     return round(min(avg_hours_per_day, 24.0), 2)
 
 
