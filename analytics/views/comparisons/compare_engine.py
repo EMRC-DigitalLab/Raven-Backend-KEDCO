@@ -62,12 +62,13 @@ logger = logging.getLogger(__name__)
 
 from analytics.compare_metrics import METRICS_BY_MODULE
 from analytics.services.compare_service import (
+    compare_customers,
     compare_entities,
     compare_periods,
     get_user_accessible_modules,
 )
 
-VALID_ENTITY_TYPES  = ('state', 'district', 'feeder', 'band')
+VALID_ENTITY_TYPES  = ('state', 'district', 'feeder', 'band', 'station')
 VALID_GRANULARITIES = ('daily', 'weekly', 'monthly', 'yearly', 'custom')
 
 
@@ -91,10 +92,12 @@ def available_metrics(request):
 
     return Response({
         'entity_types': [
-            {'key': 'state',    'label': 'States',              'icon': 'map'},
-            {'key': 'district', 'label': 'Business Districts',  'icon': 'building'},
-            {'key': 'feeder',   'label': 'Feeders',             'icon': 'zap'},
-            {'key': 'band',     'label': 'Service Bands (A–E)', 'icon': 'layers'},
+            {'key': 'state',    'label': 'States',                       'icon': 'map'},
+            {'key': 'district', 'label': 'Business Districts',           'icon': 'building'},
+            {'key': 'feeder',   'label': 'Feeders',                      'icon': 'zap'},
+            {'key': 'band',     'label': 'Service Bands (A–E)',          'icon': 'layers'},
+            {'key': 'station',  'label': 'Injection Substations (EA)',   'icon': 'activity',
+             'note': 'Energy Account billing entity — uses month/year period, not date range'},
         ],
         'granularities': [
             {'key': 'daily',   'label': 'Daily',   'description': 'One data point per day'},
@@ -224,6 +227,106 @@ def _handle_periods(user, entity_type, metrics, feeder_type, body):
         )
     except Exception as exc:
         logger.exception("compare_periods failed: %s", exc)
+        return Response({'error': str(exc)}, status=500)
+
+    if 'error' in result:
+        return Response(result, status=400)
+    return Response(result)
+
+
+# ─── Customer consumption comparison ──────────────────────────────────────────
+
+VALID_CUSTOMER_TYPES = ('MDI', 'MDNI', 'all')
+VALID_SCOPE_TYPES    = ('feeder', 'district', 'state')
+VALID_SORT_BY        = ('current_consumption', 'variance_pct', 'decline')
+
+
+@api_view(['POST'])
+def customer_compare(request):
+    """
+    POST /api/analytics/compare/customers/
+
+    Compare top-N MDI or MDNI customers by consumption across two time periods.
+
+    Body:
+    {
+        "customer_type":    "MDI",               // "MDI" | "MDNI" | "all"
+        "current_period":   {"from_date": "2025-01-13", "to_date": "2025-01-26"},
+        "previous_period":  {"from_date": "2024-12-01", "to_date": "2024-12-31"},
+        "scope_type":       "feeder",             // optional — "feeder" | "district" | "state"
+        "scope_id":         "<uuid>",             // optional — required if scope_type is set
+        "top_n":            50,                   // optional, default 50 (max 200)
+        "sort_by":          "current_consumption" // optional
+    }
+
+    Returns top-N customers with:
+      current_consumption_kwh, previous_consumption_kwh,
+      variance_kwh, variance_pct, trend label, is_bypass flag.
+    """
+    body = request.data
+
+    customer_type = body.get('customer_type', 'all')
+    if customer_type not in VALID_CUSTOMER_TYPES:
+        return Response(
+            {'error': f"customer_type must be one of: {', '.join(VALID_CUSTOMER_TYPES)}"},
+            status=400,
+        )
+
+    # ── Parse periods ──────────────────────────────────────────────────────────
+    current_period  = body.get('current_period', {})
+    previous_period = body.get('previous_period', {})
+
+    try:
+        current_from  = datetime.strptime(str(current_period['from_date'])[:10],  '%Y-%m-%d').date()
+        current_to    = datetime.strptime(str(current_period['to_date'])[:10],    '%Y-%m-%d').date()
+        previous_from = datetime.strptime(str(previous_period['from_date'])[:10], '%Y-%m-%d').date()
+        previous_to   = datetime.strptime(str(previous_period['to_date'])[:10],   '%Y-%m-%d').date()
+    except (KeyError, ValueError, TypeError):
+        return Response(
+            {'error': 'current_period and previous_period must include from_date and to_date in YYYY-MM-DD format.'},
+            status=400,
+        )
+
+    if current_from > current_to or previous_from > previous_to:
+        return Response({'error': 'from_date must be on or before to_date in each period.'}, status=400)
+
+    # ── Scope (optional) ───────────────────────────────────────────────────────
+    scope_type = body.get('scope_type') or None
+    scope_id   = body.get('scope_id')   or None
+
+    if scope_type and scope_type not in VALID_SCOPE_TYPES:
+        return Response(
+            {'error': f"scope_type must be one of: {', '.join(VALID_SCOPE_TYPES)}"},
+            status=400,
+        )
+    if scope_type and not scope_id:
+        return Response({'error': 'scope_id is required when scope_type is provided.'}, status=400)
+
+    # ── Options ────────────────────────────────────────────────────────────────
+    try:
+        top_n = min(int(body.get('top_n', 50)), 200)
+    except (TypeError, ValueError):
+        top_n = 50
+
+    sort_by = body.get('sort_by', 'current_consumption')
+    if sort_by not in VALID_SORT_BY:
+        sort_by = 'current_consumption'
+
+    try:
+        result = compare_customers(
+            user          = request.user,
+            current_from  = current_from,
+            current_to    = current_to,
+            previous_from = previous_from,
+            previous_to   = previous_to,
+            customer_type = customer_type,
+            scope_type    = scope_type,
+            scope_id      = scope_id,
+            top_n         = top_n,
+            sort_by       = sort_by,
+        )
+    except Exception as exc:
+        logger.exception("compare_customers failed: %s", exc)
         return Response({'error': str(exc)}, status=500)
 
     if 'error' in result:

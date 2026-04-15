@@ -56,8 +56,9 @@ def _district_metrics(district, customers_qs, readings_qs, date_range):
     c_qs = customers_qs.filter(feeder__business_district=district)
     r_qs = readings_qs.filter(customer__feeder__business_district=district)
 
-    total_mdi  = c_qs.filter(customer_type='MDI').count()
-    total_mdni = c_qs.filter(customer_type='MDNI').count()
+    total_mdi    = c_qs.filter(customer_type='MDI').count()
+    total_mdni   = c_qs.filter(customer_type='MDNI').count()
+    bypass_count = c_qs.filter(is_bypass=True).count()
 
     billing   = calc_billing(r_qs)
     daily_kwh = calc_daily_estimate(billing, date_range)
@@ -119,8 +120,9 @@ def _district_metrics(district, customers_qs, readings_qs, date_range):
         },
         'customers': {
             'total': metric(total_mdi + total_mdni, explanation='Total registered MDI and MDNI customers in this district.'),
-            'mdi':   metric(total_mdi,  explanation='MDI customers in this district.'),
-            'mdni':  metric(total_mdni, explanation='MDNI customers in this district.'),
+            'mdi':          metric(total_mdi,    explanation='MDI customers in this district.'),
+            'mdni':         metric(total_mdni,   explanation='MDNI customers in this district.'),
+            'bypass_count': metric(bypass_count, explanation='Customers flagged for meter bypass / tampering in this district.'),
         },
         'energy': {
             'energy_consumed_kwh': metric(

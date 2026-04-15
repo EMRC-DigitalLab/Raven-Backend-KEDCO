@@ -194,6 +194,180 @@ METRICS_REGISTRY: dict = {
         'entity_types': ['state', 'district'],
         'description': 'Sum of current monthly salaries for active staff',
     },
+
+    # ── GRID LENS ─────────────────────────────────────────────────────────────
+    # Loss decomposition metrics. Computed from EA + Stream B.
+    # Supported at state / district / station — the three geographic scopes
+    # where EA billing data is available. Access gated by the grid_lens section.
+
+    'gl_ea_received_mwh': {
+        'module': 'grid_lens',
+        'label': 'EA Received (MWh)',
+        'unit': 'MWh',
+        'entity_types': ['state', 'district', 'station'],
+        'description': (
+            'TCN-agreed energy received — sum of EAMonthlyReturn.station_billing_mwh '
+            'for all billing periods that fall within the comparison range.'
+        ),
+    },
+    'gl_feeder_distributed_mwh': {
+        'module': 'grid_lens',
+        'label': 'Feeder Distributed — Stream B (MWh)',
+        'unit': 'MWh',
+        'entity_types': ['state', 'district', 'station'],
+        'description': (
+            'Stream B: total feeder technical energy from the monitoring system. '
+            'Energy measured as it left the substation into distribution feeders.'
+        ),
+    },
+    'gl_metering_gap_mwh': {
+        'module': 'grid_lens',
+        'label': 'Metering Gap (MWh)',
+        'unit': 'MWh',
+        'entity_types': ['state', 'district', 'station'],
+        'description': (
+            'EA received − feeder distributed. Energy unaccounted for between the '
+            'TCN transformer meter and the feeder monitoring system. '
+            'Includes transformer losses, auxiliary loads, and meter accuracy gaps.'
+        ),
+    },
+    'gl_metering_gap_pct': {
+        'module': 'grid_lens',
+        'label': 'Metering Gap (%)',
+        'unit': '%',
+        'entity_types': ['state', 'district', 'station'],
+        'description': 'metering_gap_mwh / ea_received_mwh × 100.',
+    },
+    'gl_transmission_efficiency': {
+        'module': 'grid_lens',
+        'label': 'Transmission Efficiency (%)',
+        'unit': '%',
+        'entity_types': ['state', 'district', 'station'],
+        'description': (
+            'feeder_distributed / ea_received × 100. '
+            'Share of TCN-received energy that reaches the feeder distribution level.'
+        ),
+    },
+    'gl_kv33_mwh': {
+        'module': 'grid_lens',
+        'label': '33kV Stream B (MWh)',
+        'unit': 'MWh',
+        'entity_types': ['state', 'district', 'station'],
+        'description': 'Stream B energy from 33kV feeders for this entity and period.',
+    },
+    'gl_kv11_mwh': {
+        'module': 'grid_lens',
+        'label': '11kV Stream B (MWh)',
+        'unit': 'MWh',
+        'entity_types': ['state', 'district', 'station'],
+        'description': 'Stream B energy from 11kV feeders for this entity and period.',
+    },
+    'gl_tier_gap_pct': {
+        'module': 'grid_lens',
+        'label': '33kV → 11kV Tier Gap (%)',
+        'unit': '%',
+        'entity_types': ['state', 'district', 'station'],
+        'description': (
+            '(33kV Stream B − 11kV Stream B) / 33kV Stream B × 100. '
+            'Energy measured at the 33kV tier vs the downstream 11kV tier. '
+            'Gap reflects distribution losses between voltage levels.'
+        ),
+    },
+    'gl_stream_b_completeness': {
+        'module': 'grid_lens',
+        'label': 'Stream B Data Completeness (%)',
+        'unit': '%',
+        'entity_types': ['state', 'district', 'station'],
+        'description': (
+            'Average SCADA monitoring data completeness % across all feeder '
+            'technical energy records in scope. Low completeness inflates the metering gap.'
+        ),
+    },
+
+    # ── ENERGY ACCOUNT ────────────────────────────────────────────────────────
+    # EA billing period = month + year. When comparing with from_date/to_date,
+    # the EA fetcher aggregates all monthly returns whose billing month falls
+    # within the requested date range.
+
+    'ea_billing_mwh': {
+        'module': 'energy_account',
+        'label': 'EA Billing MWh',
+        'unit': 'MWh',
+        'entity_types': ['station', 'feeder'],
+        'description': 'Total energy billed from the monthly return (station_billing_mwh). '
+                       'This is the authoritative NBET invoice figure.',
+    },
+    'ea_stream_a_mwh': {
+        'module': 'energy_account',
+        'label': 'Stream A — Transformer Read (MWh)',
+        'unit': 'MWh',
+        'entity_types': ['station'],
+        'description': 'Physical transformer meter billing read — the primary billing source '
+                       '(sum of billing_mwh on transformer-type grid meter readings).',
+    },
+    'ea_stream_b_mwh': {
+        'module': 'energy_account',
+        'label': 'Stream B — Technical Energy (MWh)',
+        'unit': 'MWh',
+        'entity_types': ['station', 'feeder'],
+        'description': 'Feeder technical energy from the monitoring system (SCADA/hourly load). '
+                       'Used as cross-check against Stream A physical reads.',
+    },
+    'ea_stream_deviation_pct': {
+        'module': 'energy_account',
+        'label': 'Stream A vs B Deviation (%)',
+        'unit': '%',
+        'entity_types': ['station'],
+        'description': '|Stream A − Stream B| / Stream B × 100. '
+                       'Deviation >2% triggers the max_applied billing rule.',
+    },
+    'ea_kv33_mwh': {
+        'module': 'energy_account',
+        'label': '33kV Feeder Energy — Stream B (MWh)',
+        'unit': 'MWh',
+        'entity_types': ['station'],
+        'description': 'Sum of Stream B technical energy from all 33kV feeders at the station. '
+                       'Enables Transmission → 33kV comparison.',
+    },
+    'ea_kv11_mwh': {
+        'module': 'energy_account',
+        'label': '11kV Feeder Energy — Stream B (MWh)',
+        'unit': 'MWh',
+        'entity_types': ['station'],
+        'description': 'Sum of Stream B technical energy from all 11kV feeders at the station. '
+                       'Enables 33kV → 11kV downstream comparison.',
+    },
+    'ea_billing_naira': {
+        'module': 'energy_account',
+        'label': 'EA Billing Naira',
+        'unit': 'NGN',
+        'entity_types': ['station', 'feeder'],
+        'description': 'Total billed Naira — station_billing_naira from the monthly return.',
+    },
+    'ea_data_completeness': {
+        'module': 'energy_account',
+        'label': 'EA Data Completeness (%)',
+        'unit': '%',
+        'entity_types': ['station', 'feeder'],
+        'description': 'Average Stream B data completeness % across feeder technical energy records '
+                       '(days_with_data / total_days_in_period × 100).',
+    },
+    'ea_late_rate': {
+        'module': 'energy_account',
+        'label': 'Late Submission Rate (%)',
+        'unit': '%',
+        'entity_types': ['station'],
+        'description': 'Percentage of billing returns submitted after the day-5 cutoff — '
+                       'late_count / total_returns × 100 across all periods in range.',
+    },
+    'ea_return_status': {
+        'module': 'energy_account',
+        'label': 'Return Status',
+        'unit': '',
+        'entity_types': ['station'],
+        'description': 'Status of the most recent monthly return for the period '
+                       '(draft / submitted / tcn_agreed / reconciled / …).',
+    },
 }
 
 # Quick lookup: metric key → module name

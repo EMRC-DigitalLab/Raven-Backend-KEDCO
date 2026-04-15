@@ -22,9 +22,10 @@ app.conf.update(
     enable_utc=True,
     # Task routing
     task_routes={
-        'notifications.tasks.*': {'queue': 'notifications'},
-        'analytics.tasks.*': {'queue': 'analytics'},
-        'technical.tasks.*': {'queue': 'datanest_sync'},
+        'notifications.tasks.*':    {'queue': 'notifications'},
+        'analytics.tasks.*':        {'queue': 'analytics'},
+        'technical.tasks.*':        {'queue': 'datanest_sync'},
+        'energy_account.tasks.*':   {'queue': 'datanest_sync'},
     },
     # Retry settings
     task_acks_late=True,
@@ -57,6 +58,73 @@ app.conf.update(
         'datanest-sync-meter-readings': {
             'task': 'technical.tasks.sync_meter_readings_task',
             'schedule': crontab(minute='*/30'),
+        },
+
+        # ── DataNest → Raven Energy Account Sync ─────────────────────────────
+        # Rates + settings: once per hour (slow-changing)
+        'ea-sync-nbet-rates': {
+            'task': 'energy_account.tasks.sync_nbet_rates',
+            'schedule': crontab(minute=0),
+        },
+        'ea-sync-settings': {
+            'task': 'energy_account.tasks.sync_ea_settings',
+            'schedule': crontab(minute=5),
+        },
+        # Grid meters: every 30 minutes (meter registry changes occasionally)
+        'ea-sync-grid-meters': {
+            'task': 'energy_account.tasks.sync_grid_meters',
+            'schedule': crontab(minute='*/30'),
+        },
+        # Monthly returns: every 15 minutes (status changes during active period)
+        'ea-sync-monthly-returns': {
+            'task': 'energy_account.tasks.sync_monthly_returns',
+            'schedule': crontab(minute='*/15'),
+        },
+        # Monthly readings: every 15 minutes
+        'ea-sync-monthly-readings': {
+            'task': 'energy_account.tasks.sync_monthly_readings',
+            'schedule': crontab(minute='*/15'),
+        },
+        # Feeder technical energy: every 30 minutes
+        'ea-sync-feeder-technical-energy': {
+            'task': 'energy_account.tasks.sync_feeder_technical_energy',
+            'schedule': crontab(minute='*/30'),
+        },
+        # TCN reconciliation: every 15 minutes (active during reconciliation window)
+        'ea-sync-tcn-reconciliation': {
+            'task': 'energy_account.tasks.sync_tcn_reconciliation',
+            'schedule': crontab(minute='*/15'),
+        },
+        'ea-sync-tcn-reconciliation-notes': {
+            'task': 'energy_account.tasks.sync_tcn_reconciliation_notes',
+            'schedule': crontab(minute='*/15'),
+        },
+        # MO reconciliation: every 30 minutes
+        'ea-sync-mo-reconciliation': {
+            'task': 'energy_account.tasks.sync_mo_reconciliation',
+            'schedule': crontab(minute='*/30'),
+        },
+        # Weekly readings: every 30 minutes
+        'ea-sync-weekly-readings': {
+            'task': 'energy_account.tasks.sync_weekly_readings',
+            'schedule': crontab(minute='*/30'),
+        },
+        # Operational tables: once per hour
+        'ea-sync-station-assignments': {
+            'task': 'energy_account.tasks.sync_station_assignments',
+            'schedule': crontab(minute=10),
+        },
+        'ea-sync-meter-check-schedules': {
+            'task': 'energy_account.tasks.sync_meter_check_schedules',
+            'schedule': crontab(minute=15),
+        },
+        'ea-sync-meter-check-records': {
+            'task': 'energy_account.tasks.sync_meter_check_records',
+            'schedule': crontab(minute=20),
+        },
+        'ea-sync-coupling-log': {
+            'task': 'energy_account.tasks.sync_coupling_log',
+            'schedule': crontab(minute=25),
         },
     },
 )

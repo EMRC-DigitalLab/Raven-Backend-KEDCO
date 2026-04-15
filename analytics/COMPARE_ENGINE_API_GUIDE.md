@@ -56,6 +56,11 @@ and granularities this user is allowed to use.
       "key": "periods",
       "label": "Compare Periods",
       "description": "Compare one entity across different time periods (today vs yesterday, etc.)"
+    },
+    {
+      "key": "customers",
+      "label": "Customer Consumption Comparison",
+      "description": "Compare customer-level consumption between two time periods — surfaces top movers"
     }
   ],
   "metrics": {
@@ -325,7 +330,151 @@ Compare one entity across different time windows. Classic use case: today vs yes
 
 ---
 
-## 3. Metric Reference
+## 3. Customer Consumption Comparison
+
+### `POST /api/analytics/compare/customers/`
+
+Compare how much energy individual customers consumed across two time periods.
+Returns the top N customers ranked by consumption, with variance and a trend label.
+
+Use this to surface:
+- Customers whose consumption spiked or collapsed between periods
+- Possible illegal bypass / low-billed accounts (sudden drop)
+- Top revenue contributors who should be prioritised for reading
+
+---
+
+**Request**
+
+```json
+{
+  "customer_type":   "MDI",
+  "current_period":  { "from_date": "2026-01-01", "to_date": "2026-01-31" },
+  "previous_period": { "from_date": "2025-12-01", "to_date": "2025-12-31" },
+  "scope_type":      "district",
+  "scope_id":        "KN-IDU",
+  "top_n":           20,
+  "sort_by":         "current"
+}
+```
+
+| Field | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `customer_type` | string | no | *(all)* | `"MDI"` or `"MDNI"` — omit for both |
+| `current_period` | object | yes | — | `{ from_date, to_date }` — the period you care about |
+| `previous_period` | object | yes | — | `{ from_date, to_date }` — the baseline to compare against |
+| `scope_type` | string | no | *(system-wide)* | `"feeder"` `"district"` `"state"` — narrows the customer pool |
+| `scope_id` | string | no (required if scope_type set) | — | Slug of the entity (e.g. `"KN-IDU"`, `"KN"`, `"kn-tam-coc"`) |
+| `top_n` | integer | no | `10` | How many customers to return (max `100`) |
+| `sort_by` | string | no | `"current"` | `"current"` sort by current-period consumption, `"variance"` sort by absolute change |
+
+---
+
+**Response**
+
+```json
+{
+  "customer_type":   "MDI",
+  "current_period":  { "from_date": "2026-01-01", "to_date": "2026-01-31" },
+  "previous_period": { "from_date": "2025-12-01", "to_date": "2025-12-31" },
+  "scope_type":      "district",
+  "scope_id":        "KN-IDU",
+  "top_n":           20,
+  "sort_by":         "current",
+  "count":           20,
+
+  "customers": [
+    {
+      "rank":             1,
+      "id":               "1011e552-e6b0-4c46-b342-4ea0abaa9b3f",
+      "account_no":       "32/25/90/0517-01",
+      "meter_number":     "252424078",
+      "customer_name":    "DANGOTE CEMENT PLC",
+      "customer_type":    "MDI",
+      "is_bypass":        false,
+      "feeder":   { "slug": "kn-tam-coc", "name": "COCA COLA" },
+      "district": { "slug": "KN-IDU",     "name": "Kano Industrial" },
+      "state":    { "slug": "KN",          "name": "Kano" },
+
+      "current_kwh":  45200.0,
+      "previous_kwh": 38600.0,
+      "variance_kwh": 6600.0,
+      "variance_pct": 17.1,
+      "trend":        "Positive"
+    },
+    {
+      "rank":             2,
+      "id":               "...",
+      "account_no":       "32/25/90/0518-01",
+      "meter_number":     "252424079",
+      "customer_name":    "WEST AFRICAN TANNERY",
+      "customer_type":    "MDI",
+      "is_bypass":        false,
+      "feeder":   { "slug": "kn-tam-coc", "name": "COCA COLA" },
+      "district": { "slug": "KN-IDU",     "name": "Kano Industrial" },
+      "state":    { "slug": "KN",          "name": "Kano" },
+
+      "current_kwh":  38100.0,
+      "previous_kwh": 74000.0,
+      "variance_kwh": -35900.0,
+      "variance_pct": -48.5,
+      "trend":        "Declined"
+    }
+  ]
+}
+```
+
+---
+
+### Response field reference
+
+#### Top-level
+| Field | Description |
+|---|---|
+| `count` | Actual number of customers returned (may be less than `top_n` if fewer customers exist) |
+| `current_period` | The period that defines "current" consumption |
+| `previous_period` | The baseline period |
+
+#### Per customer
+| Field | Type | Description |
+|---|---|---|
+| `rank` | integer | 1-based rank within the result set |
+| `current_kwh` | number | Total billed consumption in the current period (kWh) |
+| `previous_kwh` | number | Total billed consumption in the previous period (kWh) |
+| `variance_kwh` | number | `current − previous` — positive = increased, negative = decreased |
+| `variance_pct` | number | `(variance / previous) × 100` — `null` when previous is 0 |
+| `trend` | string | Trend classification label (see below) |
+| `is_bypass` | boolean | Whether this customer is flagged for meter bypass |
+
+#### Trend labels
+
+| Label | Condition | Suggested UI colour |
+|---|---|---|
+| `"Major Positive"` | `variance_pct ≥ 50%` | Green (dark) |
+| `"Positive"` | `10% ≤ variance_pct < 50%` | Green |
+| `"Moderated"` | `−10% < variance_pct < 10%` | Grey / neutral |
+| `"Declined"` | `−50% < variance_pct ≤ −10%` | Amber |
+| `"Major Declined"` | `variance_pct ≤ −50%` | Red |
+| `"New"` | `previous_kwh = 0` | Blue (first reading ever) |
+| `"No Data"` | `current_kwh = 0 and previous_kwh = 0` | Grey (dim) |
+
+> **`is_bypass` + `"Major Declined"` together** is a strong signal of tampering. Consider highlighting this combination with a red badge.
+
+---
+
+### Error responses
+
+```json
+{ "error": "current_period.from_date and current_period.to_date are required." }
+{ "error": "previous_period.from_date and previous_period.to_date are required." }
+{ "error": "Invalid customer_type 'XYZ'. Must be MDI or MDNI." }
+{ "error": "scope_id is required when scope_type is set." }
+{ "error": "Invalid scope_type 'xyz'. Must be one of: feeder, district, state." }
+```
+
+---
+
+## 4. Metric Reference
 
 ### Which metrics work at which entity level?
 
@@ -359,7 +508,7 @@ Compare one entity across different time windows. Classic use case: today vs yes
 
 ---
 
-## 4. Access Control — How It Works
+## 5. Access Control — How It Works
 
 - Users with `super_admin` or `admin` role see **all metrics** from all modules.
 - All other users see only metrics from modules they have been granted access to
@@ -371,7 +520,7 @@ Compare one entity across different time windows. Classic use case: today vs yes
 
 ---
 
-## 5. Complete Examples
+## 6. Complete Examples
 
 ### Today vs Yesterday for a Feeder
 
@@ -425,6 +574,33 @@ POST /api/analytics/compare/
 }
 ```
 
+### Top 20 MDI Customers — January vs December (district-scoped)
+
+```json
+POST /api/analytics/compare/customers/
+{
+  "customer_type":   "MDI",
+  "current_period":  { "from_date": "2026-01-01", "to_date": "2026-01-31" },
+  "previous_period": { "from_date": "2025-12-01", "to_date": "2025-12-31" },
+  "scope_type":      "district",
+  "scope_id":        "KN-IDU",
+  "top_n":           20,
+  "sort_by":         "current"
+}
+```
+
+### Top 10 All Customers by Variance — System-wide
+
+```json
+POST /api/analytics/compare/customers/
+{
+  "current_period":  { "from_date": "2026-01-01", "to_date": "2026-01-31" },
+  "previous_period": { "from_date": "2025-12-01", "to_date": "2025-12-31" },
+  "top_n":           10,
+  "sort_by":         "variance"
+}
+```
+
 ### State-Level Q1 vs Q2 Comparison
 
 ```json
@@ -443,7 +619,7 @@ POST /api/analytics/compare/
 
 ---
 
-## 6. Error Responses
+## 7. Error Responses
 
 ```json
 { "error": "entity_ids must be a non-empty list." }

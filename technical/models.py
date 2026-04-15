@@ -576,9 +576,21 @@ class DataSyncLog(models.Model):
         ('technical_hourly_load',    'Technical — Hourly Load'),
         ('technical_meter_readings', 'Technical — Meter Readings'),
         ('technical_interruptions',  'Technical — Interruptions'),
-        # Future modules slot in here
-        # ('commercial_billing',    'Commercial — Billing'),
-        # ('hr_staff',              'HR — Staff'),
+        # Energy Account
+        ('ea_nbet_rates',                 'EA — NBET Market Bilateral Rates'),
+        ('ea_settings',                   'EA — Settings'),
+        ('ea_grid_meters',                'EA — Grid Meters'),
+        ('ea_monthly_returns',            'EA — Monthly Returns'),
+        ('ea_monthly_readings',           'EA — Monthly Readings'),
+        ('ea_feeder_technical_energy',    'EA — Feeder Technical Energy'),
+        ('ea_tcn_reconciliation',         'EA — TCN Reconciliation'),
+        ('ea_tcn_reconciliation_notes',   'EA — TCN Reconciliation Notes'),
+        ('ea_mo_reconciliation',          'EA — MO Reconciliation'),
+        ('ea_weekly_readings',            'EA — Weekly Readings'),
+        ('ea_station_assignments',        'EA — Station Assignments'),
+        ('ea_meter_check_schedules',      'EA — Meter Check Schedules'),
+        ('ea_meter_check_records',        'EA — Meter Check Records'),
+        ('ea_coupling_log',               'EA — Coupling Log'),
     ]
 
     STATUS_CHOICES = [

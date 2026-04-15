@@ -1,0 +1,29 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c ' *)",
+      "Bash(python -m django --version)",
+      "Bash(pip show *)",
+      "Bash(mysql -h 31.97.56.29 -P 3306 -u datanest_user -pW3kAW3EL9HZ44yqATXEX datanest_kedco_db -e \"SHOW TABLES;\")",
+      "Bash(pip install *)",
+      "Bash(APP_ENV=staging python -m django makemigrations energy_account --settings=raven.settings)",
+      "Bash(APP_ENV=staging python -m django migrate energy_account --settings=raven.settings)",
+      "Bash(mysql -h 31.97.56.29 -P 3306 -u datanest_user -pW3kAW3EL9HZ44yqATXEX datanest_kedco_db -e \"DESCRIBE customer_information;\")",
+      "Bash(python -c \"import MySQLdb; print\\(MySQLdb.__version__\\)\")",
+      "Bash(python manage.py migrate commercial)",
+      "Bash(python manage.py showmigrations commercial)",
+      "Bash(python manage.py sync_commercial_data --table customers)",
+      "Bash(where python *)",
+      "Bash(python -c \"import sys; print\\(sys.executable\\)\")",
+      "Bash(C:\\\\Python314\\\\python.exe -m pip install \"mysqlclient>=2.2.1\")",
+      "Bash(\"/c/Python314/python.exe\" -m pip install \"mysqlclient>=2.2.1\")",
+      "Bash(\"/c/Python314/python.exe\" -c \"import MySQLdb; print\\(MySQLdb.__version__\\)\")",
+      "Bash(\"/c/Python314/python.exe\" -c \"import MySQLdb; print\\(dir\\(MySQLdb\\)\\)\")",
+      "Bash(\"/c/Python314/python.exe\" -c \"import MySQLdb; print\\(MySQLdb.version_info\\)\")",
+      "Bash(\"/c/Python314/python.exe\" -c \"import MySQLdb; print\\(MySQLdb.__file__\\)\")",
+      "Read(//c/Python314/Lib/site-packages/**)",
+      "Bash(/c/Python314/python.exe -c ' *)",
+      "Bash(python manage.py sync_commercial_data)"
+    ]
+  }
+}

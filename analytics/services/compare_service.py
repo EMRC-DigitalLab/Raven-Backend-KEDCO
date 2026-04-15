@@ -30,7 +30,7 @@ from django.utils import timezone
 
 from analytics.compare_metrics import METRICS_REGISTRY, METRIC_MODULE_MAP
 from commercial.models import CommercialCustomer, MeterReading
-from common.models import Band, BusinessDistrict, Feeder, State
+from common.models import Band, BusinessDistrict, Feeder, InjectionSubstation, State
 from financial.models import Opex, SalaryPayment
 from hr.metrics import get_active_staff, get_hr_overview, get_staff_metrics, get_wage_bill
 from technical.constants import TURNAROUND_EXCLUSIONS
@@ -44,6 +44,7 @@ ENTITY_MODELS = {
     'district': BusinessDistrict,
     'feeder':   Feeder,
     'band':     Band,
+    'station':  InjectionSubstation,   # EA entity — billing per station per month
 }
 
 
@@ -52,7 +53,7 @@ ENTITY_MODELS = {
 def get_user_accessible_modules(user) -> set:
     """Return the set of module/section names this user has access to."""
     if user.role in ('super_admin', 'admin'):
-        return {'technical', 'commercial', 'financial', 'hr', 'overview'}
+        return {'technical', 'commercial', 'financial', 'hr', 'overview', 'energy_account', 'grid_lens'}
 
     now = timezone.now()
     accessible: set = set()
@@ -756,6 +757,317 @@ def _fetch_hr(
     return result
 
 
+# ─── Energy Account fetchers ───────────────────────────────────────────────────
+
+def _ea_returns_in_range(entity_type: str, entity_id, from_date: date, to_date: date):
+    """
+    Return an EAMonthlyReturn queryset scoped to the entity and date range.
+
+    EA billing is month+year based. We include every return whose billing
+    period (month, year) starts within [from_date, to_date].
+
+    Entity types supported:
+      station → filter by station_id directly
+      feeder  → filter via EAFeederTechnicalEnergy (feeder FK to returns)
+    """
+    from django.db.models import Q
+    from energy_account.models import EAMonthlyReturn
+
+    # Months whose first day falls within the range
+    base_qs = EAMonthlyReturn.objects.filter(
+        Q(year__gt=from_date.year) | Q(year=from_date.year, month__gte=from_date.month),
+        Q(year__lt=to_date.year)   | Q(year=to_date.year,   month__lte=to_date.month),
+    )
+
+    if entity_type == 'station':
+        return base_qs.filter(station_id=entity_id)
+    elif entity_type == 'feeder':
+        from energy_account.models import EAFeederTechnicalEnergy
+        return_ids = list(
+            EAFeederTechnicalEnergy.objects
+            .filter(feeder_id=entity_id)
+            .values_list('monthly_return_id', flat=True)
+            .distinct()
+        )
+        return base_qs.filter(id__in=return_ids)
+    return EAMonthlyReturn.objects.none()
+
+
+def _fetch_ea(
+    entity_type: str, entity_id,
+    metrics: list, from_date: date, to_date: date,
+) -> dict:
+    """
+    Fetch energy_account module metrics for a single entity over a date range.
+
+    Aggregates across all monthly returns whose billing period falls within
+    [from_date, to_date].
+    """
+    from django.db.models import Avg, Count, Q, Sum
+    from energy_account.models import (
+        EAFeederTechnicalEnergy,
+        EAMonthlyReading,
+        EAMonthlyReturn,
+    )
+
+    result: dict = {}
+    needed = {m for m in metrics if METRIC_MODULE_MAP.get(m) == 'energy_account'}
+    if not needed:
+        return result
+
+    if entity_type not in ('station', 'feeder'):
+        return {m: None for m in needed}
+
+    returns_qs = _ea_returns_in_range(entity_type, entity_id, from_date, to_date)
+    total_returns = returns_qs.count()
+
+    # Lazy-computed aggregates — only queried when their metric is requested
+    _billing_agg    = None
+    _stream_a_agg   = None
+    _stream_b_agg   = None
+    _kv33_mwh       = None
+    _kv11_mwh       = None
+    _quality_agg    = None
+
+    def billing_agg():
+        nonlocal _billing_agg
+        if _billing_agg is None:
+            _billing_agg = returns_qs.aggregate(
+                mwh=Sum('station_billing_mwh'),
+                naira=Sum('station_billing_naira'),
+            )
+        return _billing_agg
+
+    def stream_a_agg():
+        nonlocal _stream_a_agg
+        if _stream_a_agg is None:
+            _stream_a_agg = (
+                EAMonthlyReading.objects
+                .filter(
+                    monthly_return__in=returns_qs,
+                    grid_meter__meter_owner_type='transformer',
+                )
+                .aggregate(mwh=Sum('billing_mwh'))
+            )
+        return _stream_a_agg
+
+    def stream_b_agg():
+        nonlocal _stream_b_agg
+        if _stream_b_agg is None:
+            tech_qs = EAFeederTechnicalEnergy.objects.filter(monthly_return__in=returns_qs)
+            if entity_type == 'feeder':
+                tech_qs = tech_qs.filter(feeder_id=entity_id)
+            _stream_b_agg = tech_qs.aggregate(mwh=Sum('energy_mwh'))
+        return _stream_b_agg
+
+    def kv33():
+        nonlocal _kv33_mwh
+        if _kv33_mwh is None:
+            _kv33_mwh = float(
+                EAFeederTechnicalEnergy.objects
+                .filter(monthly_return__in=returns_qs, feeder_type='33KV')
+                .aggregate(mwh=Sum('energy_mwh'))['mwh'] or 0
+            )
+        return _kv33_mwh
+
+    def kv11():
+        nonlocal _kv11_mwh
+        if _kv11_mwh is None:
+            _kv11_mwh = float(
+                EAFeederTechnicalEnergy.objects
+                .filter(monthly_return__in=returns_qs, feeder_type='11KV')
+                .aggregate(mwh=Sum('energy_mwh'))['mwh'] or 0
+            )
+        return _kv11_mwh
+
+    def quality_agg():
+        nonlocal _quality_agg
+        if _quality_agg is None:
+            tech_qs = EAFeederTechnicalEnergy.objects.filter(monthly_return__in=returns_qs)
+            if entity_type == 'feeder':
+                tech_qs = tech_qs.filter(feeder_id=entity_id)
+            _quality_agg = tech_qs.aggregate(avg_completeness=Avg('data_completeness_pct'))
+        return _quality_agg
+
+    for m in needed:
+        try:
+            if m == 'ea_billing_mwh':
+                result[m] = round(float(billing_agg()['mwh'] or 0), 4)
+
+            elif m == 'ea_stream_a_mwh':
+                result[m] = round(float(stream_a_agg()['mwh'] or 0), 4)
+
+            elif m == 'ea_stream_b_mwh':
+                result[m] = round(float(stream_b_agg()['mwh'] or 0), 4)
+
+            elif m == 'ea_stream_deviation_pct':
+                a = float(stream_a_agg()['mwh'] or 0)
+                b = float(stream_b_agg()['mwh'] or 0)
+                result[m] = round(abs(a - b) / b * 100, 4) if b else None
+
+            elif m == 'ea_kv33_mwh':
+                result[m] = round(kv33(), 4)
+
+            elif m == 'ea_kv11_mwh':
+                result[m] = round(kv11(), 4)
+
+            elif m == 'ea_billing_naira':
+                result[m] = round(float(billing_agg()['naira'] or 0), 2)
+
+            elif m == 'ea_data_completeness':
+                raw = quality_agg()['avg_completeness']
+                result[m] = round(float(raw), 2) if raw else 0.0
+
+            elif m == 'ea_late_rate':
+                if total_returns:
+                    late = returns_qs.filter(is_late=True).count()
+                    result[m] = round(late / total_returns * 100, 2)
+                else:
+                    result[m] = 0.0
+
+            elif m == 'ea_return_status':
+                # Most recent return's status for this entity
+                latest = returns_qs.order_by('-year', '-month').values_list('status', flat=True).first()
+                result[m] = latest
+
+        except Exception as exc:
+            logger.warning("EA metric %s error (%s %s): %s", m, entity_type, entity_id, exc)
+            result[m] = None
+
+    return result
+
+
+# ─── GridLens fetchers ─────────────────────────────────────────────────────────
+
+def _gl_returns_in_range(entity_type: str, entity_id, from_date: date, to_date: date):
+    """
+    Return an EAMonthlyReturn queryset scoped to the entity and date range.
+
+    Extends _ea_returns_in_range to also handle state and district scopes,
+    which GridLens needs for geographic loss comparisons.
+
+    Supported entity types: state | district | station
+    """
+    from django.db.models import Q
+    from energy_account.models import EAMonthlyReturn
+
+    base_qs = EAMonthlyReturn.objects.filter(
+        Q(year__gt=from_date.year) | Q(year=from_date.year, month__gte=from_date.month),
+        Q(year__lt=to_date.year)   | Q(year=to_date.year,   month__lte=to_date.month),
+    )
+
+    if entity_type == 'station':
+        return base_qs.filter(station_id=entity_id)
+    elif entity_type == 'state':
+        return base_qs.filter(station__state_id=entity_id)
+    elif entity_type == 'district':
+        station_ids = list(
+            InjectionSubstation.objects
+            .filter(feeders__business_district_id=entity_id)
+            .values_list('id', flat=True)
+            .distinct()
+        )
+        return base_qs.filter(station_id__in=station_ids)
+
+    return EAMonthlyReturn.objects.none()
+
+
+def _fetch_grid_lens(
+    entity_type: str, entity_id,
+    metrics: list, from_date: date, to_date: date,
+) -> dict:
+    """
+    Fetch grid_lens module metrics for a single entity over a date range.
+
+    Computes loss decomposition values from EA + Stream B:
+      - EA received (EAMonthlyReturn.station_billing_mwh)
+      - Feeder distributed (EAFeederTechnicalEnergy.energy_mwh)
+      - Metering gap and efficiency derived from the two layers above
+
+    Supported entity types: state | district | station
+    The compare engine's _gate_metrics() already enforces this via entity_types
+    in the METRICS_REGISTRY, but we guard here too for safety.
+    """
+    from django.db.models import Avg, Q, Sum
+    from energy_account.models import EAFeederTechnicalEnergy
+
+    result: dict = {}
+    needed = {m for m in metrics if METRIC_MODULE_MAP.get(m) == 'grid_lens'}
+    if not needed:
+        return result
+
+    if entity_type not in ('state', 'district', 'station'):
+        return {m: None for m in needed}
+
+    returns_qs = _gl_returns_in_range(entity_type, entity_id, from_date, to_date)
+
+    # Lazy aggregates — only queried when a metric in `needed` requires them
+    _ea_agg   = None
+    _tech_agg = None
+
+    def ea_agg():
+        nonlocal _ea_agg
+        if _ea_agg is None:
+            _ea_agg = returns_qs.aggregate(total_mwh=Sum('station_billing_mwh'))
+        return _ea_agg
+
+    def tech_agg():
+        nonlocal _tech_agg
+        if _tech_agg is None:
+            _tech_agg = (
+                EAFeederTechnicalEnergy.objects
+                .filter(monthly_return__in=returns_qs)
+                .aggregate(
+                    total_mwh=Sum('energy_mwh'),
+                    kv33=Sum('energy_mwh', filter=Q(feeder_type='33KV')),
+                    kv11=Sum('energy_mwh', filter=Q(feeder_type='11KV')),
+                    avg_comp=Avg('data_completeness_pct'),
+                )
+            )
+        return _tech_agg
+
+    for m in needed:
+        try:
+            ea_mwh = float(ea_agg()['total_mwh'] or 0)
+            b_mwh  = float(tech_agg()['total_mwh'] or 0)
+
+            if m == 'gl_ea_received_mwh':
+                result[m] = round(ea_mwh, 4)
+
+            elif m == 'gl_feeder_distributed_mwh':
+                result[m] = round(b_mwh, 4)
+
+            elif m == 'gl_metering_gap_mwh':
+                result[m] = round(ea_mwh - b_mwh, 4) if ea_mwh else None
+
+            elif m == 'gl_metering_gap_pct':
+                result[m] = round((ea_mwh - b_mwh) / ea_mwh * 100, 4) if ea_mwh else None
+
+            elif m == 'gl_transmission_efficiency':
+                result[m] = round(b_mwh / ea_mwh * 100, 4) if ea_mwh else None
+
+            elif m == 'gl_kv33_mwh':
+                result[m] = round(float(tech_agg()['kv33'] or 0), 4)
+
+            elif m == 'gl_kv11_mwh':
+                result[m] = round(float(tech_agg()['kv11'] or 0), 4)
+
+            elif m == 'gl_tier_gap_pct':
+                kv33 = float(tech_agg()['kv33'] or 0)
+                kv11 = float(tech_agg()['kv11'] or 0)
+                result[m] = round((kv33 - kv11) / kv33 * 100, 4) if kv33 else None
+
+            elif m == 'gl_stream_b_completeness':
+                raw = tech_agg()['avg_comp']
+                result[m] = round(float(raw), 2) if raw else 0.0
+
+        except Exception as exc:
+            logger.warning("GridLens metric %s error (%s %s): %s", m, entity_type, entity_id, exc)
+            result[m] = None
+
+    return result
+
+
 # ─── Core data gate ────────────────────────────────────────────────────────────
 
 def _get_entity_data(
@@ -768,6 +1080,8 @@ def _get_entity_data(
     data.update(_fetch_commercial(entity_type, entity_id, metrics, from_date, to_date))
     data.update(_fetch_financial(entity_type, entity_id, metrics, from_date, to_date))
     data.update(_fetch_hr(entity_type, entity_id, metrics, from_date, to_date))
+    data.update(_fetch_ea(entity_type, entity_id, metrics, from_date, to_date))
+    data.update(_fetch_grid_lens(entity_type, entity_id, metrics, from_date, to_date))
     return data
 
 
@@ -932,4 +1246,208 @@ def compare_periods(
         'metrics_returned': allowed,
         'metrics_denied':   denied,
         'results':          period_results,
+    }
+
+
+# ─── Customer Consumption Comparison ──────────────────────────────────────────
+
+_TREND_THRESHOLDS = [
+    (50.0,  'Major Positive Trend'),
+    (10.0,  'Positive Trend'),
+    (-10.0, 'Moderated Trend'),
+    (-50.0, 'Declined Trend'),
+]
+
+
+def _classify_trend(variance_pct: float | None) -> str:
+    """Map a % change to a trend label."""
+    if variance_pct is None:
+        return 'No Previous Data'
+    for threshold, label in _TREND_THRESHOLDS:
+        if variance_pct >= threshold:
+            return label
+    return 'Major Declined Trend'
+
+
+def _customer_scope_filter(scope_type: str | None, scope_id) -> dict:
+    """
+    Build ORM filter kwargs for CommercialCustomer given a geographic scope.
+    Returns an empty dict if scope_type is None (no scope restriction).
+    """
+    if not scope_type or not scope_id:
+        return {}
+    if scope_type == 'feeder':
+        return {'feeder_id': scope_id}
+    elif scope_type == 'district':
+        return {'district_id': scope_id}
+    elif scope_type == 'state':
+        return {'feeder__business_district__state_id': scope_id}
+    return {}
+
+
+def compare_customers(
+    user,
+    current_from: date,
+    current_to: date,
+    previous_from: date,
+    previous_to: date,
+    customer_type: str = 'all',       # 'MDI' | 'MDNI' | 'all'
+    scope_type: str = None,           # 'feeder' | 'district' | 'state' | None
+    scope_id=None,
+    top_n: int = 50,
+    sort_by: str = 'current_consumption',  # 'current_consumption' | 'variance_pct' | 'decline'
+) -> dict:
+    """
+    Compare top-N customers by consumption across two time periods.
+
+    Returns per-customer: current_consumption_kwh, previous_consumption_kwh,
+    variance_kwh, variance_pct, trend label, and is_bypass flag.
+
+    Access gated: requires 'commercial' module access.
+    """
+    accessible = get_user_accessible_modules(user)
+    if 'commercial' not in accessible:
+        return {'error': 'No access to the commercial module.'}
+
+    # ── Scope resolution ───────────────────────────────────────────────────────
+    scope_filter = _customer_scope_filter(scope_type, scope_id)
+    scope_label  = None
+
+    if scope_type and scope_id:
+        Model = ENTITY_MODELS.get(scope_type)
+        if Model:
+            try:
+                scope_obj   = Model.objects.get(id=scope_id)
+                scope_label = getattr(scope_obj, 'name', str(scope_id))
+            except Model.DoesNotExist:
+                return {'error': f'{scope_type} with id {scope_id!r} not found.'}
+
+    # ── Customer queryset ──────────────────────────────────────────────────────
+    cust_qs = CommercialCustomer.objects.filter(**scope_filter)
+    if customer_type in ('MDI', 'MDNI'):
+        cust_qs = cust_qs.filter(customer_type=customer_type)
+
+    total_in_scope = cust_qs.count()
+
+    # ── Aggregate consumption per customer for both periods ────────────────────
+    # We use a single aggregation per period to avoid N+1 queries.
+    from django.db.models import Q, Sum
+
+    def _period_consumption(from_d: date, to_d: date) -> dict:
+        """Returns {customer_id: kwh_sum} for the given period."""
+        rows = (
+            MeterReading.objects
+            .filter(
+                customer__in=cust_qs,
+                reading_date__range=(from_d, to_d),
+                billed_consumption__isnull=False,
+            )
+            .values('customer_id')
+            .annotate(total_kwh=Sum('billed_consumption'))
+        )
+        return {str(r['customer_id']): float(r['total_kwh'] or 0) for r in rows}
+
+    current_map  = _period_consumption(current_from, current_to)
+    previous_map = _period_consumption(previous_from, previous_to)
+
+    # ── Build per-customer rows ────────────────────────────────────────────────
+    # Only include customers with at least one reading in either period
+    active_ids = set(current_map) | set(previous_map)
+    if not active_ids:
+        return _customer_compare_response(
+            customer_type=customer_type,
+            scope_type=scope_type, scope_label=scope_label,
+            current_from=current_from, current_to=current_to,
+            previous_from=previous_from, previous_to=previous_to,
+            customers=[], total_in_scope=total_in_scope,
+        )
+
+    customer_objs = {
+        str(c.id): c
+        for c in cust_qs.filter(id__in=active_ids).select_related('feeder', 'district')
+    }
+
+    rows = []
+    for cid in active_ids:
+        cust = customer_objs.get(cid)
+        if not cust:
+            continue
+
+        curr_kwh = current_map.get(cid)
+        prev_kwh = previous_map.get(cid)
+
+        # Variance
+        if curr_kwh is not None and prev_kwh is not None and prev_kwh > 0:
+            var_kwh = round(curr_kwh - prev_kwh, 2)
+            var_pct = round((curr_kwh - prev_kwh) / prev_kwh * 100, 2)
+        elif curr_kwh is not None and (prev_kwh is None or prev_kwh == 0):
+            var_kwh = curr_kwh
+            var_pct = None   # no previous baseline
+        else:
+            var_kwh = None
+            var_pct = None
+
+        rows.append({
+            'account_no':              cust.account_no,
+            'customer_name':           cust.customer_name,
+            'customer_type':           cust.customer_type,
+            'feeder':                  cust.feeder.name if cust.feeder else None,
+            'district':                (
+                cust.district.name if cust.district
+                else (cust.feeder.business_district.name if cust.feeder and cust.feeder.business_district else None)
+            ),
+            'is_bypass':               cust.is_bypass,
+            'current_consumption_kwh': round(curr_kwh, 2) if curr_kwh is not None else 0.0,
+            'previous_consumption_kwh': round(prev_kwh, 2) if prev_kwh is not None else 0.0,
+            'variance_kwh':            var_kwh,
+            'variance_pct':            var_pct,
+            'trend':                   _classify_trend(var_pct),
+        })
+
+    # ── Sort ───────────────────────────────────────────────────────────────────
+    if sort_by == 'variance_pct':
+        rows.sort(key=lambda r: (r['variance_pct'] is None, -(r['variance_pct'] or 0)))
+    elif sort_by == 'decline':
+        # Most declined first
+        rows.sort(key=lambda r: (r['variance_pct'] is None, (r['variance_pct'] or 0)))
+    else:
+        # Default: highest current consumption first
+        rows.sort(key=lambda r: -(r['current_consumption_kwh'] or 0))
+
+    top_rows = rows[:top_n]
+
+    return _customer_compare_response(
+        customer_type=customer_type,
+        scope_type=scope_type, scope_label=scope_label,
+        current_from=current_from, current_to=current_to,
+        previous_from=previous_from, previous_to=previous_to,
+        customers=top_rows, total_in_scope=total_in_scope,
+    )
+
+
+def _customer_compare_response(
+    customer_type, scope_type, scope_label,
+    current_from, current_to, previous_from, previous_to,
+    customers, total_in_scope,
+) -> dict:
+    return {
+        'customer_type': customer_type,
+        'scope': {
+            'type':  scope_type,
+            'label': scope_label,
+        },
+        'current_period': {
+            'from_date': current_from.isoformat(),
+            'to_date':   current_to.isoformat(),
+            'days':      (current_to - current_from).days + 1,
+        },
+        'previous_period': {
+            'from_date': previous_from.isoformat(),
+            'to_date':   previous_to.isoformat(),
+            'days':      (previous_to - previous_from).days + 1,
+        },
+        'total_customers_in_scope':    total_in_scope,
+        'customers_returned':          len(customers),
+        'bypass_count':                sum(1 for c in customers if c.get('is_bypass')),
+        'customers':                   customers,
     }

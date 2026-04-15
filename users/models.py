@@ -40,6 +40,8 @@ class Section(models.Model):
         ('technical', 'Technical'),
         ('hr', 'Human Resource'),
         ('regulatory', 'Regulatory'),
+        ('energy_account', 'Energy Account'),
+        ('grid_lens', 'GridLens'),
     )
     
     name = models.CharField(max_length=20, choices=SECTION_CHOICES, unique=True)

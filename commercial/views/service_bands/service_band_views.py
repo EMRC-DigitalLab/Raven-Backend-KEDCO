@@ -53,8 +53,9 @@ def _band_metrics(band, customers_qs, readings_qs, date_range):
     c_qs = customers_qs.filter(feeder__band=band)
     r_qs = readings_qs.filter(customer__feeder__band=band)
 
-    total_mdi  = c_qs.filter(customer_type='MDI').count()
-    total_mdni = c_qs.filter(customer_type='MDNI').count()
+    total_mdi    = c_qs.filter(customer_type='MDI').count()
+    total_mdni   = c_qs.filter(customer_type='MDNI').count()
+    bypass_count = c_qs.filter(is_bypass=True).count()
 
     billing   = calc_billing(r_qs)
     daily_kwh = calc_daily_estimate(billing, date_range)
@@ -93,8 +94,9 @@ def _band_metrics(band, customers_qs, readings_qs, date_range):
         },
         'customers': {
             'total': metric(total_mdi + total_mdni, explanation=f'Total MDI and MDNI customers on Band {band.name} feeders.'),
-            'mdi':   metric(total_mdi,  explanation=f'MDI customers on Band {band.name} feeders.'),
-            'mdni':  metric(total_mdni, explanation=f'MDNI customers on Band {band.name} feeders.'),
+            'mdi':          metric(total_mdi,    explanation=f'MDI customers on Band {band.name} feeders.'),
+            'mdni':         metric(total_mdni,   explanation=f'MDNI customers on Band {band.name} feeders.'),
+            'bypass_count': metric(bypass_count, explanation=f'Customers flagged for meter bypass / tampering on Band {band.name} feeders.'),
         },
         'energy': {
             'energy_consumed_kwh': metric(
