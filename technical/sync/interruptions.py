@@ -10,8 +10,12 @@ Two passes per run:
             has restored_at=NULL, check DataNest to see if it has now been
             resolved and update accordingly.
 
-Fault types are normalised via FaultNormalizer (5-step resolution, never N/A).
-Unrecognised codes are stored raw and logged so admin can review & map them.
+Fault type resolution (per row):
+  - Primary:  fault_types.fault_code  (via LEFT JOIN on fault_type_id)
+  - Fallback: technicalenergyfault.fault_type  (legacy free-text column)
+  - Both NULL/empty → FaultNormalizer returns 'N/A'
+
+Soft-deleted rows (deleted_at IS NOT NULL) are excluded from all queries.
 """
 
 from django.db import connections
@@ -72,6 +76,9 @@ def _pass1_new_faults(stats, feeder_map, window_start, window_end, normaliser) -
     Fetch DataNest faults in the window, create missing Raven records.
     Returns the set of (feeder_id, occurred_at, interruption_type) keys
     seen in DataNest — used by _pass3 to detect stale Raven records.
+
+    Also upgrades any existing N/A record to the correct fault type when the
+    DSO has since filled in fault_type_id in DataNest.
     """
     existing_keys = set(
         FeederInterruption.objects
@@ -88,16 +95,19 @@ def _pass1_new_faults(stats, feeder_map, window_start, window_end, normaliser) -
         while True:
             cursor.execute(
                 """
-                SELECT feeder_id,
-                       time_of_occurrence,
-                       time_of_restoration,
-                       fault_type,
-                       description,
-                       load_interrupted_mw
-                FROM technicalenergyfault
-                WHERE time_of_occurrence >= %s
-                  AND time_of_occurrence <= %s
-                ORDER BY time_of_occurrence ASC
+                SELECT tef.Feeder_id,
+                       tef.time_of_occurrence,
+                       tef.time_of_restoration,
+                       COALESCE(ft.fault_code, tef.fault_type) AS resolved_fault_type,
+                       tef.description,
+                       tef.load_interrupted_mw
+                FROM technicalenergyfault tef
+                LEFT JOIN fault_types ft
+                       ON tef.fault_type_id = ft.fault_type_id
+                WHERE tef.time_of_occurrence >= %s
+                  AND tef.time_of_occurrence <= %s
+                  AND tef.deleted_at IS NULL
+                ORDER BY tef.time_of_occurrence ASC
                 LIMIT %s OFFSET %s
                 """,
                 [window_start, window_end, MYSQL_CHUNK, offset],
@@ -124,11 +134,22 @@ def _pass1_new_faults(stats, feeder_map, window_start, window_end, normaliser) -
                     continue
 
                 key = (feeder.id, occurred_at, fault_type)
+
+                # If a record with this exact key already exists, just update restoration.
                 if key in seen or key in existing_keys:
                     if key in existing_keys and restored_at:
                         _update_restoration(feeder.id, occurred_at, fault_type, restored_at, stats)
                     else:
                         stats['records_skipped'] += 1
+                    seen.add(key)
+                    continue
+
+                # If an N/A record exists for this (feeder, occurred_at) and the correct
+                # fault type is now known, upgrade it instead of creating a duplicate.
+                na_key = (feeder.id, occurred_at, 'N/A')
+                if na_key in existing_keys and fault_type != 'N/A':
+                    _upgrade_fault_type(feeder.id, occurred_at, fault_type, restored_at, stats)
+                    seen.add(key)
                     continue
 
                 seen.add(key)
@@ -185,10 +206,16 @@ def _pass2_resolve_open(stats, _, normaliser):
             placeholders = ','.join(['%s'] * len(batch_slugs))
             cursor.execute(
                 f"""
-                SELECT feeder_id, time_of_occurrence, fault_type, time_of_restoration
-                FROM technicalenergyfault
-                WHERE feeder_id IN ({placeholders})
-                  AND time_of_restoration IS NOT NULL
+                SELECT tef.Feeder_id,
+                       tef.time_of_occurrence,
+                       COALESCE(ft.fault_code, tef.fault_type) AS resolved_fault_type,
+                       tef.time_of_restoration
+                FROM technicalenergyfault tef
+                LEFT JOIN fault_types ft
+                       ON tef.fault_type_id = ft.fault_type_id
+                WHERE tef.Feeder_id IN ({placeholders})
+                  AND tef.time_of_restoration IS NOT NULL
+                  AND tef.deleted_at IS NULL
                 """,
                 batch_slugs,
             )
@@ -262,6 +289,23 @@ def _aware(dt):
     if is_naive(dt):
         return make_aware(dt)
     return dt
+
+
+def _upgrade_fault_type(feeder_id, occurred_at, new_fault_type, restored_at, stats):
+    """
+    Upgrade an existing N/A record to the correct fault type when the DSO has
+    since filled in fault_type_id in DataNest. Also sets restored_at if known.
+    """
+    update_fields = {'interruption_type': new_fault_type}
+    if restored_at:
+        update_fields['restored_at'] = restored_at
+    updated = FeederInterruption.objects.filter(
+        feeder_id=feeder_id,
+        occurred_at=occurred_at,
+        interruption_type='N/A',
+    ).update(**update_fields)
+    if updated:
+        stats['records_updated'] += updated
 
 
 def _update_restoration(feeder_id, occurred_at, fault_type, restored_at, stats):

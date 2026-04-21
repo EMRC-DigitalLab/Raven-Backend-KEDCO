@@ -9,13 +9,12 @@ every view uses parse_ea_period() for the billing period filter.
 import calendar
 from datetime import date
 
-from django.db.models import Avg, Count, Q, Sum
+from django.db.models import Avg, Count, Sum
 
 from energy_account.models import (
     EAFeederTechnicalEnergy,
     EAMOReconciliation,
     EAMonthlyReading,
-    EAMonthlyReturn,
     EATCNReconciliation,
 )
 

@@ -735,7 +735,7 @@ def _station_alignment_payload(station, monthly_return):
         'station': {
             'slug':   station.slug,
             'name':   station.name,
-            'state':  station.state.slug if station.state else None,
+            'state':  {'slug': station.state.slug, 'name': station.state.name} if station.state else None,
             'type':   station.station_type,
             'status': station.status,
         },

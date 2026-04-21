@@ -12,6 +12,7 @@ from analytics.views.summary.technical.overview import (
 from analytics.views.comparisons.compare_engine import (
     available_metrics,
     customer_compare,
+    customer_search,
     run_compare,
 )
 from analytics.views.grid_lens.overview import grid_lens_overview
@@ -30,6 +31,7 @@ urlpatterns = [
     path('compare/', run_compare, name='compare'),
     path('compare/available/', available_metrics, name='compare-available'),
     path('compare/customers/', customer_compare, name='compare-customers'),
+    path('compare/customers/search/', customer_search, name='compare-customers-search'),
 
     # ── GridLens — Loss Decomposition ─────────────────────────────────────────
     path('grid-lens/',                          grid_lens_overview,  name='grid-lens-overview'),

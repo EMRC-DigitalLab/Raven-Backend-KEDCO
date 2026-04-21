@@ -6,8 +6,12 @@ from energy_account.views.districts.all_districts import all_districts, single_d
 from energy_account.views.stations.all_stations import all_stations, single_station
 from energy_account.views.feeders.all_feeders import all_feeders, single_feeder
 from energy_account.views.compare.ea_compare import station_vs_feeders, kv33_vs_kv11, full_alignment
+from energy_account.views.periods.available_periods import available_periods
 
 urlpatterns = [
+    # Available billing periods (call this first to know what year/month to pass)
+    path('periods/', available_periods, name='ea-periods'),
+
     # Overview — full system
     path('overview/', ea_overview, name='ea-overview'),
 
