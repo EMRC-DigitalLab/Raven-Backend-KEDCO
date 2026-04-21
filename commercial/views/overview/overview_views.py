@@ -50,8 +50,9 @@ def commercial_overview(request):
     readings_qs  = MeterReading.objects.filter(**reading_filter_kwargs(request, date_range))
 
     # ── Customer counts ───────────────────────────────────────────────────────
-    total_mdi  = customers_qs.filter(customer_type='MDI').count()
-    total_mdni = customers_qs.filter(customer_type='MDNI').count()
+    total_mdi    = customers_qs.filter(customer_type='MDI').count()
+    total_mdni   = customers_qs.filter(customer_type='MDNI').count()
+    bypass_count = customers_qs.filter(is_bypass=True).count()
 
     # ── Billing (actual from real readings) ───────────────────────────────────
     billing = calc_billing(readings_qs)
@@ -192,6 +193,10 @@ def commercial_overview(request):
             'mdni': metric(
                 total_mdni,
                 explanation='Customers classified as Non Maximum Demand (MDNI).',
+            ),
+            'bypass_count': metric(
+                bypass_count,
+                explanation='Customers flagged for meter bypass / tampering.',
             ),
         },
 

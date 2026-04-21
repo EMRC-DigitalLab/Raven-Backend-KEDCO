@@ -98,45 +98,43 @@ def _parse_state_filter(request):
 def calculate_band_hours_of_supply_sql(feeder_ids, from_date, to_date):
     """
     Calculate average hours of supply per day for feeders in a band.
-    
-    UPDATED Logic:
-    - Only considers ONBOARDED feeders (feeder_ids already filtered)
-    - For single-day queries (especially today): Returns total hours supplied (not daily average)
-    - For multi-day queries: Returns average hours per day
-    - Numerator: Sum of all hours supplied across all ONBOARDED feeders
-    - Denominator: Total ONBOARDED feeders × Days in period
+
+    Denominator = feeders that transmitted ANY data in the period (not all
+    feeder_ids passed in). Feeders with no rows are excluded so sync gaps
+    don't deflate the average.
+
+    Single-day: returns average hours per feeder for that day (max 24)
+    Multi-day:  returns average hours per day per feeder (max 24)
     """
     if not feeder_ids:
         return 0.0
-    
-    total_feeders = len(feeder_ids)
-    
+
     placeholders = ','.join(['%s'] * len(feeder_ids))
-    
-    hours_query = f"""
-        SELECT 
-            COUNT(DISTINCT CONCAT(hl.feeder_id, '-', hl.date, '-', hl.hour)) as total_hours
+
+    query = f"""
+        SELECT
+            COUNT(DISTINCT CASE WHEN hl.load_mw > 0 THEN CONCAT(hl.feeder_id, '-', hl.date, '-', hl.hour) END) AS supply_hours,
+            COUNT(DISTINCT hl.feeder_id) AS feeders_with_data
         FROM technical_hourlyload hl
         WHERE hl.feeder_id IN ({placeholders})
             AND hl.date BETWEEN %s AND %s
-            AND hl.load_mw > 0
     """
-    
+
     with connection.cursor() as cursor:
-        cursor.execute(hours_query, list(feeder_ids) + [from_date, to_date])
-        result = cursor.fetchone()
-        total_hours = result[0] if result and result[0] else 0
-    
-    # ✅ CRITICAL: For single-day queries, return total hours per feeder (not daily average)
-    # For multi-day queries, return daily average
+        cursor.execute(query, list(feeder_ids) + [from_date, to_date])
+        row = cursor.fetchone()
+        total_hours = row[0] if row and row[0] else 0
+        feeders_with_data = row[1] if row and row[1] else 0
+
+    if feeders_with_data == 0:
+        return 0.0
+
     if from_date == to_date:
-        # Single day: Return average hours supplied per feeder
-        avg_hours = total_hours / total_feeders if total_feeders > 0 else 0
+        avg_hours = total_hours / feeders_with_data
     else:
-        # Multi-day: Return average hours per day per feeder
         period_days = (to_date - from_date).days + 1
-        avg_hours = total_hours / (total_feeders * period_days) if (total_feeders * period_days) > 0 else 0
-    
+        avg_hours = total_hours / (feeders_with_data * period_days)
+
     return round(min(float(avg_hours), 24.0), 2)
 
 

@@ -177,9 +177,10 @@ GET /api/commercial/overview/?mode=monthly&year=2026&month=1&type=MDI
   "total_feeders": 50,
 
   "customers": {
-    "total": { "value": 1871, "unit": "", "mode": "actual", "explanation": "..." },
-    "mdi":   { "value": 1157, "unit": "", "mode": "actual", "explanation": "..." },
-    "mdni":  { "value": 714,  "unit": "", "mode": "actual", "explanation": "..." }
+    "total":        { "value": 1871, "unit": "", "mode": "actual", "explanation": "Total registered MDI and MDNI customers." },
+    "mdi":          { "value": 1157, "unit": "", "mode": "actual", "explanation": "Customers classified as Maximum Demand Installation (MDI)." },
+    "mdni":         { "value": 714,  "unit": "", "mode": "actual", "explanation": "Customers classified as Non Maximum Demand (MDNI)." },
+    "bypass_count": { "value": 3,    "unit": "", "mode": "actual", "explanation": "Customers flagged for meter bypass / tampering." }
   },
 
   "energy": {
@@ -321,7 +322,7 @@ GET /api/commercial/states/KN/?mode=monthly&year=2026&month=1
   "states": [
     {
       "state": { "slug": "KN", "name": "Kano" },
-      "customers":   { "total": {...}, "mdi": {...}, "mdni": {...} },
+      "customers":   { "total": {...}, "mdi": {...}, "mdni": {...}, "bypass_count": {...} },
       "energy": {
         "energy_consumed_kwh":        { "value": 33490517.61, "unit": "kWh", "mode": "actual",    "explanation": "..." },
         "actual_billed_kwh":          { "value": 33552126.86, "unit": "kWh", "mode": "actual",    "explanation": "..." },
@@ -406,7 +407,7 @@ GET /api/commercial/districts/KN-IDU/?mode=monthly&year=2026&month=1
   "districts": [
     {
       "district": { "slug": "KN-IDU", "name": "Kano Industrial", "state": "Kano" },
-      "customers":   { "total": {...}, "mdi": {...}, "mdni": {...} },
+      "customers":   { "total": {...}, "mdi": {...}, "mdni": {...}, "bypass_count": {...} },
       "energy":      { "energy_consumed_kwh": {...}, "actual_billed_kwh": {...}, "energy_delivered_kwh": {...}, ... },
       "revenue":     { ... },
       "performance": { "coverage_rate": {...}, "billing_efficiency": {...}, "atc_loss": {...}, ... },
@@ -492,7 +493,7 @@ GET /api/commercial/feeders/kn-tam-coc/?mode=monthly&year=2026&month=1
         "district": { "slug": "KN-IDU", "name": "Kano Industrial" },
         "state":    { "slug": "KN",     "name": "Kano" }
       },
-      "customers":   { "total": {...}, "mdi": {...}, "mdni": {...} },
+      "customers":   { "total": {...}, "mdi": {...}, "mdni": {...}, "bypass_count": {...} },
       "energy": {
         "energy_consumed_kwh":        { "value": 3100000.0, "unit": "kWh", "mode": "actual",    "explanation": "..." },
         "actual_billed_kwh":          { "value": 3095000.0, "unit": "kWh", "mode": "actual",    "explanation": "..." },
@@ -536,7 +537,8 @@ Same as one item above **plus** `period` at the top level **and** a `customers_l
         "customer_name":    "WEST AFRICAN TANNERY",
         "customer_address": "PLOT 53 CHALLAWA INDUSTRIAL ESTATE KANO",
         "phone_number":     "8028647304",
-        "customer_type":    "MDI"
+        "customer_type":    "MDI",
+        "is_bypass":        false
       },
       {
         "id":               124,
@@ -546,7 +548,8 @@ Same as one item above **plus** `period` at the top level **and** a `customers_l
         "customer_name":    "DANGOTE CEMENT PLC",
         "customer_address": "KM 15 BICHI ROAD KANO",
         "phone_number":     "8012345678",
-        "customer_type":    "MDI"
+        "customer_type":    "MDI",
+        "is_bypass":        false
       },
       ...
     ]
@@ -582,7 +585,7 @@ GET /api/commercial/bands/a/?mode=monthly&year=2026&month=1
   "bands": [
     {
       "band": { "slug": "a", "name": "A", "description": "" },
-      "customers":   { "total": {...}, "mdi": {...}, "mdni": {...} },
+      "customers":   { "total": {...}, "mdi": {...}, "mdni": {...}, "bypass_count": {...} },
       "energy": {
         "energy_consumed_kwh":  { "value": 20100000.0, "unit": "kWh", "mode": "actual", "explanation": "..." },
         "actual_billed_kwh":    { "value": 20050000.0, "unit": "kWh", "mode": "actual", "explanation": "..." },
@@ -637,6 +640,7 @@ GET /api/commercial/customers/?search=dangote
       "customer_type":    "MDI",
       "customer_address": "PLOT 53 CHALLAWA INDUSTRIAL ESTATE KANO",
       "phone_number":     "8028647304",
+      "is_bypass":        false,
       "feeder":   { "slug": "kn-tam-coc", "name": "COCA COLA" },
       "district": { "slug": "KN-IDU",     "name": "Kano Industrial" },
       "state":    { "slug": "KN",          "name": "Kano" },
@@ -674,6 +678,7 @@ GET /api/commercial/customers/<id>/?mode=monthly&year=2026&month=1
     "customer_type":    "MDI",
     "customer_address": "PLOT 53 CHALLAWA INDUSTRIAL ESTATE KANO",
     "phone_number":     "8028647304",
+    "is_bypass":        false,
     "feeder":   { "slug": "kn-tam-coc", "name": "COCA COLA" },
     "district": { "slug": "KN-IDU",     "name": "Kano Industrial" },
     "state":    { "slug": "KN",          "name": "Kano" }
@@ -688,23 +693,96 @@ GET /api/commercial/customers/<id>/?mode=monthly&year=2026&month=1
   },
   "readings": [
     {
-      "id":                 "uuid",
-      "reading_date":       "2026-01-28",
-      "reading_type":       "MDI",
-      "previous_reading":   1200.0,
-      "present_reading":    1280.0,
-      "consumption":        80.0,
-      "billed_consumption": 80.0,
-      "tariff_rate":        209.5,
-      "energy_charge":      16760.0,
-      "vat":                1257.0,
-      "total_billed":       18017.0,
-      "has_proof":          true,
-      "recorded_by":        "Musa Aliyu",
-      "observation":        ""
+      "id":                   "uuid",
+      "reading_date":         "2026-01-28",
+      "reading_type":         "MDI",
+      "previous_reading":     1200.0,
+      "present_reading":      1280.0,
+      "consumption":          80.0,
+      "billed_consumption":   80.0,
+      "tariff_rate":          209.5,
+      "energy_charge":        16760.0,
+      "vat":                  1257.0,
+      "total_billed":         18017.0,
+      "has_proof":            true,
+      "recorded_by":          "Musa Aliyu",
+      "observation":          "",
+
+      "gis": {
+        "gis_id":    "GIS-00412",
+        "gis_match": true
+      },
+
+      "ocr": {
+        "ocr_status":          "matched",
+        "ocr_extracted_value": 1280.0,
+        "ocr_confidence":      98.4
+      },
+
+      "audit": {
+        "audit_status": "approved",
+        "audited_by":   "Amina Garba",
+        "audit_note":   "",
+        "audited_at":   "2026-01-29T08:14:22Z"
+      }
     }
   ]
 }
+
+### Reading field reference
+
+#### Core billing fields
+| Field | Type | Description |
+|---|---|---|
+| `id` | UUID | Reading record ID |
+| `reading_date` | `YYYY-MM-DD` | Date reading was submitted |
+| `reading_type` | `"MDI"` / `"MDNI"` | Customer type at time of reading |
+| `previous_reading` | number | Previous meter register value |
+| `present_reading` | number | Current meter register value |
+| `consumption` | number | `present − previous` (raw delta) |
+| `billed_consumption` | number | Consumption used for billing (may differ after corrections) |
+| `tariff_rate` | number | NGN per kWh |
+| `energy_charge` | number | `billed_consumption × tariff_rate` (NGN) |
+| `vat` | number | 7.5% of energy_charge (NGN) |
+| `total_billed` | number | `energy_charge + vat` (NGN) |
+| `has_proof` | boolean | Whether a photo was attached to this reading |
+| `recorded_by` | string | Name of the field officer who submitted the reading |
+| `observation` | string | Free-text note from the field officer |
+
+#### `gis` block — Geographic verification
+| Field | Type | Description |
+|---|---|---|
+| `gis_id` | string \| null | GIS location identifier matched to this reading |
+| `gis_match` | boolean \| null | Whether the reading location matched the GIS record |
+
+#### `ocr` block — Optical Character Recognition verification
+| Field | Type | Values | Description |
+|---|---|---|---|
+| `ocr_status` | string | `pending` `matched` `mismatch` `failed` `skipped` | OCR verification outcome |
+| `ocr_extracted_value` | number \| null | — | Meter value extracted by OCR from the proof photo |
+| `ocr_confidence` | number \| null | 0–100 | OCR confidence score (%) |
+
+**OCR status values:**
+- `pending` — photo uploaded, OCR not yet run
+- `matched` — OCR extracted value agrees with submitted reading
+- `mismatch` — OCR value differs from the reading — warrants human review
+- `failed` — OCR could not read the image
+- `skipped` — no proof photo, OCR not applicable
+
+#### `audit` block — Human audit trail
+| Field | Type | Values | Description |
+|---|---|---|---|
+| `audit_status` | string | `pending` `approved` `rejected` | Audit outcome |
+| `audited_by` | string \| null | — | Name of the auditor who reviewed this reading |
+| `audit_note` | string | — | Reason for approval or rejection |
+| `audited_at` | ISO 8601 \| null | — | Timestamp of the audit action |
+
+**Audit status values:**
+- `pending` — not yet reviewed
+- `approved` — auditor confirmed reading is valid
+- `rejected` — auditor flagged reading as invalid (check `audit_note` for reason)
+
+> **UI tip:** Show `ocr_status === "mismatch"` and `audit_status === "rejected"` with a warning badge on the reading row. These readings may need correction before billing is finalised.
 ```
 
 ---
@@ -862,6 +940,14 @@ It is the raw meter register delta — actual physical consumption recorded on t
 | `mdi_revenue_split` | % | actual | % of actual revenue from MDI customers |
 | `mdni_revenue_split` | % | actual | % of actual revenue from MDNI customers |
 | `arpu` | NGN | actual | Average Revenue Per Customer = total_billed ÷ customers_read |
+
+### `customers` block (all levels)
+| Key | Unit | Mode | Description |
+|---|---|---|---|
+| `total` | — | actual | All registered customers (MDI + MDNI) |
+| `mdi` | — | actual | Maximum Demand Installation customers |
+| `mdni` | — | actual | Non Maximum Demand customers |
+| `bypass_count` | — | actual | Customers flagged for meter bypass / tampering — highlight in UI |
 
 ### `performance` section
 | Key | Unit | Mode | Description |

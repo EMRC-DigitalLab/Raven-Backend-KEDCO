@@ -173,6 +173,18 @@ def customer_detail(request, pk):
             'has_proof':          r.has_proof,
             'recorded_by':        r.recorded_by_name,
             'observation':        r.observation,
+            # GIS verification
+            'gis_id':              r.gis_id or None,
+            'gis_match':           r.gis_match,
+            # OCR
+            'ocr_status':          r.ocr_status,
+            'ocr_extracted_value': float(r.ocr_extracted_value) if r.ocr_extracted_value is not None else None,
+            'ocr_confidence':      float(r.ocr_confidence)      if r.ocr_confidence      is not None else None,
+            # Audit
+            'audit_status': r.audit_status,
+            'audited_by':   r.audited_by or None,
+            'audit_note':   r.audit_note or None,
+            'audited_at':   r.audited_at.isoformat() if r.audited_at else None,
         })
 
     # Billing summary scoped to this customer in the period
@@ -209,6 +221,7 @@ def customer_detail(request, pk):
             'customer_type':    customer.customer_type,
             'customer_address': customer.customer_address,
             'phone_number':     customer.phone_number,
+            'is_bypass':        customer.is_bypass,
             'feeder':           {'slug': feeder.slug, 'name': feeder.name} if feeder else None,
             'district':         {'slug': district.slug, 'name': district.name} if district else None,
             'state':            {'slug': state.slug, 'name': state.name} if state else None,

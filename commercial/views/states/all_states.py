@@ -56,8 +56,9 @@ def _state_metrics(state, customers_qs, readings_qs, date_range):
     c_qs = customers_qs.filter(feeder__business_district__state=state)
     r_qs = readings_qs.filter(customer__feeder__business_district__state=state)
 
-    total_mdi  = c_qs.filter(customer_type='MDI').count()
-    total_mdni = c_qs.filter(customer_type='MDNI').count()
+    total_mdi    = c_qs.filter(customer_type='MDI').count()
+    total_mdni   = c_qs.filter(customer_type='MDNI').count()
+    bypass_count = c_qs.filter(is_bypass=True).count()
 
     billing   = calc_billing(r_qs)
     daily_kwh = calc_daily_estimate(billing, date_range)
@@ -115,8 +116,9 @@ def _state_metrics(state, customers_qs, readings_qs, date_range):
         'state': {'slug': state.slug, 'name': state.name},
         'customers': {
             'total': metric(total_mdi + total_mdni, explanation='Total registered MDI and MDNI customers in this state.'),
-            'mdi':   metric(total_mdi,  explanation='MDI customers in this state.'),
-            'mdni':  metric(total_mdni, explanation='MDNI customers in this state.'),
+            'mdi':          metric(total_mdi,    explanation='MDI customers in this state.'),
+            'mdni':         metric(total_mdni,   explanation='MDNI customers in this state.'),
+            'bypass_count': metric(bypass_count, explanation='Customers flagged for meter bypass / tampering in this state.'),
         },
         'energy': {
             'energy_consumed_kwh': metric(

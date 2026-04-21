@@ -166,6 +166,7 @@ class Command(BaseCommand):
                 district=_district(dist_id),
                 customer_type=raven_ctype,
                 datanest_created_at=make_aware(created_at),
+                # is_bypass: not yet in DataNest — will sync once column is added
             ))
 
         self.stdout.write(f'  Unique customers to upsert: {len(objects)} | Skipped: {skipped}')
@@ -174,7 +175,9 @@ class Command(BaseCommand):
             return
 
         update_fields = ['account_no', 'meter_number', 'customer_name', 'customer_address',
-                         'phone_number', 'feeder_id', 'district_id', 'customer_type', 'datanest_created_at']
+                         'phone_number', 'feeder_id', 'district_id', 'customer_type',
+                         'datanest_created_at']
+        # NOTE: 'is_bypass' will be added here once DataNest adds the column to customer_information
 
         with transaction.atomic():
             CommercialCustomer.objects.bulk_create(
@@ -198,7 +201,10 @@ class Command(BaseCommand):
                 mr.multiplier_factor, mr.billed_consumption, mr.tariff_rate,
                 mr.reading_type, mr.recorded_by, mr.created_at, mr.proof_file_id,
                 mr.gps_latitude, mr.gps_longitude, mr.gps_location_name, mr.observation,
-                COALESCE(u.first_name, '') AS recorded_by_name
+                COALESCE(u.first_name, '') AS recorded_by_name,
+                mr.gis_id, mr.gis_match,
+                mr.ocr_status, mr.ocr_extracted_value, mr.ocr_confidence,
+                mr.audit_status, mr.audited_by, mr.audit_note, mr.audited_at
             FROM meter_readings mr
             LEFT JOIN users u ON mr.recorded_by = u.user_id
             ORDER BY mr.reading_date ASC
@@ -217,7 +223,10 @@ class Command(BaseCommand):
                 ext_id, cust_ext_id, rdate, rtime,
                 prev_r, pres_r, cons, mult, billed_cons,
                 tariff, rtype, rec_by_id, created_at,
-                proof_id, lat, lon, loc_name, obs, rec_by_name
+                proof_id, lat, lon, loc_name, obs, rec_by_name,
+                gis_id, gis_match,
+                ocr_status, ocr_extracted_value, ocr_confidence,
+                audit_status, audited_by, audit_note, audited_at,
             ) = row
 
             if ext_id in seen:
@@ -255,6 +264,18 @@ class Command(BaseCommand):
                 gps_location_name=loc_name or '',
                 observation=obs or '',
                 datanest_created_at=make_aware(created_at),
+                # GIS
+                gis_id=gis_id or '',
+                gis_match=(bool(gis_match) if gis_match is not None else None),
+                # OCR
+                ocr_status=ocr_status or 'pending',
+                ocr_extracted_value=ocr_extracted_value,
+                ocr_confidence=ocr_confidence,
+                # Audit
+                audit_status=audit_status or None,
+                audited_by=audited_by or '',
+                audit_note=audit_note or '',
+                audited_at=make_aware(audited_at) if audited_at else None,
             ))
 
         self.stdout.write(f'  Unique readings to upsert: {len(objects)} | Skipped: {skipped}')
@@ -267,6 +288,12 @@ class Command(BaseCommand):
             'consumption', 'multiplier_factor', 'billed_consumption', 'tariff_rate',
             'reading_type', 'recorded_by_id', 'recorded_by_name', 'has_proof',
             'gps_latitude', 'gps_longitude', 'gps_location_name', 'observation', 'datanest_created_at',
+            # GIS
+            'gis_id', 'gis_match',
+            # OCR
+            'ocr_status', 'ocr_extracted_value', 'ocr_confidence',
+            # Audit
+            'audit_status', 'audited_by', 'audit_note', 'audited_at',
         ]
 
         with transaction.atomic():

@@ -84,8 +84,18 @@ class CommercialCustomer(UUIDModel, models.Model):
     datanest_created_at = models.DateTimeField(null=True, blank=True)
     synced_at        = models.DateTimeField(auto_now=True)
 
+    # Meter tampering / bypass indicator — synced from DataNest
+    is_bypass        = models.BooleanField(
+        default=False,
+        help_text="True if this customer has been flagged for meter bypass / tampering in DataNest"
+    )
+
     class Meta:
         ordering = ['customer_name']
+        indexes = [
+            models.Index(fields=['customer_type']),
+            models.Index(fields=['is_bypass']),
+        ]
 
     def __str__(self):
         return f'{self.customer_name} ({self.account_no}) — {self.customer_type}'
@@ -111,6 +121,20 @@ class MeterReading(UUIDModel, models.Model):
         ('MDNI', 'MDNI'),
     ]
 
+    OCR_STATUS_CHOICES = [
+        ('pending',  'Pending'),
+        ('matched',  'Matched — OCR agrees with submitted reading'),
+        ('mismatch', 'Mismatch — OCR value differs from submission'),
+        ('failed',   'Failed — OCR could not process image'),
+        ('skipped',  'Skipped — no image submitted'),
+    ]
+
+    AUDIT_STATUS_CHOICES = [
+        ('pending',  'Pending Review'),
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected'),
+    ]
+
     external_id        = models.CharField(max_length=36, unique=True)
     customer           = models.ForeignKey(CommercialCustomer, on_delete=models.CASCADE, related_name='readings')
     reading_date       = models.DateField()
@@ -132,6 +156,39 @@ class MeterReading(UUIDModel, models.Model):
     datanest_created_at = models.DateTimeField(null=True, blank=True)
     synced_at          = models.DateTimeField(auto_now=True)
 
+    # ── GIS verification — synced from DataNest ──────────────────────────────
+    gis_id    = models.CharField(
+        max_length=20, blank=True,
+        help_text="GIS point ID linked to this reading location"
+    )
+    gis_match = models.BooleanField(
+        null=True, blank=True,
+        help_text="True if GPS coordinates match the GIS reference point, False if they don't, None if unchecked"
+    )
+
+    # ── OCR verification — synced from DataNest ──────────────────────────────
+    ocr_status          = models.CharField(
+        max_length=10, choices=OCR_STATUS_CHOICES, default='pending',
+        help_text="Result of OCR check against the proof image"
+    )
+    ocr_extracted_value = models.DecimalField(
+        max_digits=12, decimal_places=2, null=True, blank=True,
+        help_text="Meter value read by OCR from the proof photo"
+    )
+    ocr_confidence      = models.DecimalField(
+        max_digits=5, decimal_places=2, null=True, blank=True,
+        help_text="OCR confidence score (0–1). Low confidence = unreliable extraction"
+    )
+
+    # ── Audit workflow — synced from DataNest ────────────────────────────────
+    audit_status = models.CharField(
+        max_length=10, choices=AUDIT_STATUS_CHOICES, null=True, blank=True,
+        help_text="Supervisor audit decision on this reading"
+    )
+    audited_by   = models.CharField(max_length=36, blank=True, help_text="User ID of the auditor")
+    audit_note   = models.TextField(blank=True, help_text="Auditor's note or rejection reason")
+    audited_at   = models.DateTimeField(null=True, blank=True, help_text="When the audit decision was made")
+
     class Meta:
         unique_together = ('customer', 'reading_date')
         ordering = ['-reading_date']
@@ -139,6 +196,8 @@ class MeterReading(UUIDModel, models.Model):
             models.Index(fields=['reading_date']),
             models.Index(fields=['reading_type']),
             models.Index(fields=['customer', 'reading_date']),
+            models.Index(fields=['ocr_status']),
+            models.Index(fields=['audit_status']),
         ]
 
     def __str__(self):

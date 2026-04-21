@@ -16,6 +16,7 @@ from .views.service_bands.service_band_views import technical_service_band_summa
 from .views.states.all_states import all_states_technical_summary
 from .views.states.single_state import state_technical_summary
 from .views.transformers.transformer_views import TransformerAvailabilityOverview
+from .views.sync_status import technical_sync_status
 
 router = DefaultRouter()
 
@@ -46,4 +47,7 @@ urlpatterns = [
 
     # Transformer Metrics
     path('transformers/', TransformerAvailabilityOverview.as_view(), name="transformer-availability"),
+
+    # DataNest Sync Status
+    path('sync-status/', technical_sync_status, name='technical-sync-status'),
 ]

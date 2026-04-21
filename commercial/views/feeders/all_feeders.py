@@ -53,8 +53,9 @@ def _feeder_metrics(feeder, customers_qs, readings_qs, date_range):
     c_qs = customers_qs.filter(feeder=feeder)
     r_qs = readings_qs.filter(customer__feeder=feeder)
 
-    total_mdi  = c_qs.filter(customer_type='MDI').count()
-    total_mdni = c_qs.filter(customer_type='MDNI').count()
+    total_mdi    = c_qs.filter(customer_type='MDI').count()
+    total_mdni   = c_qs.filter(customer_type='MDNI').count()
+    bypass_count = c_qs.filter(is_bypass=True).count()
 
     billing   = calc_billing(r_qs)
     daily_kwh = calc_daily_estimate(billing, date_range)
@@ -102,8 +103,9 @@ def _feeder_metrics(feeder, customers_qs, readings_qs, date_range):
         },
         'customers': {
             'total': metric(total_mdi + total_mdni, explanation='Total registered MDI and MDNI customers on this feeder.'),
-            'mdi':   metric(total_mdi,  explanation='MDI customers on this feeder.'),
-            'mdni':  metric(total_mdni, explanation='MDNI customers on this feeder.'),
+            'mdi':          metric(total_mdi,    explanation='MDI customers on this feeder.'),
+            'mdni':         metric(total_mdni,   explanation='MDNI customers on this feeder.'),
+            'bypass_count': metric(bypass_count, explanation='Customers flagged for meter bypass / tampering on this feeder.'),
         },
         'energy': {
             'energy_consumed_kwh': metric(

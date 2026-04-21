@@ -962,7 +962,7 @@ class DataSyncLogAdmin(admin.ModelAdmin):
     list_display = [
         'data_type', 'status_badge', 'started_at', 'completed_at',
         'records_fetched', 'records_created', 'records_updated',
-        'records_skipped', 'records_errored',
+        'records_skipped', 'records_deleted', 'records_errored',
     ]
     list_filter = ['data_type', 'status']
     readonly_fields = [

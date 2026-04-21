@@ -183,47 +183,58 @@ def calculate_hours_of_supply(feeder_ids, from_date, to_date):
     Single-day  → avg hours per feeder for that day   (max 24)
     Multi-day   → avg hours per day per feeder         (max 24)
 
-    Uses the same SQL used by calculate_hours_of_supply_network() in
-    overview_views — one implementation, many callers.
+    Denominator = feeders that transmitted ANY data in the period (not all
+    onboarded feeders). Feeders with no rows are excluded — a feeder with rows
+    but load_mw=0 throughout is correctly counted with 0 supply hours.
 
     Args:
         feeder_ids : list of feeder UUIDs already scoped by the caller
         from_date  : date
         to_date    : date
 
-    Returns: float (hours, 0–24)
+    Returns:
+        dict:
+            hours        — average hours of supply (float, 0–24)
+            feeder_count — number of feeders with data in the period (int)
     """
     if not feeder_ids:
-        return 0.0
+        return {'hours': 0.0, 'feeder_count': 0}
 
     placeholders = ','.join(['%s'] * len(feeder_ids))
     query = f"""
-        SELECT COUNT(DISTINCT CONCAT(feeder_id, '-', date, '-', hour))
+        SELECT
+            COUNT(DISTINCT CASE WHEN load_mw > 0 THEN CONCAT(feeder_id, '-', date, '-', hour) END) AS supply_hours,
+            COUNT(DISTINCT feeder_id) AS feeders_with_data
         FROM technical_hourlyload
         WHERE date BETWEEN %s AND %s
-          AND load_mw > 0
           AND feeder_id IN ({placeholders})
     """
     with connection.cursor() as cursor:
         cursor.execute(query, [from_date, to_date] + list(feeder_ids))
         row = cursor.fetchone()
         total_hours = row[0] if row and row[0] else 0
+        feeders_with_data = row[1] if row and row[1] else 0
 
-    total_feeders = len(feeder_ids)
+    if feeders_with_data == 0:
+        return {'hours': 0.0, 'feeder_count': 0}
+
     if from_date == to_date:
-        avg = total_hours / total_feeders if total_feeders else 0.0
+        avg = total_hours / feeders_with_data
     else:
         period_days = (to_date - from_date).days + 1
-        avg = total_hours / (total_feeders * period_days) if (total_feeders * period_days) else 0.0
+        avg = total_hours / (feeders_with_data * period_days)
 
-    return round(min(avg, 24.0), 2)
+    return {'hours': round(min(avg, 24.0), 2), 'feeder_count': feeders_with_data}
 
 
 def calculate_average_load(feeder_ids, from_date, to_date):
     """
     Average load per feeder per hour for the given feeder IDs.
 
-    Formula: total_load_mw / (total_feeders × period_hours)
+    Formula: total_load_mw / (feeders_with_data × period_hours)
+    Denominator = feeders that transmitted ANY data in the period (not all
+    onboarded feeders). Feeders with no rows are excluded so they don't
+    deflate the average.
     For current-day periods, period_hours uses actual elapsed hours so the
     average is not diluted by future hours that haven't happened yet.
 
@@ -232,10 +243,14 @@ def calculate_average_load(feeder_ids, from_date, to_date):
         from_date  : date
         to_date    : date
 
-    Returns: float (MW)
+    Returns:
+        dict:
+            avg          — average load per feeder per hour (float, MW)
+            peak         — peak load observed in the period (float, MW)
+            feeder_count — number of feeders with data in the period (int)
     """
     if not feeder_ids:
-        return 0.0
+        return {'avg': 0.0, 'peak': 0.0, 'feeder_count': 0}
 
     today = timezone.now().date()
     now = timezone.now()
@@ -250,11 +265,15 @@ def calculate_average_load(feeder_ids, from_date, to_date):
     result = HourlyLoad.objects.filter(
         feeder_id__in=feeder_ids,
         date__range=(from_date, to_date),
-    ).aggregate(total_load=Sum('load_mw'), peak_load=Max('load_mw'))
+    ).aggregate(
+        total_load=Sum('load_mw'),
+        peak_load=Max('load_mw'),
+        feeders_with_data=Count('feeder_id', distinct=True),
+    )
 
     total_load = float(result['total_load'] or 0)
     peak_load = float(result['peak_load'] or 0)
-    total_feeders = len(feeder_ids)
+    feeders_with_data = int(result['feeders_with_data'] or 0)
 
-    avg = total_load / (total_feeders * period_hours) if (total_feeders * period_hours) else 0.0
-    return round(avg, 2), round(peak_load, 2)
+    avg = total_load / (feeders_with_data * period_hours) if (feeders_with_data * period_hours) else 0.0
+    return {'avg': round(avg, 2), 'peak': round(peak_load, 2), 'feeder_count': feeders_with_data}

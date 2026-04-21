@@ -17,6 +17,9 @@ import pymysql
 from decouple import config
 
 pymysql.install_as_MySQLdb()
+# PyMySQL identifies itself as mysqlclient 1.4.6 which fails Django's >= 2.2.1 check.
+# Patch the version tuple so Django's backend accepts it.
+pymysql.version_info = (2, 2, 1, "final", 0)
 import os
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -62,6 +65,7 @@ INSTALLED_APPS = [
     'reports',
     'notifications',
     'grid_view',
+    'energy_account',
 ]
 
 MIDDLEWARE = [

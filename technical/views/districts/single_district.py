@@ -171,26 +171,19 @@ def calculate_district_hours_of_supply_sql(district_id, from_date, to_date, volt
     Calculate average hours of supply per day for a district.
     Optionally filtered by voltage_level ('11kv' or '33kv').
 
-    For single-day queries: Returns average hours per feeder
-    For multi-day queries: Returns average hours per day per feeder
+    For single-day queries: Returns average hours per feeder for that day (max 24)
+    For multi-day queries: Returns average hours per day per feeder (max 24)
 
-    Returns:
-        float: Average hours per day (capped at 24.0)
+    Denominator = feeders that transmitted ANY data in the period (not all
+    onboarded feeders). Feeders with no rows are excluded so sync gaps don't
+    deflate the average.
     """
     voltage_clause = "AND f.voltage_level = %s" if voltage_level else ""
 
-    feeder_count_query = f"""
-        SELECT COUNT(DISTINCT f.id)
-        FROM common_feeder f
-        WHERE f.business_district_id = %s
-            AND f.is_onboarded = TRUE
-            AND (f.onboarded_at IS NULL OR f.onboarded_at <= %s)
-            {voltage_clause}
-    """
-
-    hours_query = f"""
+    query = f"""
         SELECT
-            COUNT(DISTINCT CONCAT(hl.feeder_id, '-', hl.date, '-', hl.hour)) as total_hours
+            COUNT(DISTINCT CASE WHEN hl.load_mw > 0 THEN CONCAT(hl.feeder_id, '-', hl.date, '-', hl.hour) END) AS supply_hours,
+            COUNT(DISTINCT hl.feeder_id) AS feeders_with_data
         FROM technical_hourlyload hl
         INNER JOIN common_feeder f ON hl.feeder_id = f.id
         WHERE f.business_district_id = %s
@@ -198,29 +191,24 @@ def calculate_district_hours_of_supply_sql(district_id, from_date, to_date, volt
             AND (f.onboarded_at IS NULL OR f.onboarded_at <= %s)
             {voltage_clause}
             AND hl.date BETWEEN %s AND %s
-            AND hl.load_mw > 0
     """
 
-    count_params = [district_id, to_date] + ([voltage_level] if voltage_level else [])
-    hours_params = [district_id, to_date] + ([voltage_level] if voltage_level else []) + [from_date, to_date]
+    params = [district_id, to_date] + ([voltage_level] if voltage_level else []) + [from_date, to_date]
 
     with connection.cursor() as cursor:
-        cursor.execute(feeder_count_query, count_params)
-        result = cursor.fetchone()
-        total_feeders = result[0] if result and result[0] else 0
+        cursor.execute(query, params)
+        row = cursor.fetchone()
+        total_hours = row[0] if row and row[0] else 0
+        feeders_with_data = row[1] if row and row[1] else 0
 
-        if total_feeders == 0:
-            return 0.0
-
-        cursor.execute(hours_query, hours_params)
-        result = cursor.fetchone()
-        total_hours = result[0] if result and result[0] else 0
+    if feeders_with_data == 0:
+        return 0.0
 
     if from_date == to_date:
-        avg_hours = total_hours / total_feeders if total_feeders > 0 else 0
+        avg_hours = total_hours / feeders_with_data
     else:
         period_days = (to_date - from_date).days + 1
-        avg_hours = total_hours / (total_feeders * period_days) if (total_feeders * period_days) > 0 else 0
+        avg_hours = total_hours / (feeders_with_data * period_days)
 
     return round(min(avg_hours, 24.0), 2)
 

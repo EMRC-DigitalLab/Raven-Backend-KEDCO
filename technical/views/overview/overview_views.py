@@ -230,95 +230,98 @@ def calculate_hours_of_supply_network(from_date, to_date, voltage_level=None):
     """
     Calculate average hours of supply per day across ONBOARDED feeders for the period.
     Optionally filtered by voltage_level ('11kv' or '33kv').
+
+    Denominator = feeders that transmitted ANY data in the period (not all
+    onboarded feeders). Feeders with no rows are excluded so sync gaps don't
+    deflate the average. A feeder with rows but load_mw=0 throughout is
+    correctly counted with 0 supply hours.
+
+    Returns:
+        dict:
+            hours        — average hours of supply (float, 0–24)
+            feeder_count — feeders with data in the period (int)
     """
     onboarded_feeders = Feeder.objects.filter(is_onboarded=True).filter(
         Q(onboarded_at__lte=to_date) | Q(onboarded_at__isnull=True)
     )
     if voltage_level:
         onboarded_feeders = onboarded_feeders.filter(voltage_level=voltage_level)
-    
-    total_feeders = onboarded_feeders.count()
-    
-    if total_feeders == 0:
-        return 0.0
-    
-    # Get IDs of these valid feeders
+
     onboarded_feeder_ids = list(onboarded_feeders.values_list('id', flat=True))
-    
+
     if not onboarded_feeder_ids:
-        return 0.0
-    
-    # Get total hours supplied across these feeders only
+        return {'hours': 0.0, 'feeder_count': 0}
+
     placeholders = ','.join(['%s'] * len(onboarded_feeder_ids))
     query = f"""
-        SELECT 
-            COUNT(DISTINCT CONCAT(feeder_id, '-', date, '-', hour)) as total_hours
+        SELECT
+            COUNT(DISTINCT CASE WHEN load_mw > 0 THEN CONCAT(feeder_id, '-', date, '-', hour) END) AS supply_hours,
+            COUNT(DISTINCT feeder_id) AS feeders_with_data
         FROM technical_hourlyload
         WHERE date BETWEEN %s AND %s
-            AND load_mw > 0
             AND feeder_id IN ({placeholders})
     """
-    
+
     params = [from_date, to_date] + onboarded_feeder_ids
-    
+
     with connection.cursor() as cursor:
         cursor.execute(query, params)
-        result = cursor.fetchone()
-        total_hours_all_feeders = result[0] if result and result[0] else 0
-    
-    # ✅ CRITICAL: For single-day queries, return average hours per feeder (not daily average)
-    # For multi-day queries, return average hours per day per feeder
+        row = cursor.fetchone()
+        total_hours_all_feeders = row[0] if row and row[0] else 0
+        feeders_with_data = row[1] if row and row[1] else 0
+
+    if feeders_with_data == 0:
+        return {'hours': 0.0, 'feeder_count': 0}
+
     if from_date == to_date:
-        # Single day: Average hours per feeder
-        avg_hours = total_hours_all_feeders / total_feeders if total_feeders > 0 else 0
+        avg_hours = total_hours_all_feeders / feeders_with_data
     else:
-        # Multi-day: Average hours per day per feeder
         period_days = (to_date - from_date).days + 1
-        avg_hours = total_hours_all_feeders / (total_feeders * period_days) if (total_feeders * period_days) > 0 else 0
-    
-    return round(min(avg_hours, 24.0), 2)
+        avg_hours = total_hours_all_feeders / (feeders_with_data * period_days)
+
+    return {'hours': round(min(avg_hours, 24.0), 2), 'feeder_count': feeders_with_data}
 
 
 def calculate_average_load_network(from_date, to_date, voltage_level=None):
     """
     Calculate average load per feeder per hour across ONBOARDED feeders only.
     Optionally filtered by voltage_level ('11kv' or '33kv').
+
+    Denominator = feeders that transmitted ANY data in the period (not all
+    onboarded feeders). Feeders with no rows are excluded so sync gaps don't
+    deflate the average.
+
+    Returns:
+        dict:
+            avg          — average load per feeder per hour (float, MW)
+            feeder_count — feeders with data in the period (int)
     """
     today = timezone.now().date()
     now = timezone.now()
-    
-    # Calculate period hours
+
     if to_date == today:
         full_days = (to_date - from_date).days
-        current_hour = now.hour
-        current_minute = now.minute
-        hours_elapsed = current_hour + (current_minute / 60.0)
-        period_hours = (full_days * 24) + hours_elapsed
-        if period_hours == 0:
-            period_hours = 1
+        hours_elapsed = now.hour + (now.minute / 60.0)
+        period_hours = (full_days * 24) + hours_elapsed or 1
     else:
         period_days = (to_date - from_date).days + 1
         period_hours = period_days * 24
-    
-    feeder_qs = Feeder.objects.filter(is_onboarded=True)
-    if voltage_level:
-        feeder_qs = feeder_qs.filter(voltage_level=voltage_level)
-    total_feeders = feeder_qs.count()
-    
-    if total_feeders == 0:
-        return 0.0
-    
+
     load_filter = {'date__range': (from_date, to_date), 'feeder__is_onboarded': True}
     if voltage_level:
         load_filter['feeder__voltage_level'] = voltage_level
-    result = HourlyLoad.objects.filter(**load_filter).aggregate(total_load=Sum('load_mw'))
-    
+
+    result = HourlyLoad.objects.filter(**load_filter).aggregate(
+        total_load=Sum('load_mw'),
+        feeders_with_data=Count('feeder_id', distinct=True),
+    )
+
     total_load = float(result['total_load'] or 0)
-    
-    # Average = Total Load / (Total Onboarded Feeders × Total Hours)
-    avg_load = total_load / (total_feeders * period_hours) if (total_feeders * period_hours) > 0 else 0
-    
-    return round(avg_load, 2)
+    feeders_with_data = int(result['feeders_with_data'] or 0)
+
+    avg_load = total_load / (feeders_with_data * period_hours) if (feeders_with_data * period_hours) > 0 else 0
+
+    return {'avg': round(avg_load, 2), 'feeder_count': feeders_with_data}
 
 
 def calculate_average_load_feeder(feeder_id, from_date, to_date):
@@ -1095,112 +1098,116 @@ def get_load_trend_optimized(start_date, end_date, mode, feeder_id=None, target_
             base_filter['feeder__voltage_level'] = voltage_level
     
     if mode == "monthly":
-        # Get average load for each day of the month
+        # Get average load and active feeder count for each day
         daily_loads = HourlyLoad.objects.filter(
             **base_filter
         ).values('date').annotate(
-            avg_load=Avg('load_mw')
+            avg_load=Avg('load_mw'),
+            feeder_count=Count('feeder_id', distinct=True),
         ).order_by('date')
-        
-        # Create a dictionary for quick lookup
+
         loads_dict = {
-            entry["date"]: round(float(entry["avg_load"] or 0), 2)
+            entry["date"]: {
+                "value": round(float(entry["avg_load"] or 0), 2),
+                "feeder_count": int(entry["feeder_count"] or 0),
+            }
             for entry in daily_loads
         }
-        
-        # Generate series with all days up to today (or end_date if in the past)
+
         series = []
         current_date = start_date
         effective_end = min(end_date, today)
-        
+
         while current_date <= effective_end:
+            point = loads_dict.get(current_date, {"value": 0, "feeder_count": 0})
             series.append({
                 "day": current_date.day,
-                "value": loads_dict.get(current_date, 0)
+                "value": point["value"],
+                "feeder_count": point["feeder_count"],
             })
             current_date += timedelta(days=1)
-        
-        # Calculate analytics
+
         analytics = calculate_trend_analytics(series, mode, target_energy)
-        
+
         return {
             "unit": "MW",
             "date": start_date.strftime("%Y-%m"),
             "series": series,
             "analytics": analytics
         }
-    
+
     elif mode == "daily":
-        # Get hourly loads for the specific day
+        # Get hourly loads and active feeder count for each hour
         base_filter['date'] = start_date
         hourly_loads = HourlyLoad.objects.filter(
             **base_filter
         ).values('hour').annotate(
-            avg_load=Avg('load_mw')
+            avg_load=Avg('load_mw'),
+            feeder_count=Count('feeder_id', distinct=True),
         ).order_by('hour')
-        
-        # Create a dictionary for quick lookup
+
         loads_dict = {
-            entry["hour"]: round(float(entry["avg_load"] or 0), 2)
+            entry["hour"]: {
+                "value": round(float(entry["avg_load"] or 0), 2),
+                "feeder_count": int(entry["feeder_count"] or 0),
+            }
             for entry in hourly_loads
         }
-        
-        # Determine max hour to return
+
         if start_date == today:
-            # For current day, only return up to current hour
             max_hour = now.hour
         else:
-            # For past days, return all 24 hours
             max_hour = 23
-        
-        # Generate series with all hours from 0 to max_hour
-        series = [
-            {
+
+        series = []
+        for hour in range(max_hour + 1):
+            point = loads_dict.get(hour, {"value": 0, "feeder_count": 0})
+            series.append({
                 "hour": hour,
-                "value": loads_dict.get(hour, 0)
-            }
-            for hour in range(max_hour + 1)
-        ]
-        
-        # Calculate analytics
+                "value": point["value"],
+                "feeder_count": point["feeder_count"],
+            })
+
         analytics = calculate_trend_analytics(series, mode, target_energy)
-        
+
         return {
             "unit": "MW",
             "date": start_date.isoformat(),
             "series": series,
             "analytics": analytics
         }
-    
+
     else:  # custom range
-        # For custom ranges, show daily averages
         daily_loads = HourlyLoad.objects.filter(
             **base_filter
         ).values('date').annotate(
-            avg_load=Avg('load_mw')
+            avg_load=Avg('load_mw'),
+            feeder_count=Count('feeder_id', distinct=True),
         ).order_by('date')
-        
-        # Create a dictionary for quick lookup
+
         loads_dict = {
-            entry["date"]: round(float(entry["avg_load"] or 0), 2)
+            entry["date"]: {
+                "value": round(float(entry["avg_load"] or 0), 2),
+                "feeder_count": int(entry["feeder_count"] or 0),
+            }
             for entry in daily_loads
         }
-        
-        # Generate series with all days up to today (or end_date if in the past)
+
         series = []
         current_date = start_date
         effective_end = min(end_date, today)
-        
+
         while current_date <= effective_end:
+            point = loads_dict.get(current_date, {"value": 0, "feeder_count": 0})
             series.append({
                 "date": current_date.isoformat(),
-                "value": loads_dict.get(current_date, 0)
+                "value": point["value"],
+                "feeder_count": point["feeder_count"],
             })
             current_date += timedelta(days=1)
-        
-        # Calculate analytics
+
         analytics = calculate_trend_analytics(series, mode, target_energy)
-        
+
         return {
             "unit": "MW",
             "date": f"{start_date.isoformat()} to {end_date.isoformat()}",
@@ -1499,9 +1506,13 @@ def technical_overview_view(request):
         load_prev = calculate_average_load_feeder(feeder.id, prev_start, prev_end)
         station_load_now = load_now
         station_load_prev = load_prev
+        load_feeder_count = 1
     else:
-        load_now = calculate_average_load_network(start_date, end_date, voltage_level=voltage_level)
-        load_prev = calculate_average_load_network(prev_start, prev_end, voltage_level=voltage_level)
+        load_now_result = calculate_average_load_network(start_date, end_date, voltage_level=voltage_level)
+        load_prev_result = calculate_average_load_network(prev_start, prev_end, voltage_level=voltage_level)
+        load_now = load_now_result['avg']
+        load_prev = load_prev_result['avg']
+        load_feeder_count = load_now_result['feeder_count']
         station_load_now = calculate_average_station_load_network(start_date, end_date, voltage_level=voltage_level)
         station_load_prev = calculate_average_station_load_network(prev_start, prev_end, voltage_level=voltage_level)
     
@@ -1529,11 +1540,17 @@ def technical_overview_view(request):
         # For single feeder, use feeder-specific calculation
         supply_hours = get_metric_with_history(
             lambda s, e: calculate_hours_of_supply_feeder(feeder.id, s, e),
-            start_date, 
-            end_date, 
+            start_date,
+            end_date,
             period_days
         )
-        
+        supply_hours['feeder_count'] = 1
+        supply_hours['methodology'] = (
+            "Average hours of supply for this feeder per day in the selected period. "
+            "Calculated as total hours where load_mw > 0 divided by the number of days in the period. "
+            "A day with no supply counts as 0 hours, not a skipped day."
+        )
+
         # Interruption duration (includes all types) - FOR SINGLE FEEDER
         interruption_duration = get_metric_with_history(
             lambda s, e: calculate_interruption_duration_feeder(feeder.id, s, e),
@@ -1561,12 +1578,21 @@ def technical_overview_view(request):
     else:
         # For all ONBOARDED feeders, use network-wide calculation (voltage-filtered)
         supply_hours = get_metric_with_history(
-            lambda s, e: calculate_hours_of_supply_network(s, e, voltage_level=voltage_level),
-            start_date, 
-            end_date, 
+            lambda s, e: calculate_hours_of_supply_network(s, e, voltage_level=voltage_level)['hours'],
+            start_date,
+            end_date,
             period_days
         )
-        
+        supply_hours['feeder_count'] = calculate_hours_of_supply_network(
+            start_date, end_date, voltage_level=voltage_level
+        )['feeder_count']
+        supply_hours['methodology'] = (
+            "Average hours of supply per feeder per day across the network for the selected period. "
+            "Only feeders that transmitted at least one hourly reading are counted in the denominator — "
+            "feeders with no records are excluded to avoid sync gaps deflating the result. "
+            "A feeder that transmitted data but had zero load throughout still counts as 0 hours of supply."
+        )
+
         interruption_duration = get_metric_with_history(
             lambda s, e: calculate_interruption_duration_network(s, e, voltage_level=voltage_level),
             start_date, end_date, period_days
@@ -1661,7 +1687,14 @@ def technical_overview_view(request):
             },
             "average_load": {
                 "value": round(load_now, 2),
-                "delta": delta(load_now, load_prev)
+                "delta": delta(load_now, load_prev),
+                "feeder_count": load_feeder_count,
+                "methodology": (
+                    "Average load (MW) per feeder per hour. "
+                    "Only feeders that transmitted at least one hourly reading in the selected period are counted. "
+                    "Total load across all active feeders is divided by the number of active feeders and the total hours in the period. "
+                    f"feeder_count ({load_feeder_count}) reflects how many feeders had data — feeders with no records are excluded to avoid deflating the result."
+                ),
             },
             "average_station_load": {
                 "value": round(station_load_now, 2),
