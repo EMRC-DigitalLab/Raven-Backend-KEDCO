@@ -23,7 +23,24 @@
       "Bash(\"/c/Python314/python.exe\" -c \"import MySQLdb; print\\(MySQLdb.__file__\\)\")",
       "Read(//c/Python314/Lib/site-packages/**)",
       "Bash(/c/Python314/python.exe -c ' *)",
-      "Bash(python manage.py sync_commercial_data)"
+      "Bash(python manage.py sync_commercial_data)",
+      "Read(//c/Users/TriumphAdeniran/.claude/projects/c--Users-TriumphAdeniran-OneDrive---Market-and-Regulatory-Consultants-Ltd-Desktop-Raven-Code-Base-Raven-Backend-KEDCO/**)",
+      "Bash(python3 -c ' *)",
+      "Bash(py -3 -c ' *)",
+      "Bash(ls \"c:\\\\Users\\\\TriumphAdeniran\\\\OneDrive - Market and Regulatory Consultants Ltd\\\\Desktop\\\\Raven Code Base\\\\Raven-Backend-KEDCO\"/*.md)",
+      "Bash(DJANGO_ENV=staging python manage.py grant_emrc_access --settings=raven.settings)",
+      "Bash(python manage.py diagnose_datanest_faults)",
+      "Bash(python manage.py backfill_na_fault_types --dry-run --verbose)",
+      "Bash(python manage.py backfill_na_fault_types --dry-run)",
+      "Bash(python manage.py backfill_na_fault_types --dry-run --delete-stale)",
+      "Bash(python manage.py backfill_na_fault_types --delete-stale)",
+      "Bash(APP_ENV=staging python manage.py backfill_na_fault_types --dry-run --delete-stale)",
+      "Bash(python manage.py resync_interruptions)",
+      "Bash(python manage.py resync_interruptions --start 2025-08-01 --end 2026-04-21)",
+      "Bash(python manage.py shell -c ' *)",
+      "Bash(python manage.py import_fault_data --start-date 2026-04-01 --end-date 2026-04-21)",
+      "Bash(python manage.py resync_interruptions --start 2026-04-01 --end 2026-04-21 --skip-delete)",
+      "Bash(APP_ENV=production python manage.py resync_interruptions --start 2026-04-01 --end 2026-04-21 --skip-delete)"
     ]
   }
 }

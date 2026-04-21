@@ -194,9 +194,14 @@ def all_feeders(request):
                 'name':          feeder.name,
                 'voltage_level': feeder.voltage_level,
                 'feeder_type':   fte.feeder_type,
-                'station': fte.monthly_return.station.slug,
-                'state':   fte.monthly_return.station.state.slug
-                           if fte.monthly_return.station.state else None,
+                'station': {
+                    'slug': fte.monthly_return.station.slug,
+                    'name': fte.monthly_return.station.name,
+                },
+                'state': {
+                    'slug': fte.monthly_return.station.state.slug,
+                    'name': fte.monthly_return.station.state.name,
+                } if fte.monthly_return.station.state else None,
             },
             'return_status': fte.monthly_return.status,
 
@@ -361,9 +366,12 @@ def single_feeder(request, slug):
             'station': {
                 'slug':  station.slug,
                 'name':  station.name,
-                'state': station.state.slug if station.state else None,
+                'state': {'slug': station.state.slug, 'name': station.state.name} if station.state else None,
             } if station else None,
-            'business_district': feeder.business_district.slug if feeder.business_district else None,
+            'business_district': {
+                'slug': feeder.business_district.slug,
+                'name': feeder.business_district.name,
+            } if feeder.business_district else None,
             'status':  feeder.status,
         },
         'return_status': fm['return_status'],

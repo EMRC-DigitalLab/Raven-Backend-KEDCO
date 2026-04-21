@@ -1282,6 +1282,8 @@ def _customer_scope_filter(scope_type: str | None, scope_id) -> dict:
         return {'district_id': scope_id}
     elif scope_type == 'state':
         return {'feeder__business_district__state_id': scope_id}
+    elif scope_type == 'station':
+        return {'feeder__substation_id': scope_id}
     return {}
 
 
@@ -1292,8 +1294,10 @@ def compare_customers(
     previous_from: date,
     previous_to: date,
     customer_type: str = 'all',       # 'MDI' | 'MDNI' | 'all'
-    scope_type: str = None,           # 'feeder' | 'district' | 'state' | None
+    scope_type: str = None,           # 'feeder' | 'district' | 'state' | 'station' | None
     scope_id=None,
+    customer_ids=None,                # list of UUIDs — compare specific customers from picker
+    select_all: bool = False,         # True = return all in scope, no cap
     top_n: int = 50,
     sort_by: str = 'current_consumption',  # 'current_consumption' | 'variance_pct' | 'decline'
 ) -> dict:
@@ -1326,6 +1330,10 @@ def compare_customers(
     cust_qs = CommercialCustomer.objects.filter(**scope_filter)
     if customer_type in ('MDI', 'MDNI'):
         cust_qs = cust_qs.filter(customer_type=customer_type)
+
+    # If specific customers were selected from the picker, restrict to those only
+    if customer_ids and isinstance(customer_ids, list):
+        cust_qs = cust_qs.filter(id__in=customer_ids)
 
     total_in_scope = cust_qs.count()
 
@@ -1414,7 +1422,11 @@ def compare_customers(
         # Default: highest current consumption first
         rows.sort(key=lambda r: -(r['current_consumption_kwh'] or 0))
 
-    top_rows = rows[:top_n]
+    # select_all or specific customer_ids → no cap; otherwise apply top_n
+    if select_all or customer_ids:
+        top_rows = rows
+    else:
+        top_rows = rows[:top_n]
 
     return _customer_compare_response(
         customer_type=customer_type,

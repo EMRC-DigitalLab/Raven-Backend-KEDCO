@@ -66,7 +66,7 @@ def _district_payload(district, month, year, period):
             'station': {
                 'slug':  station.slug,
                 'name':  station.name,
-                'state': station.state.slug if station.state else None,
+                'state': {'slug': station.state.slug, 'name': station.state.name} if station.state else None,
             },
             'ea_received_mwh':         metric(round(s_ea['total_mwh'], 4),       unit='MWh'),
             'feeder_distributed_mwh':  metric(round(s_stream_b['total_mwh'], 4), unit='MWh'),
@@ -84,7 +84,7 @@ def _district_payload(district, month, year, period):
         'district': {
             'slug':  district.slug,
             'name':  district.name,
-            'state': district.state.slug if district.state else None,
+            'state': {'slug': district.state.slug, 'name': district.state.name} if district.state else None,
         },
         **layers,
         'breakdown': {'by_station': station_breakdown},
@@ -126,7 +126,7 @@ def all_districts(request):
             'district': {
                 'slug':  district.slug,
                 'name':  district.name,
-                'state': district.state.slug if district.state else None,
+                'state': {'slug': district.state.slug, 'name': district.state.name} if district.state else None,
             },
             'ea_received_mwh':         metric(round(ea['total_mwh'], 4),       unit='MWh'),
             'feeder_distributed_mwh':  metric(round(stream_b['total_mwh'], 4), unit='MWh'),

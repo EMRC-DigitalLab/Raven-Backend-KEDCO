@@ -71,7 +71,7 @@ def _district_payload(district, returns_qs, period):
             'station': {
                 'slug':  station.slug,
                 'name':  station.name,
-                'state': station.state.slug if station.state else None,
+                'state': {'slug': station.state.slug, 'name': station.state.name} if station.state else None,
             },
             'total_billing_mwh':   float(s_agg['mwh']   or 0),
             'total_billing_naira': float(s_agg['naira'] or 0),
@@ -91,7 +91,7 @@ def _district_payload(district, returns_qs, period):
         'district': {
             'slug':  district.slug,
             'name':  district.name,
-            'state': district.state.slug if district.state else None,
+            'state': {'slug': district.state.slug, 'name': district.state.name} if district.state else None,
         },
         'scope': {
             'total_stations': metric(

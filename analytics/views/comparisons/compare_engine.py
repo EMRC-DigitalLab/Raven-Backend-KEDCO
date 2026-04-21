@@ -55,6 +55,7 @@ The frontend should read `metrics_denied` and grey-out / hide those fields.
 import logging
 from datetime import datetime
 
+from django.db.models import Q
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
@@ -67,6 +68,7 @@ from analytics.services.compare_service import (
     compare_periods,
     get_user_accessible_modules,
 )
+from commercial.models import CommercialCustomer
 
 VALID_ENTITY_TYPES  = ('state', 'district', 'feeder', 'band', 'station')
 VALID_GRANULARITIES = ('daily', 'weekly', 'monthly', 'yearly', 'custom')
@@ -234,10 +236,88 @@ def _handle_periods(user, entity_type, metrics, feeder_type, body):
     return Response(result)
 
 
+# ─── Customer search (dropdown picker) ────────────────────────────────────────
+
+@api_view(['GET'])
+def customer_search(request):
+    """
+    GET /api/analytics/compare/customers/search/
+
+    Search MDI/MDNI customers for the comparison dropdown picker.
+    Supports multi-select — returns enough data for the frontend to build the list.
+
+    Query params:
+        q            : str  — search by customer_name or account_no (min 1 char)
+        customer_type: str  — MDI | MDNI | all (default: all)
+        scope_type   : str  — feeder | district | state | station (optional)
+        scope_id     : uuid — required if scope_type is set
+        limit        : int  — max results to return (default 50, max 200)
+    """
+    accessible = get_user_accessible_modules(request.user)
+    if 'commercial' not in accessible:
+        return Response({'error': 'No access to the commercial module.'}, status=403)
+
+    q             = request.GET.get('q', '').strip()
+    customer_type = request.GET.get('customer_type', 'all')
+    scope_type    = request.GET.get('scope_type', '').strip() or None
+    scope_id      = request.GET.get('scope_id', '').strip()   or None
+
+    try:
+        limit = min(int(request.GET.get('limit', 50)), 200)
+    except (TypeError, ValueError):
+        limit = 50
+
+    qs = CommercialCustomer.objects.select_related('feeder', 'district').order_by('customer_name')
+
+    if customer_type in ('MDI', 'MDNI'):
+        qs = qs.filter(customer_type=customer_type)
+
+    if scope_type and scope_id:
+        if scope_type not in VALID_SCOPE_TYPES:
+            return Response(
+                {'error': f"scope_type must be one of: {', '.join(VALID_SCOPE_TYPES)}"},
+                status=400,
+            )
+        scope_filters = {
+            'feeder':   {'feeder_id': scope_id},
+            'district': {'district_id': scope_id},
+            'state':    {'feeder__business_district__state_id': scope_id},
+            'station':  {'feeder__substation_id': scope_id},
+        }
+        qs = qs.filter(**scope_filters[scope_type])
+
+    if q:
+        qs = qs.filter(
+            Q(customer_name__icontains=q) | Q(account_no__icontains=q)
+        )
+
+    customers = [
+        {
+            'id':            str(c.id),
+            'account_no':    c.account_no,
+            'customer_name': c.customer_name,
+            'customer_type': c.customer_type,
+            'feeder':        c.feeder.name if c.feeder else None,
+            'district':      (
+                c.district.name if c.district
+                else (c.feeder.business_district.name if c.feeder and c.feeder.business_district else None)
+            ),
+            'is_bypass':     c.is_bypass,
+        }
+        for c in qs[:limit]
+    ]
+
+    return Response({
+        'count':     len(customers),
+        'limit':     limit,
+        'customers': customers,
+    })
+
+
 # ─── Customer consumption comparison ──────────────────────────────────────────
 
 VALID_CUSTOMER_TYPES = ('MDI', 'MDNI', 'all')
-VALID_SCOPE_TYPES    = ('feeder', 'district', 'state')
+VALID_SCOPE_TYPES    = ('feeder', 'district', 'state', 'station')
 VALID_SORT_BY        = ('current_consumption', 'variance_pct', 'decline')
 
 
@@ -253,13 +333,15 @@ def customer_compare(request):
         "customer_type":    "MDI",               // "MDI" | "MDNI" | "all"
         "current_period":   {"from_date": "2025-01-13", "to_date": "2025-01-26"},
         "previous_period":  {"from_date": "2024-12-01", "to_date": "2024-12-31"},
-        "scope_type":       "feeder",             // optional — "feeder" | "district" | "state"
+        "scope_type":       "feeder",             // optional — "feeder" | "district" | "state" | "station"
         "scope_id":         "<uuid>",             // optional — required if scope_type is set
-        "top_n":            50,                   // optional, default 50 (max 200)
+        "customer_ids":     ["<uuid>", "<uuid>"], // optional — compare specific customers (from search picker)
+        "select_all":       false,                // optional — true = return every customer in scope, no cap
+        "top_n":            50,                   // optional, default 50, max 200 (ignored if customer_ids or select_all)
         "sort_by":          "current_consumption" // optional
     }
 
-    Returns top-N customers with:
+    Returns customers with:
       current_consumption_kwh, previous_consumption_kwh,
       variance_kwh, variance_pct, trend label, is_bypass flag.
     """
@@ -303,6 +385,9 @@ def customer_compare(request):
         return Response({'error': 'scope_id is required when scope_type is provided.'}, status=400)
 
     # ── Options ────────────────────────────────────────────────────────────────
+    customer_ids = body.get('customer_ids') or None   # list of UUIDs from picker
+    select_all   = bool(body.get('select_all', False))
+
     try:
         top_n = min(int(body.get('top_n', 50)), 200)
     except (TypeError, ValueError):
@@ -322,6 +407,8 @@ def customer_compare(request):
             customer_type = customer_type,
             scope_type    = scope_type,
             scope_id      = scope_id,
+            customer_ids  = customer_ids,
+            select_all    = select_all,
             top_n         = top_n,
             sort_by       = sort_by,
         )

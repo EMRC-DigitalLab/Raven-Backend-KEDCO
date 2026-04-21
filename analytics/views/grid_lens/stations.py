@@ -91,7 +91,7 @@ def _station_payload(station, month, year, period):
         'station': {
             'slug':   station.slug,
             'name':   station.name,
-            'state':  station.state.slug if station.state else None,
+            'state':  {'slug': station.state.slug, 'name': station.state.name} if station.state else None,
             'type':   station.station_type,
             'status': station.status,
         },
@@ -141,7 +141,7 @@ def all_stations(request):
             'station': {
                 'slug':  station.slug,
                 'name':  station.name,
-                'state': station.state.slug if station.state else None,
+                'state': {'slug': station.state.slug, 'name': station.state.name} if station.state else None,
                 'type':  station.station_type,
             },
             'ea_received_mwh':         metric(round(ea['total_mwh'], 4),       unit='MWh'),

@@ -195,10 +195,10 @@ def _station_payload(station, month, year, period):
             'label': period['label'],
         },
         'station': {
-            'slug':  station.slug,
-            'name':  station.name,
-            'state': station.state.slug if station.state else None,
-            'type':  station.station_type,
+            'slug':   station.slug,
+            'name':   station.name,
+            'state':  {'slug': station.state.slug, 'name': station.state.name} if station.state else None,
+            'type':   station.station_type,
             'status': station.status,
         },
         'return_status': monthly_return.status if monthly_return else None,
@@ -335,7 +335,7 @@ def all_stations(request):
             'station': {
                 'slug':  station.slug,
                 'name':  station.name,
-                'state': station.state.slug if station.state else None,
+                'state': {'slug': station.state.slug, 'name': station.state.name} if station.state else None,
                 'type':  station.station_type,
             },
             'return_status': r.get('status'),
