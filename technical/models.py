@@ -241,6 +241,7 @@ class FeederInterruption(UUIDModel, models.Model):
         ("OFF", "Switch Off/Feeder Off (OFF)"),
         ("S/C", "Short Circuit (S/C)"),
         ("132KV E/F", "132 kV Earth Fault (132KV E/F)"),
+        ("L/F", "Line Fault (L/F)"),
         ("132KV L/F", "132 kV Line Fault (132KV L/F)"),
         ("330KV L/S", "330 kV Line Shelving/Load Shedding (330KV L/S)"),
         ("132KV CB/F", "132 kV Circuit Breaker Failure (132KV CB/F)"),
