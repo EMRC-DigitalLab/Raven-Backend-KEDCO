@@ -34,7 +34,8 @@ _KNOWN_ALIASES = {
     'PERMIT':      'permit',
     # String differences
     'ON':          'O/N',
-    'L/F':         '132KV L/F',
+    # L/F is DisCo Line Fault — do NOT remap to 132KV L/F (TCN fault)
+    # 'L/F':       '132KV L/F',  ← removed: was incorrectly upgrading DisCo faults to TCN
     'OC & E/F':    'O/C & E/F',
     '132 KV E/F':  '132KV E/F',
     '132 KV L/F':  '132KV L/F',
@@ -51,7 +52,7 @@ _KNOWN_ALIASES = {
 # All valid Raven codes from FeederInterruption.INTERRUPTION_TYPES
 _RAVEN_CODES = {
     'E/F', 'O/C', 'O/C & E/F', 'NO RI', 'N/A', 'L/S', 'O/S', 'T/F',
-    'B/F', 'O/N', 'O/E', 'P/O', 'O/F', 'P/M', 'O', 'T/S', 'L/S GS',
+    'B/F', 'O/N', 'O/E', 'P/O', 'O/F', 'P/M', 'O', 'T/S', 'L/S GS', 'L/F',
     'MTNC', 'OC & E/F', 'EM/D', '330KV L/F', 'OFF', 'S/C', '132KV E/F',
     '132KV L/F', '330KV L/S', '132KV CB/F', 'D/C', 'MTCE', 'IN O/C',
     'T/LS', '132KV MTCE', 'LIM', 'tcn', 'fault', 'permit',

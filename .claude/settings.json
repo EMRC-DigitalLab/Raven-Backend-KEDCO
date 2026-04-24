@@ -40,7 +40,18 @@
       "Bash(python manage.py shell -c ' *)",
       "Bash(python manage.py import_fault_data --start-date 2026-04-01 --end-date 2026-04-21)",
       "Bash(python manage.py resync_interruptions --start 2026-04-01 --end 2026-04-21 --skip-delete)",
-      "Bash(APP_ENV=production python manage.py resync_interruptions --start 2026-04-01 --end 2026-04-21 --skip-delete)"
+      "Bash(APP_ENV=production python manage.py resync_interruptions --start 2026-04-01 --end 2026-04-21 --skip-delete)",
+      "Bash(APP_ENV=staging python manage.py resync_ea_month --month 3 --year 2026)",
+      "Bash(grep -v \"Playwright\\\\|WeasyPrint\\\\|RuntimeWarning\\\\|warnings.warn\\\\|^\\\\s*$\")",
+      "Bash(python manage.py resync_interruptions --start 2026-01-01 --end 2026-01-31)",
+      "Bash(python manage.py resync_interruptions --start 2026-03-01 --end 2026-03-31)",
+      "Bash(python manage.py resync_interruptions --start 2026-04-01 --end 2026-04-24)",
+      "Bash(APP_ENV=production python manage.py resync_interruptions --start 2026-01-01 --end 2026-01-31)",
+      "Bash(APP_ENV=production python manage.py resync_interruptions --start 2026-02-01 --end 2026-02-28)",
+      "Bash(APP_ENV=production python manage.py resync_interruptions --start 2026-03-01 --end 2026-03-31)",
+      "Bash(APP_ENV=production python manage.py resync_interruptions --start 2026-04-01 --end 2026-04-24)",
+      "Bash(APP_ENV=production python manage.py resync_interruptions --start 2026-03-01 --end 2026-03-15)",
+      "Bash(APP_ENV=production python manage.py resync_interruptions --start 2026-03-16 --end 2026-03-31)"
     ]
   }
 }
