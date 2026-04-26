@@ -108,7 +108,7 @@ def commercial_sync_status(request):
     # ── Tariff Rates ──────────────────────────────────────────────────────────
     try:
         dn_tariffs = _datanest_count(
-            "SELECT COUNT(*) FROM tariff_rates WHERE customer_type IN ('MDI','MDNI')", []
+            "SELECT COUNT(*) FROM tariff_rates WHERE customer_type IN ('MD1','Non-MD')", []
         )
         rv_tariffs = TariffRate.objects.count()
         sources['tariff_rates'] = _reconcile_entry(
