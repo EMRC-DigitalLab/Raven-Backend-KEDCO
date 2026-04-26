@@ -52,14 +52,31 @@ ENTITY_MODELS = {
 
 def user_has_permission(user, codename: str) -> bool:
     """
-    Return True if the user has a specific Permission codename via any of their
-    active section access grants or temporary access grants.
-    admin and super_admin roles bypass all permission checks.
+    Return True if the user has a specific Permission codename.
+
+    Grant order (first match wins):
+      1. admin / super_admin role — always allowed
+      2. Section manager — is_manager=True on the section that owns the codename
+      3. Explicit permission grant via UserSectionAccess.permissions
+      4. Explicit permission grant via TemporaryAccess.permissions
     """
     if user.role in ('super_admin', 'admin'):
         return True
 
     now = timezone.now()
+
+    # Section managers automatically have all view permissions for their section
+    from users.models import Permission as SectionPermission
+    try:
+        perm_section = SectionPermission.objects.get(codename=codename)
+        if UserSectionAccess.objects.filter(
+            user=user, is_active=True,
+            section=perm_section.section,
+            is_manager=True,
+        ).exists():
+            return True
+    except SectionPermission.DoesNotExist:
+        pass
 
     if (
         UserSectionAccess.objects
