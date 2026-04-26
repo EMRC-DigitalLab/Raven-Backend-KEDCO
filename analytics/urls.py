@@ -15,6 +15,7 @@ from analytics.views.comparisons.compare_engine import (
     customer_search,
     run_compare,
 )
+from analytics.views.comparisons.comparison_report import customer_compare_report
 from analytics.views.grid_lens.overview import grid_lens_overview
 from analytics.views.grid_lens.states import all_states as gl_all_states, single_state as gl_single_state
 from analytics.views.grid_lens.districts import all_districts as gl_all_districts, single_district as gl_single_district
@@ -31,6 +32,7 @@ urlpatterns = [
     path('compare/', run_compare, name='compare'),
     path('compare/available/', available_metrics, name='compare-available'),
     path('compare/customers/', customer_compare, name='compare-customers'),
+    path('compare/customers/report/', customer_compare_report, name='compare-customers-report'),
     path('compare/customers/search/', customer_search, name='compare-customers-search'),
 
     # ── GridLens — Loss Decomposition ─────────────────────────────────────────

@@ -104,31 +104,44 @@ def reading_filter_kwargs(request, date_range):
 def calc_billing(readings_qs):
     """
     Calculate energy and revenue totals from a MeterReading queryset.
-    Raven does its own math: energy_charge = billed_consumption × tariff_rate
-    Returns all figures in Decimal.
+    Raven does its own math: energy_charge = billed_consumption × tariff_rate.
+
+    Readings where estimation_method is non-empty were estimated by DataNest
+    (no actual meter visit). These contribute to total_billed_kwh but are
+    flagged separately so callers can set mode='estimated' vs 'actual'.
+
+    Returns all figures in Decimal, plus:
+      - actual_billed_kwh:    from real meter reads (estimation_method='')
+      - estimated_billed_kwh: from DataNest-estimated readings
     """
     rows = list(
         readings_qs
         .filter(billed_consumption__isnull=False, tariff_rate__isnull=False)
-        .values('billed_consumption', 'tariff_rate')
+        .values('billed_consumption', 'tariff_rate', 'estimation_method')
     )
 
-    total_kwh    = Decimal('0')
+    actual_kwh    = Decimal('0')
+    estimated_kwh = Decimal('0')
     energy_charge = Decimal('0')
 
     for r in rows:
         kwh  = Decimal(str(r['billed_consumption']))
         rate = Decimal(str(r['tariff_rate']))
-        total_kwh     += kwh
         energy_charge += kwh * rate
+        if r['estimation_method']:
+            estimated_kwh += kwh
+        else:
+            actual_kwh += kwh
 
+    total_kwh    = actual_kwh + estimated_kwh
     vat          = round(energy_charge * VAT_RATE, 2)
     total_billed = round(energy_charge + vat, 2)
     energy_charge = round(energy_charge, 2)
-    total_kwh     = round(total_kwh, 2)
 
     return {
-        'total_billed_kwh':    total_kwh,
+        'total_billed_kwh':    round(total_kwh, 2),
+        'actual_billed_kwh':   round(actual_kwh, 2),
+        'estimated_billed_kwh': round(estimated_kwh, 2),
         'energy_charge':       energy_charge,
         'vat':                 vat,
         'total_billed_amount': total_billed,
@@ -150,14 +163,18 @@ def calc_daily_estimate(billing, date_range):
 def calc_coverage(customers_qs, readings_qs):
     """
     Customer reading coverage.
-    Returns: total, read, unread, coverage_rate (%)
+    Excludes faulty and missing meters from the denominator — those customers
+    cannot physically be read, so including them distorts field performance.
+    Returns: total, readable, read, unread, coverage_rate (%)
     """
     total      = customers_qs.count()
+    readable_qs = customers_qs.exclude(meter_status__in=('faulty', 'missing'))
+    readable   = readable_qs.count()
     read_ids   = set(readings_qs.values_list('customer_id', flat=True).distinct())
     read       = len(read_ids)
-    unread     = total - read
-    rate       = round(read / total * 100, 2) if total else 0
-    return {'total': total, 'read': read, 'unread': unread, 'rate': rate, 'read_ids': read_ids}
+    unread     = readable - read
+    rate       = round(read / readable * 100, 2) if readable else 0
+    return {'total': total, 'readable': readable, 'read': read, 'unread': unread, 'rate': rate, 'read_ids': read_ids}
 
 
 def calc_estimated_billing(customers_qs, read_ids, date_range):
@@ -180,7 +197,12 @@ def calc_estimated_billing(customers_qs, read_ids, date_range):
     from collections import defaultdict
 
     days       = date_range['days']
-    unread_ids = list(customers_qs.exclude(id__in=read_ids).values_list('id', flat=True))
+    unread_ids = list(
+        customers_qs
+        .exclude(id__in=read_ids)
+        .exclude(meter_status__in=('faulty', 'missing'))
+        .values_list('id', flat=True)
+    )
 
     # Fetch the last 2 positive readings per customer to calculate interval
     all_readings = list(

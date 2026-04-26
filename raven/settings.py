@@ -329,6 +329,9 @@ CELERY_TASK_ACKS_LATE = True
 CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 
 
+# ── Anthropic (AI Insights) ───────────────────────────────────────────────────
+ANTHROPIC_API_KEY = config('ANTHROPIC_API_KEY', default='')
+
 # ── Resend (Email) ─────────────────────────────────────────────────────────────
 RESEND_API_KEY = config('RESEND_API_KEY', default='')
 RESEND_FROM_EMAIL = config('RESEND_FROM_EMAIL', default='Raven EMRC <noreply@raven-emrc.com>')

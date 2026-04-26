@@ -71,3 +71,4 @@ wcwidth==0.2.13
 weasyprint==66.0
 webencodings==0.5.1
 zopfli==0.4.0
+anthropic==0.97.0

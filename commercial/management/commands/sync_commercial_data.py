@@ -124,7 +124,8 @@ class Command(BaseCommand):
         cursor.execute("""
             SELECT customer_id, account_no, meter_number, customer_name,
                    customer_address, phone_number, feeder_id, district_id,
-                   customer_type, created_at
+                   customer_type, created_at,
+                   meter_status, meter_fault_logged_at, meter_fault_logged_by
             FROM customer_information
             ORDER BY created_at
         """)
@@ -148,13 +149,14 @@ class Command(BaseCommand):
         skipped = 0
         seen    = set()  # deduplicate by external_id within DataNest data
 
-        for ext_id, acct, meter, name, addr, phone, feeder_id, dist_id, ctype, created_at in rows:
+        for ext_id, acct, meter, name, addr, phone, feeder_id, dist_id, ctype, created_at, meter_status, fault_logged_at, fault_logged_by in rows:
             raven_ctype = DN_CUSTOMER_TYPE_MAP.get(ctype)
             if not raven_ctype or ext_id in seen:
                 skipped += 1
                 continue
             seen.add(ext_id)
 
+            status = meter_status or 'active'
             objects.append(CommercialCustomer(
                 external_id=ext_id,
                 account_no=acct or '',
@@ -166,7 +168,10 @@ class Command(BaseCommand):
                 district=_district(dist_id),
                 customer_type=raven_ctype,
                 datanest_created_at=make_aware(created_at),
-                # is_bypass: not yet in DataNest — will sync once column is added
+                meter_status=status,
+                meter_fault_logged_at=make_aware(fault_logged_at) if fault_logged_at else None,
+                meter_fault_logged_by=fault_logged_by or '',
+                is_bypass=(status == 'bypassed'),
             ))
 
         self.stdout.write(f'  Unique customers to upsert: {len(objects)} | Skipped: {skipped}')
@@ -174,10 +179,11 @@ class Command(BaseCommand):
         if dry_run:
             return
 
-        update_fields = ['account_no', 'meter_number', 'customer_name', 'customer_address',
-                         'phone_number', 'feeder_id', 'district_id', 'customer_type',
-                         'datanest_created_at']
-        # NOTE: 'is_bypass' will be added here once DataNest adds the column to customer_information
+        update_fields = [
+            'account_no', 'meter_number', 'customer_name', 'customer_address',
+            'phone_number', 'feeder_id', 'district_id', 'customer_type', 'datanest_created_at',
+            'meter_status', 'meter_fault_logged_at', 'meter_fault_logged_by', 'is_bypass',
+        ]
 
         with transaction.atomic():
             CommercialCustomer.objects.bulk_create(
@@ -204,7 +210,8 @@ class Command(BaseCommand):
                 COALESCE(u.first_name, '') AS recorded_by_name,
                 mr.gis_id, mr.gis_match,
                 mr.ocr_status, mr.ocr_extracted_value, mr.ocr_confidence,
-                mr.audit_status, mr.audited_by, mr.audit_note, mr.audited_at
+                mr.audit_status, mr.audited_by, mr.audit_note, mr.audited_at,
+                mr.submission_status, mr.fault_source, mr.estimation_method
             FROM meter_readings mr
             LEFT JOIN users u ON mr.recorded_by = u.user_id
             ORDER BY mr.reading_date ASC
@@ -227,6 +234,7 @@ class Command(BaseCommand):
                 gis_id, gis_match,
                 ocr_status, ocr_extracted_value, ocr_confidence,
                 audit_status, audited_by, audit_note, audited_at,
+                submission_status, fault_source, estimation_method,
             ) = row
 
             if ext_id in seen:
@@ -276,6 +284,10 @@ class Command(BaseCommand):
                 audited_by=audited_by or '',
                 audit_note=audit_note or '',
                 audited_at=make_aware(audited_at) if audited_at else None,
+                # Submission + fault metadata
+                submission_status=submission_status or 'on_time',
+                fault_source=fault_source or None,
+                estimation_method=estimation_method or '',
             ))
 
         self.stdout.write(f'  Unique readings to upsert: {len(objects)} | Skipped: {skipped}')
@@ -294,6 +306,8 @@ class Command(BaseCommand):
             'ocr_status', 'ocr_extracted_value', 'ocr_confidence',
             # Audit
             'audit_status', 'audited_by', 'audit_note', 'audited_at',
+            # Submission + fault metadata
+            'submission_status', 'fault_source', 'estimation_method',
         ]
 
         with transaction.atomic():

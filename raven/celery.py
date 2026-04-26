@@ -26,6 +26,7 @@ app.conf.update(
         'analytics.tasks.*':        {'queue': 'analytics'},
         'technical.tasks.*':        {'queue': 'datanest_sync'},
         'energy_account.tasks.*':   {'queue': 'datanest_sync'},
+        'commercial.tasks.*':       {'queue': 'datanest_sync'},
     },
     # Retry settings
     task_acks_late=True,
@@ -125,6 +126,28 @@ app.conf.update(
         'ea-sync-coupling-log': {
             'task': 'energy_account.tasks.sync_coupling_log',
             'schedule': crontab(minute=25),
+        },
+
+        # ── DataNest -> Raven Commercial Sync ─────────────────────────────────
+        # Meter readings: every 5 minutes (field officers submit throughout the week)
+        'commercial-sync-readings': {
+            'task': 'commercial.tasks.sync_commercial_readings_task',
+            'schedule': crontab(minute='*/5'),
+        },
+        # Customers: every hour (new enrollments, meter status changes)
+        'commercial-sync-customers': {
+            'task': 'commercial.tasks.sync_commercial_customers_task',
+            'schedule': crontab(minute=35),
+        },
+        # Managers + assignments: every hour
+        'commercial-sync-managers': {
+            'task': 'commercial.tasks.sync_commercial_managers_task',
+            'schedule': crontab(minute=40),
+        },
+        # Tariff rates: every hour (rarely changes)
+        'commercial-sync-tariff-rates': {
+            'task': 'commercial.tasks.sync_commercial_tariff_task',
+            'schedule': crontab(minute=45),
         },
     },
 )

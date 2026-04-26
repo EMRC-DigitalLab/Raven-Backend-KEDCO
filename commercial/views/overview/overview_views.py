@@ -207,15 +207,15 @@ def commercial_overview(request):
                 explanation='Total energy consumed = sum(present_reading - previous_reading) for all customers read in this period. MDI (Maximum Demand Industrial) customers only contribute actual metered values.',
             ),
             'actual_billed_kwh': metric(
-                float(billing['total_billed_kwh']),
+                float(billing['actual_billed_kwh']),
                 unit='kWh',
-                explanation='Actual energy billed from real meter readings submitted in this period.',
+                explanation='Energy billed from real meter readings only (estimation_method is empty).',
             ),
             'estimated_billed_kwh': metric(
-                float(estimated['estimated_kwh']),
+                float(billing['estimated_billed_kwh'] + estimated['estimated_kwh']),
                 unit='kWh',
                 mode='estimated',
-                explanation='Estimated energy for unread customers using last known daily avg (last_billed_consumption / 7) x days in period.',
+                explanation='Estimated energy: DataNest-estimated readings + Raven projection for customers with no reading this period.',
             ),
             'total_projected_billed_kwh': metric(
                 float(billing['total_billed_kwh'] + estimated['estimated_kwh']),

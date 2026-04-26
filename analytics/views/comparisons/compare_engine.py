@@ -53,7 +53,7 @@ The frontend should read `metrics_denied` and grey-out / hide those fields.
 """
 
 import logging
-from datetime import datetime
+from datetime import date, datetime, timedelta
 
 from django.db.models import Q
 from rest_framework.decorators import api_view
@@ -62,6 +62,7 @@ from rest_framework.response import Response
 logger = logging.getLogger(__name__)
 
 from analytics.compare_metrics import METRICS_BY_MODULE
+from analytics.services.ai_insights import get_comparison_insights
 from analytics.services.compare_service import (
     compare_customers,
     compare_entities,
@@ -321,6 +322,33 @@ VALID_SCOPE_TYPES    = ('feeder', 'district', 'state', 'station')
 VALID_SORT_BY        = ('current_consumption', 'variance_pct', 'decline')
 
 
+def _resolve_period_mode(mode: str) -> tuple[date, date, date, date]:
+    """
+    Auto-resolve a period_mode keyword into (current_from, current_to, previous_from, previous_to).
+
+    daily   → today vs yesterday
+    weekly  → this Mon–Sun vs last Mon–Sun  (default)
+    monthly → this calendar month vs last calendar month
+    """
+    today = date.today()
+
+    if mode == 'daily':
+        yesterday = today - timedelta(days=1)
+        return today, today, yesterday, yesterday
+
+    if mode == 'monthly':
+        month_start = today.replace(day=1)
+        prev_month_end   = month_start - timedelta(days=1)
+        prev_month_start = prev_month_end.replace(day=1)
+        return month_start, today, prev_month_start, prev_month_end
+
+    # Default: weekly (Mon–Sun)
+    this_monday = today - timedelta(days=today.weekday())
+    last_monday = this_monday - timedelta(weeks=1)
+    last_sunday = this_monday - timedelta(days=1)
+    return this_monday, today, last_monday, last_sunday
+
+
 @api_view(['POST'])
 def customer_compare(request):
     """
@@ -330,20 +358,19 @@ def customer_compare(request):
 
     Body:
     {
-        "customer_type":    "MDI",               // "MDI" | "MDNI" | "all"
-        "current_period":   {"from_date": "2025-01-13", "to_date": "2025-01-26"},
-        "previous_period":  {"from_date": "2024-12-01", "to_date": "2024-12-31"},
-        "scope_type":       "feeder",             // optional — "feeder" | "district" | "state" | "station"
-        "scope_id":         "<uuid>",             // optional — required if scope_type is set
-        "customer_ids":     ["<uuid>", "<uuid>"], // optional — compare specific customers (from search picker)
-        "select_all":       false,                // optional — true = return every customer in scope, no cap
-        "top_n":            50,                   // optional, default 50, max 200 (ignored if customer_ids or select_all)
-        "sort_by":          "current_consumption" // optional
+        "customer_type":      "MDI",               // "MDI" | "MDNI" | "all"
+        "period_mode":        "weekly",             // "daily" | "weekly" | "monthly" — auto-resolves periods (default: weekly)
+        "current_period":     {"from_date": "2025-01-13", "to_date": "2025-01-26"},  // overrides period_mode if provided
+        "previous_period":    {"from_date": "2024-12-01", "to_date": "2024-12-31"},  // overrides period_mode if provided
+        "scope_type":         "feeder",             // optional — "feeder" | "district" | "state" | "station"
+        "scope_id":           "<uuid>",             // optional — required if scope_type is set
+        "customer_ids":       ["<uuid>", "<uuid>"], // optional — compare specific customers (from search picker)
+        "select_all":         false,                // optional — true = return every customer in scope, no cap
+        "top_n":              50,                   // optional, default 50, max 200 (ignored if customer_ids or select_all)
+        "sort_by":            "current_consumption",// optional
+        "positive_threshold": 10.0,                 // optional — % above which = Positive Trend (default 10)
+        "declined_threshold": -30.0                 // optional — % below which = Major Declined Trend (default -30)
     }
-
-    Returns customers with:
-      current_consumption_kwh, previous_consumption_kwh,
-      variance_kwh, variance_pct, trend label, is_bypass flag.
     """
     body = request.data
 
@@ -354,23 +381,28 @@ def customer_compare(request):
             status=400,
         )
 
-    # ── Parse periods ──────────────────────────────────────────────────────────
-    current_period  = body.get('current_period', {})
-    previous_period = body.get('previous_period', {})
+    # ── Period resolution ──────────────────────────────────────────────────────
+    current_period  = body.get('current_period')
+    previous_period = body.get('previous_period')
 
-    try:
-        current_from  = datetime.strptime(str(current_period['from_date'])[:10],  '%Y-%m-%d').date()
-        current_to    = datetime.strptime(str(current_period['to_date'])[:10],    '%Y-%m-%d').date()
-        previous_from = datetime.strptime(str(previous_period['from_date'])[:10], '%Y-%m-%d').date()
-        previous_to   = datetime.strptime(str(previous_period['to_date'])[:10],   '%Y-%m-%d').date()
-    except (KeyError, ValueError, TypeError):
-        return Response(
-            {'error': 'current_period and previous_period must include from_date and to_date in YYYY-MM-DD format.'},
-            status=400,
-        )
-
-    if current_from > current_to or previous_from > previous_to:
-        return Response({'error': 'from_date must be on or before to_date in each period.'}, status=400)
+    if current_period and previous_period:
+        # Explicit periods take precedence over period_mode
+        try:
+            current_from  = datetime.strptime(str(current_period['from_date'])[:10],  '%Y-%m-%d').date()
+            current_to    = datetime.strptime(str(current_period['to_date'])[:10],    '%Y-%m-%d').date()
+            previous_from = datetime.strptime(str(previous_period['from_date'])[:10], '%Y-%m-%d').date()
+            previous_to   = datetime.strptime(str(previous_period['to_date'])[:10],   '%Y-%m-%d').date()
+        except (KeyError, ValueError, TypeError):
+            return Response(
+                {'error': 'current_period and previous_period must include from_date and to_date in YYYY-MM-DD format.'},
+                status=400,
+            )
+        if current_from > current_to or previous_from > previous_to:
+            return Response({'error': 'from_date must be on or before to_date in each period.'}, status=400)
+        period_mode = 'custom'
+    else:
+        period_mode   = body.get('period_mode', 'weekly')
+        current_from, current_to, previous_from, previous_to = _resolve_period_mode(period_mode)
 
     # ── Scope (optional) ───────────────────────────────────────────────────────
     scope_type = body.get('scope_type') or None
@@ -385,7 +417,7 @@ def customer_compare(request):
         return Response({'error': 'scope_id is required when scope_type is provided.'}, status=400)
 
     # ── Options ────────────────────────────────────────────────────────────────
-    customer_ids = body.get('customer_ids') or None   # list of UUIDs from picker
+    customer_ids = body.get('customer_ids') or None
     select_all   = bool(body.get('select_all', False))
 
     try:
@@ -398,19 +430,27 @@ def customer_compare(request):
         sort_by = 'current_consumption'
 
     try:
+        positive_threshold = float(body.get('positive_threshold', 10.0))
+        declined_threshold = float(body.get('declined_threshold', -30.0))
+    except (TypeError, ValueError):
+        positive_threshold, declined_threshold = 10.0, -30.0
+
+    try:
         result = compare_customers(
-            user          = request.user,
-            current_from  = current_from,
-            current_to    = current_to,
-            previous_from = previous_from,
-            previous_to   = previous_to,
-            customer_type = customer_type,
-            scope_type    = scope_type,
-            scope_id      = scope_id,
-            customer_ids  = customer_ids,
-            select_all    = select_all,
-            top_n         = top_n,
-            sort_by       = sort_by,
+            user               = request.user,
+            current_from       = current_from,
+            current_to         = current_to,
+            previous_from      = previous_from,
+            previous_to        = previous_to,
+            customer_type      = customer_type,
+            scope_type         = scope_type,
+            scope_id           = scope_id,
+            customer_ids       = customer_ids,
+            select_all         = select_all,
+            top_n              = top_n,
+            sort_by            = sort_by,
+            positive_threshold = positive_threshold,
+            declined_threshold = declined_threshold,
         )
     except Exception as exc:
         logger.exception("compare_customers failed: %s", exc)
@@ -418,4 +458,22 @@ def customer_compare(request):
 
     if 'error' in result:
         return Response(result, status=400)
+
+    result['period_mode'] = period_mode
+
+    # ── AI insights (opt-in) ───────────────────────────────────────────────────
+    if body.get('include_insights', False):
+        result['ai_insights'] = get_comparison_insights(
+            comparison         = result,
+            customer_type      = customer_type,
+            current_from       = current_from,
+            current_to         = current_to,
+            previous_from      = previous_from,
+            previous_to        = previous_to,
+            scope_type         = scope_type,
+            scope_id           = scope_id,
+            positive_threshold = positive_threshold,
+            declined_threshold = declined_threshold,
+        )
+
     return Response(result)

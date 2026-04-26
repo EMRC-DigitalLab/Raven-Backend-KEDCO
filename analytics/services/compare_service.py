@@ -23,7 +23,7 @@ from datetime import date, datetime, timedelta
 from dateutil.relativedelta import relativedelta
 from django.db import connection
 from django.db.models import (
-    ExpressionWrapper, F, Sum,
+    Count, ExpressionWrapper, F, Sum,
     DecimalField as DField,
 )
 from django.utils import timezone
@@ -1258,14 +1258,39 @@ _TREND_THRESHOLDS = [
     (-50.0, 'Declined Trend'),
 ]
 
+# Trend label ordering for display (best → worst)
+TREND_ORDER = [
+    'Major Positive Trend',
+    'Positive Trend',
+    'Moderated Trend',
+    'Declined Trend',
+    'Major Declined Trend',
+    'No Previous Data',
+]
 
-def _classify_trend(variance_pct: float | None) -> str:
-    """Map a % change to a trend label."""
+
+def _classify_trend(
+    variance_pct: float | None,
+    positive_threshold: float = 10.0,
+    declined_threshold: float = -30.0,
+) -> str:
+    """
+    Map a % change to a trend label.
+
+    Dynamic thresholds (defaults match the historical hardcoded values):
+      variance_pct >= 50                  → Major Positive Trend
+      variance_pct >= positive_threshold  → Positive Trend
+      variance_pct >= declined_threshold  → Moderated Trend
+      variance_pct <  declined_threshold  → Major Declined Trend
+    """
     if variance_pct is None:
         return 'No Previous Data'
-    for threshold, label in _TREND_THRESHOLDS:
-        if variance_pct >= threshold:
-            return label
+    if variance_pct >= 50.0:
+        return 'Major Positive Trend'
+    if variance_pct >= positive_threshold:
+        return 'Positive Trend'
+    if variance_pct >= declined_threshold:
+        return 'Moderated Trend'
     return 'Major Declined Trend'
 
 
@@ -1300,12 +1325,14 @@ def compare_customers(
     select_all: bool = False,         # True = return all in scope, no cap
     top_n: int = 50,
     sort_by: str = 'current_consumption',  # 'current_consumption' | 'variance_pct' | 'decline'
+    positive_threshold: float = 10.0,
+    declined_threshold: float = -30.0,
 ) -> dict:
     """
     Compare top-N customers by consumption across two time periods.
 
-    Returns per-customer: current_consumption_kwh, previous_consumption_kwh,
-    variance_kwh, variance_pct, trend label, and is_bypass flag.
+    Returns per-customer: consumption, reading counts, billed amounts, variance,
+    trend label, meter_status, and estimated reading flag.
 
     Access gated: requires 'commercial' module access.
     """
@@ -1331,18 +1358,14 @@ def compare_customers(
     if customer_type in ('MDI', 'MDNI'):
         cust_qs = cust_qs.filter(customer_type=customer_type)
 
-    # If specific customers were selected from the picker, restrict to those only
     if customer_ids and isinstance(customer_ids, list):
         cust_qs = cust_qs.filter(id__in=customer_ids)
 
     total_in_scope = cust_qs.count()
 
     # ── Aggregate consumption per customer for both periods ────────────────────
-    # We use a single aggregation per period to avoid N+1 queries.
-    from django.db.models import Q, Sum
-
     def _period_consumption(from_d: date, to_d: date) -> dict:
-        """Returns {customer_id: kwh_sum} for the given period."""
+        """Returns {customer_id: {'kwh', 'count', 'amount'}} for the given period."""
         rows = (
             MeterReading.objects
             .filter(
@@ -1351,15 +1374,40 @@ def compare_customers(
                 billed_consumption__isnull=False,
             )
             .values('customer_id')
-            .annotate(total_kwh=Sum('billed_consumption'))
+            .annotate(
+                total_kwh=Sum('billed_consumption'),
+                total_count=Count('id'),
+                total_amount=Sum(
+                    ExpressionWrapper(
+                        F('billed_consumption') * F('tariff_rate'),
+                        output_field=DField(max_digits=20, decimal_places=4),
+                    )
+                ),
+            )
         )
-        return {str(r['customer_id']): float(r['total_kwh'] or 0) for r in rows}
+        return {
+            str(r['customer_id']): {
+                'kwh':    float(r['total_kwh'] or 0),
+                'count':  int(r['total_count'] or 0),
+                'amount': float(r['total_amount'] or 0),
+            }
+            for r in rows
+        }
 
     current_map  = _period_consumption(current_from, current_to)
     previous_map = _period_consumption(previous_from, previous_to)
 
+    # Batch: which customers have at least one estimated reading in the current period
+    estimated_cids = set(
+        str(cid) for cid in
+        MeterReading.objects
+        .filter(customer__in=cust_qs, reading_date__range=(current_from, current_to))
+        .exclude(estimation_method='')
+        .values_list('customer_id', flat=True)
+        .distinct()
+    )
+
     # ── Build per-customer rows ────────────────────────────────────────────────
-    # Only include customers with at least one reading in either period
     active_ids = set(current_map) | set(previous_map)
     if not active_ids:
         return _customer_compare_response(
@@ -1368,6 +1416,8 @@ def compare_customers(
             current_from=current_from, current_to=current_to,
             previous_from=previous_from, previous_to=previous_to,
             customers=[], total_in_scope=total_in_scope,
+            positive_threshold=positive_threshold,
+            declined_threshold=declined_threshold,
         )
 
     customer_objs = {
@@ -1381,52 +1431,60 @@ def compare_customers(
         if not cust:
             continue
 
-        curr_kwh = current_map.get(cid)
-        prev_kwh = previous_map.get(cid)
+        curr = current_map.get(cid)
+        prev = previous_map.get(cid)
 
-        # Variance
+        curr_kwh    = curr['kwh']    if curr else None
+        curr_count  = curr['count']  if curr else 0
+        curr_amount = curr['amount'] if curr else 0.0
+        prev_kwh    = prev['kwh']    if prev else None
+        prev_count  = prev['count']  if prev else 0
+        prev_amount = prev['amount'] if prev else 0.0
+
+        # kWh variance
         if curr_kwh is not None and prev_kwh is not None and prev_kwh > 0:
             var_kwh = round(curr_kwh - prev_kwh, 2)
             var_pct = round((curr_kwh - prev_kwh) / prev_kwh * 100, 2)
         elif curr_kwh is not None and (prev_kwh is None or prev_kwh == 0):
             var_kwh = curr_kwh
-            var_pct = None   # no previous baseline
+            var_pct = None
         else:
             var_kwh = None
             var_pct = None
 
         rows.append({
-            'account_no':              cust.account_no,
-            'customer_name':           cust.customer_name,
-            'customer_type':           cust.customer_type,
-            'feeder':                  cust.feeder.name if cust.feeder else None,
-            'district':                (
+            'account_no':               cust.account_no,
+            'customer_name':            cust.customer_name,
+            'customer_type':            cust.customer_type,
+            'meter_status':             getattr(cust, 'meter_status', None),
+            'feeder':                   cust.feeder.name if cust.feeder else None,
+            'district':                 (
                 cust.district.name if cust.district
                 else (cust.feeder.business_district.name if cust.feeder and cust.feeder.business_district else None)
             ),
-            'is_bypass':               cust.is_bypass,
-            'current_consumption_kwh': round(curr_kwh, 2) if curr_kwh is not None else 0.0,
+            'is_bypass':                cust.is_bypass,
+            'has_estimated_readings':   cid in estimated_cids,
+            'current_consumption_kwh':  round(curr_kwh, 2) if curr_kwh is not None else 0.0,
             'previous_consumption_kwh': round(prev_kwh, 2) if prev_kwh is not None else 0.0,
-            'variance_kwh':            var_kwh,
-            'variance_pct':            var_pct,
-            'trend':                   _classify_trend(var_pct),
+            'reading_count_current':    curr_count,
+            'reading_count_previous':   prev_count,
+            'current_billed_amount':    round(curr_amount, 2),
+            'previous_billed_amount':   round(prev_amount, 2),
+            'billing_variance':         round(curr_amount - prev_amount, 2),
+            'variance_kwh':             var_kwh,
+            'variance_pct':             var_pct,
+            'trend':                    _classify_trend(var_pct, positive_threshold, declined_threshold),
         })
 
     # ── Sort ───────────────────────────────────────────────────────────────────
     if sort_by == 'variance_pct':
         rows.sort(key=lambda r: (r['variance_pct'] is None, -(r['variance_pct'] or 0)))
     elif sort_by == 'decline':
-        # Most declined first
         rows.sort(key=lambda r: (r['variance_pct'] is None, (r['variance_pct'] or 0)))
     else:
-        # Default: highest current consumption first
         rows.sort(key=lambda r: -(r['current_consumption_kwh'] or 0))
 
-    # select_all or specific customer_ids → no cap; otherwise apply top_n
-    if select_all or customer_ids:
-        top_rows = rows
-    else:
-        top_rows = rows[:top_n]
+    top_rows = rows if (select_all or customer_ids) else rows[:top_n]
 
     return _customer_compare_response(
         customer_type=customer_type,
@@ -1434,6 +1492,8 @@ def compare_customers(
         current_from=current_from, current_to=current_to,
         previous_from=previous_from, previous_to=previous_to,
         customers=top_rows, total_in_scope=total_in_scope,
+        positive_threshold=positive_threshold,
+        declined_threshold=declined_threshold,
     )
 
 
@@ -1441,7 +1501,25 @@ def _customer_compare_response(
     customer_type, scope_type, scope_label,
     current_from, current_to, previous_from, previous_to,
     customers, total_in_scope,
+    positive_threshold: float = 10.0,
+    declined_threshold: float = -30.0,
 ) -> dict:
+    # Trend distribution across returned customers
+    trend_dist: dict[str, int] = {t: 0 for t in TREND_ORDER}
+    for c in customers:
+        label = c.get('trend', 'No Previous Data')
+        trend_dist[label] = trend_dist.get(label, 0) + 1
+
+    # Summary totals
+    total_curr_kwh = sum(c['current_consumption_kwh']  for c in customers)
+    total_prev_kwh = sum(c['previous_consumption_kwh'] for c in customers)
+    total_curr_amt = sum(c.get('current_billed_amount',  0) or 0 for c in customers)
+    total_prev_amt = sum(c.get('previous_billed_amount', 0) or 0 for c in customers)
+    total_var_pct  = (
+        round((total_curr_kwh - total_prev_kwh) / total_prev_kwh * 100, 2)
+        if total_prev_kwh else None
+    )
+
     return {
         'customer_type': customer_type,
         'scope': {
@@ -1458,8 +1536,29 @@ def _customer_compare_response(
             'to_date':   previous_to.isoformat(),
             'days':      (previous_to - previous_from).days + 1,
         },
+        'totals': {
+            'current_consumption_kwh':  round(total_curr_kwh, 2),
+            'previous_consumption_kwh': round(total_prev_kwh, 2),
+            'variance_kwh':             round(total_curr_kwh - total_prev_kwh, 2),
+            'variance_pct':             total_var_pct,
+            'current_billed_amount':    round(total_curr_amt, 2),
+            'previous_billed_amount':   round(total_prev_amt, 2),
+            'billing_variance':         round(total_curr_amt - total_prev_amt, 2),
+        },
+        'trend_distribution':          trend_dist,
         'total_customers_in_scope':    total_in_scope,
         'customers_returned':          len(customers),
         'bypass_count':                sum(1 for c in customers if c.get('is_bypass')),
-        'customers':                   customers,
+        'methodology': {
+            'positive_threshold_pct': positive_threshold,
+            'declined_threshold_pct': declined_threshold,
+            'major_positive_pct':     50.0,
+            'trend_labels': {
+                'Major Positive Trend': f'>= 50%',
+                'Positive Trend':       f'>= {positive_threshold}%',
+                'Moderated Trend':      f'>= {declined_threshold}% and < {positive_threshold}%',
+                'Major Declined Trend': f'< {declined_threshold}%',
+            },
+        },
+        'customers': customers,
     }

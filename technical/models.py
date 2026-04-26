@@ -592,6 +592,11 @@ class DataSyncLog(models.Model):
         ('ea_meter_check_schedules',      'EA — Meter Check Schedules'),
         ('ea_meter_check_records',        'EA — Meter Check Records'),
         ('ea_coupling_log',               'EA — Coupling Log'),
+        # Commercial
+        ('commercial_readings',     'Commercial — Meter Readings'),
+        ('commercial_customers',    'Commercial — Customers'),
+        ('commercial_managers',     'Commercial — Managers & Assignments'),
+        ('commercial_tariff_rates', 'Commercial — Tariff Rates'),
     ]
 
     STATUS_CHOICES = [
