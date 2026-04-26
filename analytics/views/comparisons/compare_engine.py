@@ -68,6 +68,7 @@ from analytics.services.compare_service import (
     compare_entities,
     compare_periods,
     get_user_accessible_modules,
+    user_has_permission,
 )
 from commercial.models import CommercialCustomer
 
@@ -372,6 +373,12 @@ def customer_compare(request):
         "declined_threshold": -30.0                 // optional — % below which = Major Declined Trend (default -30)
     }
     """
+    if not user_has_permission(request.user, 'view_customer_comparison'):
+        return Response(
+            {'error': 'You do not have permission to access Customer Comparison.'},
+            status=403,
+        )
+
     body = request.data
 
     customer_type = body.get('customer_type', 'all')

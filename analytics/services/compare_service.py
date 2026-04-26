@@ -50,6 +50,34 @@ ENTITY_MODELS = {
 
 # ─── Access helpers ────────────────────────────────────────────────────────────
 
+def user_has_permission(user, codename: str) -> bool:
+    """
+    Return True if the user has a specific Permission codename via any of their
+    active section access grants or temporary access grants.
+    admin and super_admin roles bypass all permission checks.
+    """
+    if user.role in ('super_admin', 'admin'):
+        return True
+
+    now = timezone.now()
+
+    if (
+        UserSectionAccess.objects
+        .filter(user=user, is_active=True, permissions__codename=codename)
+        .exists()
+    ):
+        return True
+
+    if (
+        TemporaryAccess.objects
+        .filter(user=user, is_active=True, expires_at__gt=now, permissions__codename=codename)
+        .exists()
+    ):
+        return True
+
+    return False
+
+
 def get_user_accessible_modules(user) -> set:
     """Return the set of module/section names this user has access to."""
     if user.role in ('super_admin', 'admin'):

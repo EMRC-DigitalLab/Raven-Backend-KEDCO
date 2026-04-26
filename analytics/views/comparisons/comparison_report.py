@@ -26,7 +26,7 @@ from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
 from analytics.services.ai_insights import get_comparison_insights
-from analytics.services.compare_service import compare_customers, get_user_accessible_modules
+from analytics.services.compare_service import compare_customers, user_has_permission
 
 logger = logging.getLogger(__name__)
 
@@ -93,9 +93,11 @@ def customer_compare_report(request):
 
     from reports.pdf_generator import PDFGenerator
 
-    accessible = get_user_accessible_modules(request.user)
-    if 'commercial' not in accessible:
-        return Response({'error': 'No access to the commercial module.'}, status=403)
+    if not user_has_permission(request.user, 'view_customer_comparison'):
+        return Response(
+            {'error': 'You do not have permission to access Customer Comparison.'},
+            status=403,
+        )
 
     body = request.data
 

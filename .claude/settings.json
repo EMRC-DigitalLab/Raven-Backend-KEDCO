@@ -75,7 +75,8 @@
       "Bash(python manage.py makemigrations commercial --name=\"add_comparison_cache\")",
       "Bash(APP_ENV=production python manage.py migrate commercial --list)",
       "Bash(APP_ENV=production python manage.py showmigrations commercial)",
-      "Bash(APP_ENV=production python manage.py migrate commercial 0009_add_comparison_cache)"
+      "Bash(APP_ENV=production python manage.py migrate commercial 0009_add_comparison_cache)",
+      "Bash(APP_ENV=production python manage.py setup_sections)"
     ],
     "additionalDirectories": [
       "c:\\c\\Users\\TriumphAdeniran\\OneDrive - Market and Regulatory Consultants Ltd\\Desktop\\Raven Code Base\\Raven-Backend-KEDCO"
