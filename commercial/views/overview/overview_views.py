@@ -314,9 +314,11 @@ def commercial_overview(request):
             **_bd_row(ed, b, consumed_by_band.get(bid, ZERO)),
         })
 
-    # ── Meter managers ────────────────────────────────────────────────────────
+    # ── Meter managers (only those assigned to commercially onboarded feeders) ──
     ctype  = request.GET.get('type', '').upper()
-    mgr_qs = MeterManager.objects.all()
+    mgr_qs = MeterManager.objects.filter(
+        assignments__feeder__commercial_is_onboarded=True
+    ).distinct()
     if ctype in ('MDI', 'MDNI'):
         mgr_qs = mgr_qs.filter(manager_type=ctype)
     total_mdi_managers  = mgr_qs.filter(manager_type='MDI').count()
