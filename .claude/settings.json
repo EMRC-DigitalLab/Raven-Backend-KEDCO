@@ -51,7 +51,39 @@
       "Bash(APP_ENV=production python manage.py resync_interruptions --start 2026-03-01 --end 2026-03-31)",
       "Bash(APP_ENV=production python manage.py resync_interruptions --start 2026-04-01 --end 2026-04-24)",
       "Bash(APP_ENV=production python manage.py resync_interruptions --start 2026-03-01 --end 2026-03-15)",
-      "Bash(APP_ENV=production python manage.py resync_interruptions --start 2026-03-16 --end 2026-03-31)"
+      "Bash(APP_ENV=production python manage.py resync_interruptions --start 2026-03-16 --end 2026-03-31)",
+      "Bash(python manage.py check commercial)",
+      "Bash(python manage.py sync_commercial_data --table tariff_rates)",
+      "Bash(python manage.py sync_commercial_data --table managers)",
+      "Bash(python manage.py shell -c \"from django.conf import settings; print\\('APP_ENV:', settings.APP_ENV\\); print\\('DB name:', settings.DATABASES['default']['NAME']\\)\")",
+      "Bash(APP_ENV=production python manage.py shell -c \"from django.conf import settings; print\\('APP_ENV:', settings.APP_ENV\\); print\\('DB name:', settings.DATABASES['default']['NAME']\\)\")",
+      "Bash(APP_ENV=production python manage.py sync_commercial_data --table customers)",
+      "Bash(APP_ENV=production python manage.py migrate commercial)",
+      "Bash(APP_ENV=production python manage.py sync_commercial_data --table tariff_rates)",
+      "Bash(APP_ENV=production python manage.py sync_commercial_data --table managers)",
+      "Read(//c/c/Users/TriumphAdeniran/OneDrive - Market and Regulatory Consultants Ltd/Desktop/Raven Code Base/Raven-Backend-KEDCO/commercial/management/commands/**)",
+      "Bash(python -c \"import django; import os; os.environ.setdefault\\('DJANGO_SETTINGS_MODULE','raven.settings'\\); django.setup\\(\\); from django.apps import apps; models = [m.__name__ for m in apps.get_models\\(\\) if 'feeder' in m.__name__.lower\\(\\)]; print\\(models\\)\")",
+      "Bash(python -c \"import django; import os; os.environ.setdefault\\('DJANGO_SETTINGS_MODULE','raven.settings'\\); django.setup\\(\\); from django.apps import apps; m = apps.get_model\\('Feeder'\\); print\\(m._meta.app_label\\)\")",
+      "Bash(APP_ENV=production python manage.py sync_feeder_metadata)",
+      "Bash(PYTHONIOENCODING=utf-8 APP_ENV=production python manage.py sync_feeder_metadata)",
+      "Read(//c/c/Users/TriumphAdeniran/OneDrive - Market and Regulatory Consultants Ltd/Desktop/Raven Code Base/Raven-Backend-KEDCO/commercial/**)",
+      "Read(//c/c/Users/TriumphAdeniran/OneDrive - Market and Regulatory Consultants Ltd/Desktop/Raven Code Base/**)",
+      "Bash(xargs grep *)",
+      "Bash(python manage.py check --deploy)",
+      "Bash(python -c \"import anthropic; print\\(anthropic.__version__\\)\")",
+      "Bash(python -c \"import anthropic; print\\('anthropic', anthropic.__version__\\)\")",
+      "Bash(python manage.py makemigrations commercial --name=\"add_comparison_cache\")",
+      "Bash(APP_ENV=production python manage.py migrate commercial --list)",
+      "Bash(APP_ENV=production python manage.py showmigrations commercial)",
+      "Bash(APP_ENV=production python manage.py migrate commercial 0009_add_comparison_cache)",
+      "Bash(APP_ENV=production python manage.py setup_sections)",
+      "Bash(python manage.py migrate common 0006_feeder_commercial_onboarding)",
+      "Bash(python manage.py sync_feeder_metadata)",
+      "Bash(APP_ENV=production python manage.py migrate common 0006_feeder_commercial_onboarding)",
+      "Bash(python manage.py check)"
+    ],
+    "additionalDirectories": [
+      "c:\\c\\Users\\TriumphAdeniran\\OneDrive - Market and Regulatory Consultants Ltd\\Desktop\\Raven Code Base\\Raven-Backend-KEDCO"
     ]
   }
 }

@@ -18,7 +18,7 @@ For all_feeders, pass feeder_to_dim = {f.id: f.id for f in feeders}.
 
 from decimal import Decimal
 
-from django.db.models import Avg, Count, ExpressionWrapper, F, Max, Sum, DecimalField
+from django.db.models import Avg, Case, Count, ExpressionWrapper, F, Max, Sum, Value, When, DecimalField
 
 from commercial.models import MeterManager, MeterReading
 from technical.models import EnergyDelivered, HourlyLoad
@@ -35,7 +35,7 @@ _EC_EXPR = ExpressionWrapper(
 # ── Defaults ──────────────────────────────────────────────────────────────────
 
 def empty_billing():
-    return {'total_billed_kwh': ZERO, 'energy_charge': ZERO, 'vat': ZERO, 'total_billed_amount': ZERO}
+    return {'total_billed_kwh': ZERO, 'actual_billed_kwh': ZERO, 'estimated_billed_kwh': ZERO, 'energy_charge': ZERO, 'vat': ZERO, 'total_billed_amount': ZERO}
 
 def empty_estimated():
     return {'estimated_kwh': ZERO, 'estimated_energy_charge': ZERO, 'estimated_revenue': ZERO}
@@ -65,16 +65,34 @@ def feeder_dim_map(customers_qs, dim_field):
 
 # ── Billing ───────────────────────────────────────────────────────────────────
 
+_ACTUAL_KWH_EXPR = Case(
+    When(estimation_method='', then=F('billed_consumption')),
+    default=Value(0),
+    output_field=DecimalField(max_digits=20, decimal_places=4),
+)
+_ESTIMATED_KWH_EXPR = Case(
+    When(estimation_method='', then=Value(0)),
+    default=F('billed_consumption'),
+    output_field=DecimalField(max_digits=20, decimal_places=4),
+)
+
+
 def bulk_billing(readings_qs, feeder_to_dim):
     """
     ONE query (1 JOIN: customer→feeder) → {dim_id: billing dict}.
-    Python rollup maps feeder → dim.
+    Splits actual_billed_kwh (real reads, estimation_method='') from
+    estimated_billed_kwh (DataNest-estimated reads, estimation_method non-empty).
     """
     rows = (
         readings_qs
         .filter(billed_consumption__isnull=False, tariff_rate__isnull=False)
         .values('customer__feeder_id')
-        .annotate(total_kwh=Sum('billed_consumption'), raw_ec=Sum(_EC_EXPR))
+        .annotate(
+            total_kwh=Sum('billed_consumption'),
+            actual_kwh=Sum(_ACTUAL_KWH_EXPR),
+            estimated_kwh=Sum(_ESTIMATED_KWH_EXPR),
+            raw_ec=Sum(_EC_EXPR),
+        )
     )
     acc = {}
     for row in rows:
@@ -82,20 +100,26 @@ def bulk_billing(readings_qs, feeder_to_dim):
         if dim_id is None:
             continue
         if dim_id not in acc:
-            acc[dim_id] = {'kwh': ZERO, 'ec': ZERO}
-        acc[dim_id]['kwh'] += Decimal(str(row['total_kwh'] or 0))
-        acc[dim_id]['ec']  += Decimal(str(row['raw_ec']    or 0))
+            acc[dim_id] = {'kwh': ZERO, 'actual_kwh': ZERO, 'estimated_kwh': ZERO, 'ec': ZERO}
+        acc[dim_id]['kwh']           += Decimal(str(row['total_kwh']     or 0))
+        acc[dim_id]['actual_kwh']    += Decimal(str(row['actual_kwh']    or 0))
+        acc[dim_id]['estimated_kwh'] += Decimal(str(row['estimated_kwh'] or 0))
+        acc[dim_id]['ec']            += Decimal(str(row['raw_ec']        or 0))
 
     result = {}
     for dim_id, r in acc.items():
-        kwh = round(r['kwh'], 2)
-        ec  = round(r['ec'],  2)
-        vat = round(ec * VAT_RATE, 2)
+        kwh           = round(r['kwh'], 2)
+        actual_kwh    = round(r['actual_kwh'], 2)
+        estimated_kwh = round(r['estimated_kwh'], 2)
+        ec            = round(r['ec'], 2)
+        vat           = round(ec * VAT_RATE, 2)
         result[dim_id] = {
-            'total_billed_kwh':    kwh,
-            'energy_charge':       ec,
-            'vat':                 vat,
-            'total_billed_amount': round(ec + vat, 2),
+            'total_billed_kwh':     kwh,
+            'actual_billed_kwh':    actual_kwh,
+            'estimated_billed_kwh': estimated_kwh,
+            'energy_charge':        ec,
+            'vat':                  vat,
+            'total_billed_amount':  round(ec + vat, 2),
         }
     return result
 
@@ -146,7 +170,9 @@ def bulk_customer_types(customers_qs, feeder_to_dim):
 
 def bulk_coverage(customers_qs, readings_qs, feeder_to_dim):
     """
-    TWO queries (0 + 1 JOIN) → {dim_id: {total, read, unread, rate, read_ids}}.
+    TWO queries (0 + 1 JOIN) → {dim_id: {total, readable, read, unread, rate, read_ids}}.
+    Excludes faulty and missing meters from the denominator — those customers
+    cannot physically be read, so including them distorts field performance.
     """
     # Total customers per feeder (0 JOINs)
     totals = {}
@@ -154,6 +180,13 @@ def bulk_coverage(customers_qs, readings_qs, feeder_to_dim):
         dim_id = feeder_to_dim.get(row['feeder_id'])
         if dim_id is not None:
             totals[dim_id] = totals.get(dim_id, 0) + row['total']
+
+    # Readable customers per feeder — exclude faulty/missing (0 JOINs)
+    readables = {}
+    for row in customers_qs.exclude(meter_status__in=('faulty', 'missing')).values('feeder_id').annotate(count=Count('id')):
+        dim_id = feeder_to_dim.get(row['feeder_id'])
+        if dim_id is not None:
+            readables[dim_id] = readables.get(dim_id, 0) + row['count']
 
     # Covered customer IDs per dim (1 JOIN: customer→feeder)
     read_ids_by_dim = {}
@@ -168,11 +201,13 @@ def bulk_coverage(customers_qs, readings_qs, feeder_to_dim):
     result = {}
     for dim_id in set(totals) | set(read_ids_by_dim):
         total    = totals.get(dim_id, 0)
+        readable = readables.get(dim_id, total)
         read_ids = read_ids_by_dim.get(dim_id, set())
         read     = len(read_ids)
         result[dim_id] = {
-            'total': total, 'read': read, 'unread': total - read,
-            'rate':  round(read / total * 100, 2) if total else 0,
+            'total': total, 'readable': readable, 'read': read,
+            'unread': readable - read,
+            'rate':   round(read / readable * 100, 2) if readable else 0,
             'read_ids': read_ids,
         }
     return result
@@ -187,8 +222,13 @@ def bulk_estimated_billing(customers_qs, coverage_by_dim, date_range, feeder_to_
     days        = date_range['days']
     all_covered = {cid for cov in coverage_by_dim.values() for cid in cov['read_ids']}
 
-    # Unread customers with feeder_id (0 JOINs)
-    unread = list(customers_qs.exclude(id__in=all_covered).values('id', 'feeder_id'))
+    # Unread customers with feeder_id — exclude faulty/missing (0 JOINs)
+    unread = list(
+        customers_qs
+        .exclude(id__in=all_covered)
+        .exclude(meter_status__in=('faulty', 'missing'))
+        .values('id', 'feeder_id')
+    )
     if not unread:
         return {}
 

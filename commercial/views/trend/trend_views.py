@@ -112,7 +112,7 @@ def commercial_trend(request):
     total_customers = CommercialCustomer.objects.filter(**cust_kwargs).count()
 
     # ── Reading filter base (no date — we scope the date ourselves) ───────────
-    read_base = {}
+    read_base = {'customer__feeder__commercial_is_onboarded': True}
     ctype       = request.GET.get('type',        '').upper()
     feeder_type = request.GET.get('feeder_type', '').upper()
     if ctype in ('MDI', 'MDNI'):

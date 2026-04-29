@@ -159,6 +159,17 @@ class Feeder(UUIDModel, models.Model):
         help_text="User who onboarded this feeder"
     )
 
+    commercial_is_onboarded = models.BooleanField(
+        default=False,
+        db_index=True,
+        help_text="Whether this feeder is commercially onboarded (MDI/MDNI analytics active)"
+    )
+    commercial_onboarded_at = models.DateField(
+        null=True,
+        blank=True,
+        help_text="Date from which commercial analytics data is valid for this feeder"
+    )
+
     objects = FeederManager()
 
     def save(self, *args, **kwargs):

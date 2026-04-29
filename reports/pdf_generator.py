@@ -68,6 +68,10 @@ SECTION_DISPLAY_NAMES = {
     'revenue_by_district':   'Revenue by District',
     'revenue_by_feeder':     'Revenue by Feeder',
     'customer_type_summary': 'Customer Type Summary',
+    # Commercial Comparison
+    'commercial_comparison_summary':  'Comparison Summary',
+    'commercial_comparison_table':    'Customer Comparison Detail',
+    'commercial_comparison_insights': 'AI Insights',
     # Financial
     'financial_overview': 'Financial Overview',
     'opex_by_category':   'OPEX by Category',
@@ -2372,6 +2376,226 @@ def render_customer_type_summary(data, context, page_number):
 
 
 # =============================================================================
+# COMMERCIAL COMPARISON SECTION RENDERERS
+# =============================================================================
+
+def render_commercial_comparison_summary(data, context, page_number):
+    """KPI summary page for a customer consumption comparison."""
+    totals   = data.get('totals', {})
+    trend_d  = data.get('trend_distribution', {})
+    cur_per  = data.get('current_period', {})
+    prev_per = data.get('previous_period', {})
+    ctype    = data.get('customer_type', 'all')
+    scope    = data.get('scope', {})
+
+    curr_kwh  = totals.get('current_consumption_kwh', 0) or 0
+    prev_kwh  = totals.get('previous_consumption_kwh', 0) or 0
+    var_pct   = totals.get('variance_pct')
+    curr_amt  = totals.get('current_billed_amount', 0) or 0
+    prev_amt  = totals.get('previous_billed_amount', 0) or 0
+    bv        = totals.get('billing_variance', 0) or 0
+    ret       = data.get('customers_returned', 0)
+
+    var_str   = (f"{var_pct:+.1f}%" if var_pct is not None else "—")
+    bv_color  = "#22c55e" if bv >= 0 else "#ef4444"
+
+    scope_label = scope.get('label') or 'KEDCO-wide'
+    ctype_label = {'MDI': 'MDI', 'MDNI': 'MDNI', 'all': 'MDI + MDNI'}.get(ctype, ctype)
+
+    trend_rows = "".join(
+        f'<tr><td>{label}</td><td style="text-align:right">{count}</td></tr>'
+        for label, count in trend_d.items() if count > 0
+    )
+
+    return f"""
+    <div class="page">
+        <div class="page-content">
+            <div class="header">
+                <div class="company-name">{context.get('company_name', '')} | {context.get('report_scope', '')}</div>
+                <div class="date">{context.get('report_date', '')}</div>
+            </div>
+            <h1 class="page-title">Customer Consumption Comparison — Summary</h1>
+            <div class="reliability-highlight">
+                <h2>{ctype_label} Customers &mdash; {scope_label}</h2>
+                <p>Current: {cur_per.get('from_date')} to {cur_per.get('to_date')} &nbsp;|&nbsp;
+                   Previous: {prev_per.get('from_date')} to {prev_per.get('to_date')}</p>
+            </div>
+            <div class="reliability-kpi-grid">
+                <div class="reliability-kpi-card">
+                    <div class="reliability-kpi-value">{curr_kwh:,.0f}</div>
+                    <div class="reliability-kpi-label">Current<br/>Consumption (kWh)</div>
+                </div>
+                <div class="reliability-kpi-card">
+                    <div class="reliability-kpi-value">{prev_kwh:,.0f}</div>
+                    <div class="reliability-kpi-label">Previous<br/>Consumption (kWh)</div>
+                </div>
+                <div class="reliability-kpi-card">
+                    <div class="reliability-kpi-value" style="color:{bv_color}">{var_str}</div>
+                    <div class="reliability-kpi-label">Overall<br/>Change</div>
+                </div>
+                <div class="reliability-kpi-card">
+                    <div class="reliability-kpi-value">&#8358;{curr_amt:,.0f}</div>
+                    <div class="reliability-kpi-label">Current<br/>Billed Amount</div>
+                </div>
+                <div class="reliability-kpi-card">
+                    <div class="reliability-kpi-value">&#8358;{prev_amt:,.0f}</div>
+                    <div class="reliability-kpi-label">Previous<br/>Billed Amount</div>
+                </div>
+                <div class="reliability-kpi-card">
+                    <div class="reliability-kpi-value" style="color:{bv_color}">&#8358;{bv:+,.0f}</div>
+                    <div class="reliability-kpi-label">Billing<br/>Variance</div>
+                </div>
+            </div>
+            <h2 style="margin:14px 0 6px;font-size:13px;">Trend Distribution ({ret} customers)</h2>
+            <div class="table-container">
+                <table>
+                    <thead><tr><th>Trend</th><th style="text-align:right">Customers</th></tr></thead>
+                    <tbody>{trend_rows}</tbody>
+                </table>
+            </div>
+        </div>
+        <div class="footer">
+            <img src="{context.get('footer_logo_url', '')}" alt="Powered by EMRC" />
+            <div class="page-number">{page_number}</div>
+        </div>
+    </div>
+    """
+
+
+def render_commercial_comparison_table(data, context, page_number):
+    """Paginated customer comparison table — returns (html, pages_used)."""
+    customers = data.get('customers', [])
+
+    header_html = """
+        <thead>
+            <tr>
+                <th>Customer</th>
+                <th>Account No</th>
+                <th>Feeder</th>
+                <th style="text-align:right">Curr kWh</th>
+                <th style="text-align:right">Prev kWh</th>
+                <th style="text-align:right">Var %</th>
+                <th style="text-align:right">Billed Var &#8358;</th>
+                <th>Trend</th>
+            </tr>
+        </thead>
+    """
+
+    TREND_COLORS = {
+        'Major Positive Trend': '#15803d',
+        'Positive Trend':       '#22c55e',
+        'Moderated Trend':      '#f59e0b',
+        'Declined Trend':       '#f97316',
+        'Major Declined Trend': '#ef4444',
+        'No Previous Data':     '#94a3b8',
+    }
+
+    rows = []
+    for c in customers:
+        vp     = c.get('variance_pct')
+        bv     = c.get('billing_variance', 0) or 0
+        trend  = c.get('trend', 'No Previous Data')
+        color  = TREND_COLORS.get(trend, '#94a3b8')
+        vp_str = f"{vp:+.1f}%" if vp is not None else "—"
+        rows.append(
+            f'<tr>'
+            f'<td>{c.get("customer_name","—")}</td>'
+            f'<td>{c.get("account_no","—")}</td>'
+            f'<td>{c.get("feeder","—")}</td>'
+            f'<td style="text-align:right">{c.get("current_consumption_kwh",0):,.1f}</td>'
+            f'<td style="text-align:right">{c.get("previous_consumption_kwh",0):,.1f}</td>'
+            f'<td style="text-align:right;color:{color};font-weight:600">{vp_str}</td>'
+            f'<td style="text-align:right;color:{"#22c55e" if bv >= 0 else "#ef4444"}">{bv:+,.0f}</td>'
+            f'<td style="color:{color};font-weight:600">{trend}</td>'
+            f'</tr>'
+        )
+
+    return _paginate_table(
+        rows_data=rows,
+        header_html=header_html,
+        page_title="Customer Comparison Detail",
+        context=context,
+        start_page=page_number,
+        max_rows=14,
+        landscape=True,
+    )
+
+
+def render_commercial_comparison_insights(data, context, page_number):
+    """AI insights page for a comparison report."""
+    insights = data.get('ai_insights', {})
+    if not insights or 'error' in insights:
+        return f"""
+    <div class="page">
+        <div class="page-content">
+            <div class="header">
+                <div class="company-name">{context.get('company_name', '')} | {context.get('report_scope', '')}</div>
+                <div class="date">{context.get('report_date', '')}</div>
+            </div>
+            <h1 class="page-title">AI Insights</h1>
+            <p style="margin-top:24px;color:#94a3b8;">AI insights were not available for this report.</p>
+        </div>
+        <div class="footer">
+            <img src="{context.get('footer_logo_url', '')}" alt="Powered by EMRC" />
+            <div class="page-number">{page_number}</div>
+        </div>
+    </div>
+    """
+
+    headline       = insights.get('headline', '')
+    summary        = insights.get('summary', '')
+    notable        = insights.get('notable_trends', [])
+    watch_list     = insights.get('watch_list', [])
+    recommendations = insights.get('recommendations', [])
+
+    notable_html = "".join(f'<li style="margin-bottom:6px">{t}</li>' for t in notable)
+    recs_html    = "".join(f'<li style="margin-bottom:6px">{r}</li>' for r in recommendations)
+    watch_html   = "".join(
+        f'<tr><td><strong>{w.get("customer_name","—")}</strong><br/>'
+        f'<span style="color:#64748b;font-size:10px">{w.get("account_no","")}</span></td>'
+        f'<td>{w.get("reason","")}</td></tr>'
+        for w in watch_list
+    )
+
+    return f"""
+    <div class="page">
+        <div class="page-content">
+            <div class="header">
+                <div class="company-name">{context.get('company_name', '')} | {context.get('report_scope', '')}</div>
+                <div class="date">{context.get('report_date', '')}</div>
+            </div>
+            <h1 class="page-title">AI Insights</h1>
+            <div class="reliability-highlight">
+                <h2>{headline}</h2>
+                <p>{summary}</p>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:14px">
+                <div>
+                    <h3 style="font-size:12px;font-weight:600;margin-bottom:8px;color:#002050">Notable Trends</h3>
+                    <ul style="padding-left:16px;font-size:11px;color:#334155">{notable_html}</ul>
+                    <h3 style="font-size:12px;font-weight:600;margin:14px 0 8px;color:#002050">Recommendations</h3>
+                    <ul style="padding-left:16px;font-size:11px;color:#334155">{recs_html}</ul>
+                </div>
+                <div>
+                    <h3 style="font-size:12px;font-weight:600;margin-bottom:8px;color:#002050">Watch List</h3>
+                    <div class="table-container">
+                        <table>
+                            <thead><tr><th>Customer</th><th>Reason</th></tr></thead>
+                            <tbody>{watch_html}</tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="footer">
+            <img src="{context.get('footer_logo_url', '')}" alt="Powered by EMRC" />
+            <div class="page-number">{page_number}</div>
+        </div>
+    </div>
+    """
+
+
+# =============================================================================
 # FINANCIAL SECTION RENDERERS
 # =============================================================================
 
@@ -2554,6 +2778,10 @@ class PDFGenerator:
         'revenue_by_district':   render_revenue_by_district,
         'revenue_by_feeder':     render_revenue_by_feeder,
         'customer_type_summary': render_customer_type_summary,
+        # Commercial Comparison
+        'commercial_comparison_summary':  render_commercial_comparison_summary,
+        'commercial_comparison_table':    render_commercial_comparison_table,
+        'commercial_comparison_insights': render_commercial_comparison_insights,
         # Financial
         'financial_overview': render_financial_overview,
         'opex_by_category':   render_opex_by_category,

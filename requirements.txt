@@ -63,7 +63,7 @@ sqlparse==0.5.3
 tinycss2==1.5.1
 tinyhtml5==2.0.0
 tqdm==4.67.1
-typing_extensions==4.13.0
+typing_extensions>=4.14.0
 tzdata==2025.2
 uritemplate==4.1.1
 vine==5.1.0
@@ -71,3 +71,4 @@ wcwidth==0.2.13
 weasyprint==66.0
 webencodings==0.5.1
 zopfli==0.4.0
+anthropic==0.97.0

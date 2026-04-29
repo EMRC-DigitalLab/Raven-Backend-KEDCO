@@ -40,6 +40,14 @@ class Command(BaseCommand):
                     {'name': 'Delete', 'codename': f'delete_{section.name}', 'permission_type': 'delete'},
                     {'name': 'Admin', 'codename': f'admin_{section.name}', 'permission_type': 'admin'},
                 ]
+
+                # Commercial-specific feature permissions
+                if section.name == 'commercial':
+                    permissions_data.append({
+                        'name': 'View Customer Comparison',
+                        'codename': 'view_customer_comparison',
+                        'permission_type': 'view',
+                    })
                 
                 for perm_data in permissions_data:
                     perm_data['section'] = section

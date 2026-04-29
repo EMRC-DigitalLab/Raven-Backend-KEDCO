@@ -84,16 +84,31 @@ class CommercialCustomer(UUIDModel, models.Model):
     datanest_created_at = models.DateTimeField(null=True, blank=True)
     synced_at        = models.DateTimeField(auto_now=True)
 
-    # Meter tampering / bypass indicator — synced from DataNest
+    METER_STATUS_CHOICES = [
+        ('active',   'Active'),
+        ('faulty',   'Faulty'),
+        ('missing',  'Missing'),
+        ('bypassed', 'Bypassed'),
+    ]
+
+    meter_status          = models.CharField(
+        max_length=10, choices=METER_STATUS_CHOICES, default='active',
+        help_text="Current meter status synced from DataNest"
+    )
+    meter_fault_logged_at = models.DateTimeField(null=True, blank=True)
+    meter_fault_logged_by = models.CharField(max_length=36, blank=True)
+
+    # Derived from meter_status == 'bypassed' during sync
     is_bypass        = models.BooleanField(
         default=False,
-        help_text="True if this customer has been flagged for meter bypass / tampering in DataNest"
+        help_text="True if meter_status is 'bypassed' in DataNest"
     )
 
     class Meta:
         ordering = ['customer_name']
         indexes = [
             models.Index(fields=['customer_type']),
+            models.Index(fields=['meter_status']),
             models.Index(fields=['is_bypass']),
         ]
 
@@ -189,6 +204,29 @@ class MeterReading(UUIDModel, models.Model):
     audit_note   = models.TextField(blank=True, help_text="Auditor's note or rejection reason")
     audited_at   = models.DateTimeField(null=True, blank=True, help_text="When the audit decision was made")
 
+    # ── Submission + fault metadata — synced from DataNest ───────────────────
+    SUBMISSION_STATUS_CHOICES = [
+        ('on_time', 'On Time'),
+        ('late',    'Late'),
+    ]
+    FAULT_SOURCE_CHOICES = [
+        ('feeder_fault', 'Feeder Fault'),
+        ('meter_fault',  'Meter Fault'),
+    ]
+
+    submission_status = models.CharField(
+        max_length=10, choices=SUBMISSION_STATUS_CHOICES, default='on_time',
+        help_text="Whether the reading was submitted on time or late"
+    )
+    fault_source = models.CharField(
+        max_length=15, choices=FAULT_SOURCE_CHOICES, null=True, blank=True,
+        help_text="If this reading occurred during a fault — which type"
+    )
+    estimation_method = models.CharField(
+        max_length=30, blank=True,
+        help_text="Non-empty when DataNest estimated this reading rather than taking an actual meter read"
+    )
+
     class Meta:
         unique_together = ('customer', 'reading_date')
         ordering = ['-reading_date']
@@ -198,6 +236,9 @@ class MeterReading(UUIDModel, models.Model):
             models.Index(fields=['customer', 'reading_date']),
             models.Index(fields=['ocr_status']),
             models.Index(fields=['audit_status']),
+            models.Index(fields=['submission_status']),
+            models.Index(fields=['fault_source']),
+            models.Index(fields=['estimation_method']),
         ]
 
     def __str__(self):
@@ -292,6 +333,27 @@ class MeterManagerAssignment(UUIDModel, models.Model):
 
     def __str__(self):
         return f'{self.manager.name} → {self.feeder.name} ({self.status})'
+
+
+# ── COMPARISON AI CACHE ──────────────────────────────────────────────────────
+
+class CommercialComparisonCache(models.Model):
+    """
+    Caches Claude AI insights for a given comparison so the API is not
+    called twice for identical parameters.
+    Keyed by a SHA-256 hash of the normalised comparison params.
+    Expires after 24 hours — next request after expiry triggers a fresh call.
+    """
+    comparison_hash = models.CharField(max_length=64, unique=True, db_index=True)
+    insights        = models.JSONField()
+    created_at      = models.DateTimeField(auto_now_add=True)
+    expires_at      = models.DateTimeField()
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'ComparisonCache {self.comparison_hash[:12]}… (expires {self.expires_at:%Y-%m-%d %H:%M})'
 
 
 # ── LEGACY MODELS (kept for financial/analytics compatibility) ─────────────────

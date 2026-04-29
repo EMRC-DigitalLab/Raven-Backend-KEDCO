@@ -126,12 +126,12 @@ def _state_metrics(state, customers_qs, readings_qs, date_range):
                 explanation='Total energy consumed = sum(present_reading - previous_reading) for all customers read in this state in this period.',
             ),
             'actual_billed_kwh': metric(
-                float(billing['total_billed_kwh']), unit='kWh',
-                explanation='Actual energy billed from real readings in this state for this period.',
+                float(billing['actual_billed_kwh']), unit='kWh',
+                explanation='Energy billed from real meter readings only (estimation_method is empty) in this state.',
             ),
             'estimated_billed_kwh': metric(
-                float(estimated['estimated_kwh']), unit='kWh', mode='estimated',
-                explanation='Estimated energy for unread customers in this state.',
+                float(billing['estimated_billed_kwh'] + estimated['estimated_kwh']), unit='kWh', mode='estimated',
+                explanation='Estimated energy: DataNest-estimated readings + Raven projection for customers with no reading in this state.',
             ),
             'total_projected_billed_kwh': metric(
                 float(billing['total_billed_kwh'] + estimated['estimated_kwh']), unit='kWh', mode='estimated',

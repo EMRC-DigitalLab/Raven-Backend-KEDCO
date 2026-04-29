@@ -113,12 +113,12 @@ def _feeder_metrics(feeder, customers_qs, readings_qs, date_range):
                 explanation='Total energy consumed = sum(present_reading - previous_reading) for all customers read in this period.',
             ),
             'actual_billed_kwh': metric(
-                float(billing['total_billed_kwh']), unit='kWh',
-                explanation='Actual energy billed from real readings on this feeder for this period.',
+                float(billing['actual_billed_kwh']), unit='kWh',
+                explanation='Energy billed from real meter readings only (estimation_method is empty) on this feeder.',
             ),
             'estimated_billed_kwh': metric(
-                float(estimated['estimated_kwh']), unit='kWh', mode='estimated',
-                explanation='Estimated energy for unread customers on this feeder.',
+                float(billing['estimated_billed_kwh'] + estimated['estimated_kwh']), unit='kWh', mode='estimated',
+                explanation='Estimated energy: DataNest-estimated readings + Raven projection for customers with no reading on this feeder.',
             ),
             'total_projected_billed_kwh': metric(
                 float(billing['total_billed_kwh'] + estimated['estimated_kwh']), unit='kWh', mode='estimated',
@@ -253,8 +253,8 @@ def all_feeders(request):
             },
             'energy': {
                 'energy_consumed_kwh':        metric(consumed_kwh, unit='kWh', explanation='Total energy consumed = sum(present_reading - previous_reading) for all customers read in this period.'),
-                'actual_billed_kwh':          metric(float(b['total_billed_kwh']), unit='kWh', explanation='Actual energy billed from real readings on this feeder for this period.'),
-                'estimated_billed_kwh':       metric(float(e['estimated_kwh']), unit='kWh', mode='estimated', explanation='Estimated energy for unread customers on this feeder.'),
+                'actual_billed_kwh':          metric(float(b['actual_billed_kwh']), unit='kWh', explanation='Energy billed from real meter readings only (estimation_method is empty) on this feeder.'),
+                'estimated_billed_kwh':       metric(float(b['estimated_billed_kwh'] + e['estimated_kwh']), unit='kWh', mode='estimated', explanation='Estimated energy: DataNest-estimated readings + Raven projection for customers with no reading on this feeder.'),
                 'total_projected_billed_kwh': metric(float(b['total_billed_kwh'] + e['estimated_kwh']), unit='kWh', mode='estimated', explanation='Actual + estimated energy for this feeder.'),
                 'daily_billed_kwh_estimate':  metric(float(daily_kwh), unit='kWh/day', mode='estimated', explanation='Daily energy billed estimate from actual readings on this feeder.'),
                 'daily_energy_delivered_mwh': metric(float(daily_mwh), unit='MWh/day', mode=ed['mode'], explanation='Average daily energy delivered — total_mwh / days. Source: meter or system fallback.'),
