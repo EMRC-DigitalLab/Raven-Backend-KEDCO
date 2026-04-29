@@ -52,18 +52,21 @@ class Command(BaseCommand):
         cursor = connections['external'].cursor()
         cursor.execute("""
             SELECT feeder_id, feeder_name, feeder_type, service_band, feeder_class,
-                   district_id, injection_station_id
+                   district_id, injection_station_id,
+                   commercial_is_onboarded, commercial_onboarded_at
             FROM feeders
             WHERE status = 'active'
         """)
         dn_feeders = {
             row[0]: {
-                'name':       row[1],
-                'ftype':      row[2],
-                'sband':      row[3],
-                'fclass':     row[4],
-                'district_id': row[5],
-                'is_id':      row[6],
+                'name':                    row[1],
+                'ftype':                   row[2],
+                'sband':                   row[3],
+                'fclass':                  row[4],
+                'district_id':             row[5],
+                'is_id':                   row[6],
+                'commercial_is_onboarded': bool(row[7]),
+                'commercial_onboarded_at': row[8],
             }
             for row in cursor.fetchall()
         }
@@ -79,6 +82,7 @@ class Command(BaseCommand):
             'class_updated': 0,
             'voltage_updated': 0,
             'name_updated': 0,
+            'comm_onboarded_updated': 0,
             'added': 0,
             'skipped_missing_sub': 0,
             'skipped_bad_band': 0,
@@ -99,7 +103,7 @@ class Command(BaseCommand):
                 new_band = band_lookup[sband]
                 if feeder.band != new_band:
                     self.stdout.write(
-                        f'  BAND  {slug}: {feeder.band} → {sband}'
+                        f'  BAND  {slug}: {feeder.band} -> {sband}'
                     )
                     if not dry_run:
                         feeder.band = new_band
@@ -111,7 +115,7 @@ class Command(BaseCommand):
             clean_class = CLASS_CLEANUP.get(raw_class, raw_class)
             if feeder.feeder_class != clean_class and clean_class:
                 self.stdout.write(
-                    f'  CLASS {slug}: {feeder.feeder_class} → {clean_class}'
+                    f'  CLASS {slug}: {feeder.feeder_class} -> {clean_class}'
                 )
                 if not dry_run:
                     feeder.feeder_class = clean_class
@@ -123,7 +127,7 @@ class Command(BaseCommand):
             new_voltage = VOLTAGE_MAP.get(raw_voltage, '')
             if new_voltage and feeder.voltage_level != new_voltage:
                 self.stdout.write(
-                    f'  VOLT  {slug}: {feeder.voltage_level} → {new_voltage}'
+                    f'  VOLT  {slug}: {feeder.voltage_level} -> {new_voltage}'
                 )
                 if not dry_run:
                     feeder.voltage_level = new_voltage
@@ -133,11 +137,25 @@ class Command(BaseCommand):
             # 4. Name
             if feeder.name != dn['name'] and dn['name']:
                 self.stdout.write(
-                    f'  NAME  {slug}: {feeder.name} → {dn["name"]}'
+                    f'  NAME  {slug}: {feeder.name} -> {dn["name"]}'
                 )
                 if not dry_run:
                     feeder.name = dn['name']
                 stats['name_updated'] += 1
+                changed = True
+
+            # 5. Commercial onboarding status
+            dn_comm = dn['commercial_is_onboarded']
+            dn_comm_at = dn['commercial_onboarded_at']
+            if feeder.commercial_is_onboarded != dn_comm or feeder.commercial_onboarded_at != dn_comm_at:
+                self.stdout.write(
+                    f'  COMM  {slug}: onboarded={feeder.commercial_is_onboarded}->{dn_comm}'
+                    f'  at={feeder.commercial_onboarded_at}->{dn_comm_at}'
+                )
+                if not dry_run:
+                    feeder.commercial_is_onboarded = dn_comm
+                    feeder.commercial_onboarded_at = dn_comm_at
+                stats['comm_onboarded_updated'] += 1
                 changed = True
 
             if changed and not dry_run:
@@ -197,13 +215,14 @@ class Command(BaseCommand):
         self.stdout.write('\n' + '=' * 50)
         self.stdout.write(self.style.SUCCESS('SYNC SUMMARY'))
         self.stdout.write('=' * 50)
-        self.stdout.write(f'  Bands updated:       {stats["band_updated"]}')
-        self.stdout.write(f'  Classes updated:     {stats["class_updated"]}')
-        self.stdout.write(f'  Voltage updated:     {stats["voltage_updated"]}')
-        self.stdout.write(f'  Names updated:       {stats["name_updated"]}')
-        self.stdout.write(f'  Feeders added:       {stats["added"]}')
-        self.stdout.write(f'  Skipped (no sub):    {stats["skipped_missing_sub"]}')
-        self.stdout.write(f'  Skipped (bad band):  {stats["skipped_bad_band"]}')
+        self.stdout.write(f'  Bands updated:            {stats["band_updated"]}')
+        self.stdout.write(f'  Classes updated:          {stats["class_updated"]}')
+        self.stdout.write(f'  Voltage updated:          {stats["voltage_updated"]}')
+        self.stdout.write(f'  Names updated:            {stats["name_updated"]}')
+        self.stdout.write(f'  Comm. onboarding updated: {stats["comm_onboarded_updated"]}')
+        self.stdout.write(f'  Feeders added:            {stats["added"]}')
+        self.stdout.write(f'  Skipped (no sub):         {stats["skipped_missing_sub"]}')
+        self.stdout.write(f'  Skipped (bad band):       {stats["skipped_bad_band"]}')
 
         if dry_run:
             self.stdout.write(self.style.WARNING('\nDRY RUN — nothing was saved'))

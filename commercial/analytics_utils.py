@@ -72,7 +72,7 @@ def parse_date_range(request):
 
 def customer_filter_kwargs(request):
     """Return filter kwargs for CommercialCustomer based on request params."""
-    kwargs = {}
+    kwargs = {'feeder__commercial_is_onboarded': True}
     ctype       = request.GET.get('type', '').upper()
     feeder_type = request.GET.get('feeder_type', '').upper()
 
@@ -88,6 +88,7 @@ def reading_filter_kwargs(request, date_range):
     kwargs = {
         'reading_date__gte': date_range['start_date'],
         'reading_date__lte': date_range['end_date'],
+        'customer__feeder__commercial_is_onboarded': True,
     }
     ctype       = request.GET.get('type', '').upper()
     feeder_type = request.GET.get('feeder_type', '').upper()
@@ -348,7 +349,7 @@ def get_customer_queryset(feeder_ids=None, district_ids=None, state_ids=None,
 
     Returns: CommercialCustomer queryset
     """
-    qs = CommercialCustomer.objects.all()
+    qs = CommercialCustomer.objects.filter(feeder__commercial_is_onboarded=True)
     if feeder_ids:
         qs = qs.filter(feeder_id__in=feeder_ids)
     if district_ids:

@@ -141,7 +141,7 @@ def customer_detail(request, pk):
     try:
         customer = CommercialCustomer.objects.select_related(
             'feeder__business_district__state'
-        ).get(pk=pk)
+        ).get(pk=pk, feeder__commercial_is_onboarded=True)
     except CommercialCustomer.DoesNotExist:
         return Response({'error': 'Customer not found.'}, status=status.HTTP_404_NOT_FOUND)
 

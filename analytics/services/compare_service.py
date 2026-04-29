@@ -589,8 +589,8 @@ def _fetch_commercial(
     if not needed:
         return result
 
-    c_filter = _comm_customer_filter(entity_type, entity_id)
-    r_filter = _comm_reading_filter(entity_type, entity_id)
+    c_filter = {**_comm_customer_filter(entity_type, entity_id), 'feeder__commercial_is_onboarded': True}
+    r_filter = {**_comm_reading_filter(entity_type, entity_id), 'customer__feeder__commercial_is_onboarded': True}
 
     _total_cust  = None
     _cust_read   = None
@@ -1399,7 +1399,12 @@ def compare_customers(
                 return {'error': f'{scope_type} with id {scope_id!r} not found.'}
 
     # ── Customer queryset ──────────────────────────────────────────────────────
-    cust_qs = CommercialCustomer.objects.filter(**scope_filter)
+    # Restrict to commercially onboarded feeders only — data for non-onboarded
+    # feeders is not yet live and must not appear in any commercial analytics.
+    cust_qs = CommercialCustomer.objects.filter(
+        **scope_filter,
+        feeder__commercial_is_onboarded=True,
+    )
     if customer_type in ('MDI', 'MDNI'):
         cust_qs = cust_qs.filter(customer_type=customer_type)
 
@@ -1410,12 +1415,17 @@ def compare_customers(
 
     # ── Aggregate consumption per customer for both periods ────────────────────
     def _period_consumption(from_d: date, to_d: date) -> dict:
-        """Returns {customer_id: {'kwh', 'count', 'amount'}} for the given period."""
+        """Returns {customer_id: {'kwh', 'count', 'amount'}} for the given period.
+
+        Readings before the feeder's commercial_onboarded_at date are excluded
+        so pre-onboarding historical data never pollutes comparisons.
+        """
         rows = (
             MeterReading.objects
             .filter(
                 customer__in=cust_qs,
                 reading_date__range=(from_d, to_d),
+                reading_date__gte=F('customer__feeder__commercial_onboarded_at'),
                 billed_consumption__isnull=False,
             )
             .values('customer_id')
@@ -1446,7 +1456,11 @@ def compare_customers(
     estimated_cids = set(
         str(cid) for cid in
         MeterReading.objects
-        .filter(customer__in=cust_qs, reading_date__range=(current_from, current_to))
+        .filter(
+            customer__in=cust_qs,
+            reading_date__range=(current_from, current_to),
+            reading_date__gte=F('customer__feeder__commercial_onboarded_at'),
+        )
         .exclude(estimation_method='')
         .values_list('customer_id', flat=True)
         .distinct()

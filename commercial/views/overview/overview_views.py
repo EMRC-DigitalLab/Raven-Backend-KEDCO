@@ -12,6 +12,11 @@ Query params:
   feeder_class : MDI | MDNI | NMD
 """
 
+from datetime import date, timedelta
+from decimal import Decimal
+
+from dateutil.relativedelta import relativedelta
+from django.db.models import Count
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
@@ -30,6 +35,7 @@ from commercial.analytics_utils import (
     reading_filter_kwargs,
 )
 from commercial.bulk_analytics import (
+    bulk_coverage,
     feeder_dim_map,
     bulk_billing,
     bulk_energy_consumed,
@@ -41,6 +47,37 @@ from commercial.models import CommercialCustomer, MeterManager, MeterReading
 from common.models import Band, BusinessDistrict, State
 
 
+def _state_prev_periods(date_range, count=3):
+    """Return `count` previous periods before date_range, oldest first."""
+    mode  = date_range['mode']
+    start = date_range['start_date']
+    periods = []
+    for i in range(count, 0, -1):
+        if mode == 'daily':
+            s = start - timedelta(days=i)
+            e = s
+            label = str(s)
+        elif mode == 'weekly':
+            s = start - timedelta(weeks=i)
+            e = s + timedelta(days=6)
+            label = f'{s} to {e}'
+        elif mode == 'yearly':
+            s = date(start.year - i, 1, 1)
+            e = date(start.year - i, 12, 31)
+            label = str(start.year - i)
+        else:  # monthly
+            ref = start - relativedelta(months=i)
+            s   = date(ref.year, ref.month, 1)
+            e   = s + relativedelta(months=1) - timedelta(days=1)
+            label = s.strftime('%B %Y')
+        periods.append({
+            'start_date': s, 'end_date': e,
+            'label': label, 'days': (e - s).days + 1,
+            'mode': mode, 'is_current': False,
+        })
+    return periods
+
+
 @api_view(['GET'])
 def commercial_overview(request):
     date_range = parse_date_range(request)
@@ -48,6 +85,19 @@ def commercial_overview(request):
     # ── Base querysets ────────────────────────────────────────────────────────
     customers_qs = CommercialCustomer.objects.filter(**customer_filter_kwargs(request))
     readings_qs  = MeterReading.objects.filter(**reading_filter_kwargs(request, date_range))
+
+    # ── Onboarding status ─────────────────────────────────────────────────────
+    from common.models import Feeder
+    onboarded_feeders = list(
+        Feeder.objects
+        .filter(commercial_is_onboarded=True)
+        .order_by('commercial_onboarded_at', 'name')
+        .values('name', 'slug', 'commercial_onboarded_at')
+    )
+    onboarding_info = {
+        'total_onboarded_feeders': len(onboarded_feeders),
+        'data_valid_from':         str(onboarded_feeders[0]['commercial_onboarded_at']) if onboarded_feeders else None,
+    }
 
     # ── Customer counts ───────────────────────────────────────────────────────
     total_mdi    = customers_qs.filter(customer_type='MDI').count()
@@ -116,7 +166,7 @@ def commercial_overview(request):
     billing_by_band  = bulk_billing(readings_qs, f2b)
     consumed_by_band = bulk_energy_consumed(readings_qs, f2b)
 
-    _empty_b = {'total_billed_kwh': ZERO}
+    _empty_b = {'total_billed_kwh': ZERO, 'total_billed_amount': ZERO}
 
     def _bd_row(ed, b, consumed):
         delivered_kwh = round(float(ed['total_mwh']) * 1000, 2)
@@ -129,14 +179,115 @@ def commercial_overview(request):
             'mode':                 ed['mode'],
         }
 
+    # ── State trend: current period coverage + 3 previous periods ────────────
+    coverage_by_state = bulk_coverage(customers_qs, readings_qs, f2s)
+
+    trend_periods = _state_prev_periods(date_range, count=3) + [{**date_range, 'is_current': True}]
+    trend_start   = trend_periods[0]['start_date']
+    trend_end     = trend_periods[-1]['end_date']
+
+    # ONE readings query spanning all 4 periods
+    trend_rows = list(
+        MeterReading.objects
+        .filter(
+            customer__in=customers_qs,
+            reading_date__gte=trend_start,
+            reading_date__lte=trend_end,
+            billed_consumption__isnull=False,
+            tariff_rate__isnull=False,
+        )
+        .values(
+            'reading_date',
+            'customer_id',
+            'customer__feeder__business_district__state_id',
+            'billed_consumption',
+            'tariff_rate',
+        )
+    )
+
+    # Energy per trend period — reuse current-period result, 3 new calls for prev
+    trend_energy_by_period = []
+    for p in trend_periods:
+        if p.get('is_current'):
+            trend_energy_by_period.append(energy_by_state)
+        else:
+            p_dr = {'start_date': p['start_date'], 'end_date': p['end_date'], 'days': p['days']}
+            trend_energy_by_period.append(rollup_energy(energy_per_feeder(all_breakdown_feeder_ids, p_dr), f2s))
+
+    # Readable customers per state (fixed denominator)
+    readable_by_state = {
+        row['feeder__business_district__state_id']: row['n']
+        for row in customers_qs
+        .exclude(meter_status__in=('faulty', 'missing'))
+        .filter(feeder__business_district__state__isnull=False)
+        .values('feeder__business_district__state_id')
+        .annotate(n=Count('id'))
+    }
+
+    # Bucket trend rows per period → per state in Python (no extra DB hits)
+    _ZERO_D = Decimal('0')
+
+    def _bucket_state(rows, p_start, p_end):
+        acc = {}
+        for r in rows:
+            if not (p_start <= r['reading_date'] <= p_end):
+                continue
+            sid = r['customer__feeder__business_district__state_id']
+            if sid is None:
+                continue
+            if sid not in acc:
+                acc[sid] = {'kwh': _ZERO_D, 'ec': _ZERO_D, 'read_ids': set()}
+            kwh  = Decimal(str(r['billed_consumption']))
+            rate = Decimal(str(r['tariff_rate']))
+            acc[sid]['kwh'] += kwh
+            acc[sid]['ec']  += kwh * rate
+            acc[sid]['read_ids'].add(r['customer_id'])
+        return acc
+
+    trend_bill_by_period = [
+        _bucket_state(trend_rows, p['start_date'], p['end_date'])
+        for p in trend_periods
+    ]
+
     by_state_breakdown = []
     for s_obj in State.objects.exclude(name='Test State').order_by('name'):
         sid = s_obj.id
         ed  = energy_by_state.get(sid, {'total_mwh': 0.0, 'mode': 'system'})
         b   = billing_by_state.get(sid, _empty_b)
+        cov = coverage_by_state.get(sid, {'read': 0, 'readable': 0, 'rate': 0.0})
+
+        base = _bd_row(ed, b, consumed_by_state.get(sid, ZERO))
+        base['revenue_billed']     = float(b.get('total_billed_amount', ZERO))
+        base['billing_efficiency'] = 0
+        base['coverage_rate']      = cov['rate']
+
+        state_trend = []
+        for i, p in enumerate(trend_periods):
+            bill = trend_bill_by_period[i].get(sid, {'kwh': _ZERO_D, 'ec': _ZERO_D, 'read_ids': set()})
+            t_ed = trend_energy_by_period[i].get(sid, {'total_mwh': 0.0, 'mode': 'system'})
+            ec   = float(round(bill['ec'], 2))
+            vat  = round(ec * 0.075, 2)
+            readable = readable_by_state.get(sid, 0)
+            read_ct  = len(bill['read_ids'])
+            state_trend.append({
+                'period': {
+                    'label':      p['label'],
+                    'start_date': str(p['start_date']),
+                    'end_date':   str(p['end_date']),
+                    'is_current': p.get('is_current', False),
+                },
+                'energy_delivered_kwh': round(float(t_ed['total_mwh']) * 1000, 2),
+                'actual_billed_kwh':    float(round(bill['kwh'], 2)),
+                'revenue_billed':       round(ec + vat, 2),
+                'billing_efficiency':   0,
+                'atc_loss':             0,
+                'coverage_rate':        round(read_ct / readable * 100, 2) if readable else 0.0,
+            })
+
         by_state_breakdown.append({
             'state': {'slug': s_obj.slug, 'name': s_obj.name},
-            **_bd_row(ed, b, consumed_by_state.get(sid, ZERO)),
+            **base,
+            'trend': state_trend,
         })
 
     by_district_breakdown = []
@@ -359,6 +510,7 @@ def commercial_overview(request):
         },
 
         'total_feeders': total_feeders,
+        'onboarding':    onboarding_info,
 
         'energy_breakdown': {
             'by_state':    by_state_breakdown,
