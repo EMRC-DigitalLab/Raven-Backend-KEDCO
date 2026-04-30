@@ -23,10 +23,24 @@ MYSQL_CHUNK = 50_000
 BULK_BATCH = 10_000
 
 
-def run_sync() -> dict:
-    window_start, window_end, _ = get_sync_window('technical_meter_readings')
+def run_sync(override_start=None, override_end=None) -> dict:
+    """
+    Sync DataNest techicalenergyreadingdailydta → Raven CumulativeMeterReading.
+
+    override_start / override_end: date objects.  When supplied the normal
+    get_sync_window() watermark logic is bypassed so callers (e.g. the
+    backfill management command) can target an exact date range.
+    """
+    if override_start and override_end:
+        from django.utils.timezone import make_aware
+        import datetime as _dt
+        window_start = make_aware(_dt.datetime.combine(override_start, _dt.time.min))
+        window_end   = make_aware(_dt.datetime.combine(override_end,   _dt.time.max))
+    else:
+        window_start, window_end, _ = get_sync_window('technical_meter_readings')
+
     start_date = window_start.date()
-    end_date = window_end.date()
+    end_date   = window_end.date()
 
     stats = {
         'window_start': window_start,

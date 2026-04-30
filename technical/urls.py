@@ -17,6 +17,7 @@ from .views.states.all_states import all_states_technical_summary
 from .views.states.single_state import state_technical_summary
 from .views.transformers.transformer_views import TransformerAvailabilityOverview
 from .views.sync_status import technical_sync_status
+from .views.sync_backfill import trigger_backfill, backfill_status
 
 router = DefaultRouter()
 
@@ -50,4 +51,8 @@ urlpatterns = [
 
     # DataNest Sync Status
     path('sync-status/', technical_sync_status, name='technical-sync-status'),
+
+    # DataNest Backfill (trigger from frontend)
+    path('sync/backfill/', trigger_backfill, name='technical-sync-backfill-trigger'),
+    path('sync/backfill/<str:job_id>/', backfill_status, name='technical-sync-backfill-status'),
 ]

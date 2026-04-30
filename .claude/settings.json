@@ -80,7 +80,11 @@
       "Bash(python manage.py migrate common 0006_feeder_commercial_onboarding)",
       "Bash(python manage.py sync_feeder_metadata)",
       "Bash(APP_ENV=production python manage.py migrate common 0006_feeder_commercial_onboarding)",
-      "Bash(python manage.py check)"
+      "Bash(python manage.py check)",
+      "Bash(python manage.py makemigrations --check --dry-run)",
+      "Bash(python manage.py makemigrations)",
+      "Bash(python manage.py migrate)",
+      "Bash(APP_ENV=production python manage.py migrate)"
     ],
     "additionalDirectories": [
       "c:\\c\\Users\\TriumphAdeniran\\OneDrive - Market and Regulatory Consultants Ltd\\Desktop\\Raven Code Base\\Raven-Backend-KEDCO"

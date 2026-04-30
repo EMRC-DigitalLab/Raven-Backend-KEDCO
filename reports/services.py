@@ -307,6 +307,21 @@ SECTION_DEFINITIONS = {
         'supports_chart': True,
         'config_options': {},
     },
+    # ── DSO Compliance sections ───────────────────────────────────────────────
+    'dso_compliance_overview': {
+        'display_name': 'DSO Compliance Overview',
+        'description': 'Summary of injection station submission compliance for hourly load and energy readings',
+        'category': 'technical',
+        'supports_chart': False,
+        'config_options': {},
+    },
+    'dso_compliance_table': {
+        'display_name': 'DSO Compliance Table',
+        'description': 'Per-station breakdown showing hourly load and energy reading submission compliance by DSO vs admin override',
+        'category': 'technical',
+        'supports_chart': False,
+        'config_options': {},
+    },
     # ── Financial sections ────────────────────────────────────────────────────
     'financial_overview': {
         'display_name': 'Financial Overview',
@@ -690,91 +705,121 @@ class ReportDataService:
         result = calculate_energy_delivered([feeder_id], self.from_date, self.to_date)
         return result
     
-    def get_hours_of_supply_trend(self, group_by='day'):
-        """Get hours of supply trend data for charts"""
+    # -------------------------------------------------------------------------
+    # Internal: previous-period helpers
+    # -------------------------------------------------------------------------
+
+    def _prev_period_dates(self):
+        """Return (prev_from, prev_to) — the same-length period immediately before."""
+        prev_to   = self.from_date - timedelta(days=1)
+        prev_from = prev_to - timedelta(days=self.period_days - 1)
+        return prev_from, prev_to
+
+    def _fetch_hourly_supply_series(self, from_date, to_date):
+        """Raw daily hours-of-supply list for a given date range."""
         if not self.feeder_ids:
             return []
-        
         total_feeders = len(self.feeder_ids)
-        
-        if group_by == 'day':
-            # Group by date using a reliable distinct approach for hourly load
-            # Similar to technical_calculations.py
-            from django.db.models import Count, ExpressionWrapper, F, FloatField
-            
-            daily_data = HourlyLoad.objects.filter(
+        from django.db.models import Count
+        rows = (
+            HourlyLoad.objects.filter(
                 feeder_id__in=self.feeder_ids,
-                date__range=(self.from_date, self.to_date),
-                load_mw__gt=0
-            ).values('date').annotate(
-                # We count distinct hour+feeder combinations and divide by total feeders
-                total_hours=Count('id') 
-            ).order_by('date')
-            
-            return [
-                {
-                    'date': item['date'].strftime('%Y-%m-%d'),
-                    'hours': round(item['total_hours'] / total_feeders, 2) if total_feeders > 0 else 0
-                }
-                for item in daily_data
-            ]
-        
-        return []
-    
-    def get_load_trend(self, metric='average_load'):
-        """Get load trend data for charts"""
-        if not self.feeder_ids:
-            return []
-        
-        if metric == 'average_load':
-            daily_data = HourlyLoad.objects.filter(
-                feeder_id__in=self.feeder_ids,
-                date__range=(self.from_date, self.to_date)
-            ).values('date').annotate(
-                value=Avg('load_mw')
-            ).order_by('date')
-        else:  # peak_load
-            daily_data = HourlyLoad.objects.filter(
-                feeder_id__in=self.feeder_ids,
-                date__range=(self.from_date, self.to_date)
-            ).values('date').annotate(
-                value=Max('load_mw')
-            ).order_by('date')
-        
+                date__range=(from_date, to_date),
+                load_mw__gt=0,
+            )
+            .values('date')
+            .annotate(total_hours=Count('id'))
+            .order_by('date')
+        )
         return [
             {
-                'date': item['date'].strftime('%Y-%m-%d'),
-                'value': round(float(item['value'] or 0), 2)
+                'date':  item['date'].strftime('%Y-%m-%d'),
+                'hours': round(item['total_hours'] / total_feeders, 2) if total_feeders else 0,
             }
-            for item in daily_data
+            for item in rows
         ]
-    
-    def get_energy_trend(self):
-        """Get energy delivered trend data for charts - FIXED"""
+
+    def _fetch_load_series(self, from_date, to_date, metric='average_load'):
+        """Raw daily load list for a given date range."""
         if not self.feeder_ids:
             return []
-        
-        # Generate daily data with hybrid calculation
-        daily_data = []
-        current_date = self.from_date
-        
-        while current_date <= self.to_date:
-            # Create temporary service for single day
-            single_day_filters = self.filters.copy()
-            single_day_filters['from_date'] = current_date
-            single_day_filters['to_date'] = current_date
-            
-            temp_service = ReportDataService(single_day_filters)
-            daily_energy = temp_service._calculate_energy_delivered_hybrid()
-            
-            daily_data.append({
-                'date': current_date.strftime('%Y-%m-%d'),
-                'value': round(daily_energy, 2)
-            })
-            
-            current_date += timedelta(days=1)
-        
-        return daily_data
+        agg = Avg('load_mw') if metric == 'average_load' else Max('load_mw')
+        rows = (
+            HourlyLoad.objects.filter(
+                feeder_id__in=self.feeder_ids,
+                date__range=(from_date, to_date),
+            )
+            .values('date')
+            .annotate(value=agg)
+            .order_by('date')
+        )
+        return [
+            {'date': item['date'].strftime('%Y-%m-%d'), 'value': round(float(item['value'] or 0), 2)}
+            for item in rows
+        ]
+
+    def _fetch_energy_series(self, from_date, to_date):
+        """Daily energy-delivered list for a given date range (hybrid calculation)."""
+        if not self.feeder_ids:
+            return []
+        result = []
+        current = from_date
+        while current <= to_date:
+            single_filters = self.filters.copy()
+            single_filters['from_date'] = current
+            single_filters['to_date']   = current
+            tmp    = ReportDataService(single_filters)
+            energy = tmp._calculate_energy_delivered_hybrid()
+            result.append({'date': current.strftime('%Y-%m-%d'), 'value': round(energy, 2)})
+            current += timedelta(days=1)
+        return result
+
+    @staticmethod
+    def _period_label(from_date, to_date):
+        """Human-readable label for a date range."""
+        if from_date.month == to_date.month and from_date.year == to_date.year:
+            return from_date.strftime('%b %Y')
+        return f"{from_date.strftime('%d %b')} – {to_date.strftime('%d %b %Y')}"
+
+    # -------------------------------------------------------------------------
+    # Public trend methods — now return {current, previous, labels} dicts
+    # -------------------------------------------------------------------------
+
+    def get_hours_of_supply_trend(self):
+        """Hours of supply trend for current + previous period."""
+        prev_from, prev_to = self._prev_period_dates()
+        return {
+            'current':  self._fetch_hourly_supply_series(self.from_date, self.to_date),
+            'previous': self._fetch_hourly_supply_series(prev_from, prev_to),
+            'curr_label': self._period_label(self.from_date, self.to_date),
+            'prev_label': self._period_label(prev_from, prev_to),
+            'value_key': 'hours',
+            'unit': 'hrs',
+        }
+
+    def get_load_trend(self, metric='average_load'):
+        """Load trend for current + previous period."""
+        prev_from, prev_to = self._prev_period_dates()
+        return {
+            'current':  self._fetch_load_series(self.from_date, self.to_date, metric),
+            'previous': self._fetch_load_series(prev_from, prev_to, metric),
+            'curr_label': self._period_label(self.from_date, self.to_date),
+            'prev_label': self._period_label(prev_from, prev_to),
+            'value_key': 'value',
+            'unit': 'MW',
+        }
+
+    def get_energy_trend(self):
+        """Energy delivered trend for current + previous period."""
+        prev_from, prev_to = self._prev_period_dates()
+        return {
+            'current':  self._fetch_energy_series(self.from_date, self.to_date),
+            'previous': self._fetch_energy_series(prev_from, prev_to),
+            'curr_label': self._period_label(self.from_date, self.to_date),
+            'prev_label': self._period_label(prev_from, prev_to),
+            'value_key': 'value',
+            'unit': 'MWh',
+        }
     
     def get_service_band_summary(self):
         """Get summary by service band"""
@@ -967,6 +1012,110 @@ class ReportDataService:
         
         return sorted(result, key=lambda x: x['district_name'])
     
+    def get_dso_compliance_data(self):
+        """
+        Per-injection-station submission compliance for hourly load and energy readings.
+
+        Logic:
+          - Considers all active InjectionSubstations (both 'injection' and 'transmission' types).
+          - For each station, only onboarded 11kV feeders are counted.
+          - Expected hourly load = feeder_count × period_days × 24.
+          - Expected energy readings = feeder_count × period_days.
+          - Actual counts come from HourlyLoad and CumulativeMeterReading, split by
+            submission_type (dso / admin_override).
+          - A station is 'compliant' when both hourly_pct ≥ 80 and energy_pct ≥ 80.
+        """
+        from common.models import InjectionSubstation
+        from technical.models import CumulativeMeterReading
+
+        substations = (
+            InjectionSubstation.objects
+            .filter(status='active', station_type='injection')
+            .prefetch_related('feeders')
+            .order_by('name')
+        )
+
+        station_rows = []
+        total_stations = 0
+        compliant_count = 0
+
+        for station in substations:
+            feeder_ids = list(
+                station.feeders.filter(voltage_level='11kv', is_onboarded=True)
+                .values_list('id', flat=True)
+            )
+            if not feeder_ids:
+                continue
+
+            total_stations += 1
+            n = len(feeder_ids)
+
+            expected_hourly = n * self.period_days * 24
+            expected_energy = n * self.period_days
+
+            # Hourly load submissions
+            hourly_qs = HourlyLoad.objects.filter(
+                feeder_id__in=feeder_ids,
+                date__range=(self.from_date, self.to_date),
+            )
+            actual_hourly = hourly_qs.count()
+            dso_hourly   = hourly_qs.filter(submission_type='dso').count()
+            admin_hourly = hourly_qs.filter(submission_type='admin_override').count()
+            late_hourly  = hourly_qs.filter(is_late=True).count()
+
+            # Energy reading submissions
+            energy_qs = CumulativeMeterReading.objects.filter(
+                feeder_id__in=feeder_ids,
+                reading_date__range=(self.from_date, self.to_date),
+            )
+            actual_energy = energy_qs.count()
+            dso_energy    = energy_qs.filter(submission_type='dso').count()
+            admin_energy  = energy_qs.filter(submission_type='admin_override').count()
+            late_energy   = energy_qs.filter(is_late=True).count()
+
+            hourly_pct = round((actual_hourly / expected_hourly * 100) if expected_hourly else 0, 1)
+            energy_pct = round((actual_energy / expected_energy * 100) if expected_energy else 0, 1)
+            is_compliant = hourly_pct >= 80 and energy_pct >= 80
+            if is_compliant:
+                compliant_count += 1
+
+            station_rows.append({
+                'station_name':   station.name,
+                'station_type':   station.get_station_type_display(),
+                'feeder_count':   n,
+                'expected_hourly': expected_hourly,
+                'actual_hourly':  actual_hourly,
+                'dso_hourly':     dso_hourly,
+                'admin_hourly':   admin_hourly,
+                'late_hourly':    late_hourly,
+                'hourly_pct':     hourly_pct,
+                'expected_energy': expected_energy,
+                'actual_energy':  actual_energy,
+                'dso_energy':     dso_energy,
+                'admin_energy':   admin_energy,
+                'late_energy':    late_energy,
+                'energy_pct':     energy_pct,
+                'is_compliant':   is_compliant,
+            })
+
+        # Non-compliant first, then by station name
+        station_rows.sort(key=lambda r: (r['is_compliant'], r['station_name']))
+
+        compliance_rate = round((compliant_count / total_stations * 100) if total_stations else 0, 1)
+
+        return {
+            'total_stations':   total_stations,
+            'compliant_count':  compliant_count,
+            'non_compliant_count': total_stations - compliant_count,
+            'compliance_rate':  compliance_rate,
+            'period_days':      self.period_days,
+            'period': (
+                f"{self.from_date.strftime('%d %b %Y')} – "
+                f"{self.to_date.strftime('%d %b %Y')}"
+            ),
+            'stations': station_rows,
+        }
+
     # =========================================================================
     # LAZY SUB-SERVICE ACCESSORS
     # Each sub-service is instantiated once on first use using self.filters
@@ -1062,14 +1211,14 @@ class ReportDataService:
             'feeder_performance_table': self.get_feeder_performance,
             'state_performance_table': self.get_state_performance,
             'district_performance_table': self.get_district_performance,
-            'hours_of_supply_chart': lambda: self.get_hours_of_supply_trend(
-                group_by=config.get('group_by', 'day')
-            ),
+            'hours_of_supply_chart': self.get_hours_of_supply_trend,
             'load_trend_chart': lambda: self.get_load_trend(
                 metric=config.get('metric', 'average_load')
             ),
             'energy_delivered_chart': self.get_energy_trend,
             'service_band_summary': self.get_service_band_summary,
+            'dso_compliance_overview': self.get_dso_compliance_data,
+            'dso_compliance_table':    self.get_dso_compliance_data,
             'custom_text': lambda: config,
             'gaps_improvements': lambda: config,
         }
