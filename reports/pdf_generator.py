@@ -3276,7 +3276,7 @@ def render_dso_compliance_table(data, context, page_number):
     return _paginate_table(
         row_strings, header_html,
         'DSO Submission Compliance by Station',
-        context, page_number, max_rows=20, landscape=True,
+        context, page_number, max_rows=17, landscape=True,
         note_html=legend_bar,
     )
 
