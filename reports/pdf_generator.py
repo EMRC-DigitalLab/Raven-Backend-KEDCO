@@ -1159,9 +1159,18 @@ def render_technical_metrics(data, context, page_number, config=None):
             'description': (
                 'Total energy delivered through monitored feeders'
                 + (
-                    f'<br/><span style="font-size:9px;opacity:0.75;">'
-                    f'33kV: {data["energy_33kv"]:,.1f} MWh &nbsp;|&nbsp; '
-                    f'11kV: {data["energy_11kv"]:,.1f} MWh</span>'
+                    f'<div style="display:flex;gap:6px;margin-top:6px;">'
+                    f'<div style="flex:1;background:rgba(0,32,80,0.07);border-radius:6px;'
+                    f'padding:5px 8px;text-align:center;">'
+                    f'<div style="font-size:8px;font-weight:700;opacity:0.6;margin-bottom:2px;">33kV</div>'
+                    f'<div style="font-size:10px;font-weight:700;color:#002050;">{data["energy_33kv"]:,.1f} MWh</div>'
+                    f'</div>'
+                    f'<div style="flex:1;background:rgba(0,32,80,0.07);border-radius:6px;'
+                    f'padding:5px 8px;text-align:center;">'
+                    f'<div style="font-size:8px;font-weight:700;opacity:0.6;margin-bottom:2px;">11kV</div>'
+                    f'<div style="font-size:10px;font-weight:700;color:#002050;">{data["energy_11kv"]:,.1f} MWh</div>'
+                    f'</div>'
+                    f'</div>'
                     if data.get('energy_33kv') is not None and data.get('energy_11kv') is not None
                     else ''
                 )
