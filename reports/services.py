@@ -524,6 +524,16 @@ class ReportDataService:
         # Energy — shared hybrid utility (one source of truth)
         total_energy = self._calculate_energy_delivered_hybrid()
         daily_avg_energy = total_energy / self.period_days if self.period_days > 0 else 0
+
+        # Voltage-level breakdown (only when both 11kV and 33kV feeders are present)
+        from common.models import Feeder as _Feeder
+        vmap = dict(_Feeder.objects.filter(id__in=self.feeder_ids).values_list('id', 'voltage_level'))
+        ids_11 = [fid for fid in self.feeder_ids if vmap.get(fid) == '11kv']
+        ids_33 = [fid for fid in self.feeder_ids if vmap.get(fid) == '33kv']
+        energy_11kv = energy_33kv = None
+        if ids_11 and ids_33:
+            energy_11kv = round(calculate_energy_delivered(ids_11, self.from_date, self.to_date)['total_mwh'], 2)
+            energy_33kv = round(calculate_energy_delivered(ids_33, self.from_date, self.to_date)['total_mwh'], 2)
         
         # Interruption counts
         total_interruptions = FeederInterruption.objects.filter(
@@ -542,6 +552,8 @@ class ReportDataService:
             'average_load': round(avg_load, 2),
             'peak_load': round(peak_load, 2),
             'energy_delivered': round(total_energy, 2),
+            'energy_11kv': energy_11kv,
+            'energy_33kv': energy_33kv,
             'daily_average_consumption': round(daily_avg_energy, 2),
             'total_interruptions': total_interruptions,
             'load_shedding_count': load_shedding_count,

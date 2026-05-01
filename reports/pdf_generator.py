@@ -1156,7 +1156,16 @@ def render_technical_metrics(data, context, page_number, config=None):
             'label': 'ENERGY<br/>DELIVERED',
             'value': f"{data.get('energy_delivered', 0):,.2f} MWh",
             'subtitle': 'Total (Meter + System estimate)',
-            'description': 'Total energy delivered through monitored feeders',
+            'description': (
+                'Total energy delivered through monitored feeders'
+                + (
+                    f'<br/><span style="font-size:9px;opacity:0.75;">'
+                    f'33kV: {data["energy_33kv"]:,.1f} MWh &nbsp;|&nbsp; '
+                    f'11kV: {data["energy_11kv"]:,.1f} MWh</span>'
+                    if data.get('energy_33kv') is not None and data.get('energy_11kv') is not None
+                    else ''
+                )
+            ),
         },
         'daily_average_consumption': {
             'label': 'DAILY AVG<br/>CONSUMPTION',
@@ -1342,10 +1351,19 @@ def render_feeder_performance_table(data, context, page_number):
         # Color code the energy source
         source_label = feeder.get('energy_source', 'system').upper()
         dot_color = '#4caf50' if source_label == 'METER' else '#6c9bd1'
-        
+
+        # Flag minigrids/solar feeders
+        feeder_name = feeder['name']
+        is_minigrid = any(kw in feeder_name.upper() for kw in ('SOLAR', 'MINIGRID', 'MINI-GRID'))
+        name_html = (
+            f'{feeder_name} <span style="font-size:8px;font-weight:700;color:#c62828;'
+            f'background:#fce4ec;padding:1px 4px;border-radius:3px;">MINIGRID</span>'
+            if is_minigrid else feeder_name
+        )
+
         row_strings.append(f"""
         <tr>
-            <td>{feeder['name']}</td>
+            <td>{name_html}</td>
             <td>{feeder['band']}</td>
             <td style="text-align:right;">{float(feeder['hours_of_supply']):,.2f} hrs</td>
             <td style="text-align:right;">{float(feeder['availability_percentage']):,.1f}%</td>
@@ -3089,31 +3107,30 @@ def render_dso_compliance_overview(data, context, page_number):
     def _bar(filled_pct, color):
         filled = min(filled_pct, 100)
         return (
-            f'<div style="background:#e8eaf0;border-radius:4px;height:8px;margin-top:6px;">'
-            f'<div style="width:{filled}%;background:{color};height:8px;border-radius:4px;"></div>'
+            f'<div style="background:#dde3ed;border-radius:4px;height:7px;margin-top:5px;">'
+            f'<div style="width:{filled}%;background:{color};height:7px;border-radius:4px;"></div>'
             f'</div>'
         )
 
     def _submission_card(title, expected, dso_count, dso_pct, admin_count, admin_pct):
-        dso_color = '#2e7d32' if dso_pct >= 80 else ('#f57c00' if dso_pct >= 50 else '#c62828')
         return f"""
-        <div style="flex:1;background:#f7f9fc;border-radius:12px;padding:16px;margin-right:10px;">
+        <div style="flex:1;background:#f0f4f8;border-radius:12px;padding:16px;margin-right:10px;">
             <div style="font-size:9px;font-weight:700;text-transform:uppercase;
-                        letter-spacing:0.5px;color:#002050;opacity:0.7;margin-bottom:10px;">{title}</div>
-            <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
-                <span style="font-size:9px;opacity:0.55;">Expected</span>
+                        letter-spacing:0.5px;color:#002050;opacity:0.6;margin-bottom:10px;">{title}</div>
+            <div style="display:flex;justify-content:space-between;margin-bottom:6px;">
+                <span style="font-size:9px;opacity:0.5;">Expected</span>
                 <span style="font-size:10px;font-weight:700;color:#002050;">{expected:,}</span>
             </div>
             <div style="display:flex;justify-content:space-between;margin-bottom:2px;">
-                <span style="font-size:9px;color:#2e7d32;font-weight:600;">DSO Submitted</span>
-                <span style="font-size:10px;font-weight:700;color:{dso_color};">{dso_count:,} &nbsp;({dso_pct}%)</span>
+                <span style="font-size:9px;color:#002050;font-weight:600;">DSO Submitted</span>
+                <span style="font-size:10px;font-weight:700;color:#002050;">{dso_count:,} &nbsp;({dso_pct}%)</span>
             </div>
-            {_bar(dso_pct, dso_color)}
+            {_bar(dso_pct, '#002050')}
             <div style="display:flex;justify-content:space-between;margin-top:8px;margin-bottom:2px;">
-                <span style="font-size:9px;color:#f57c00;font-weight:600;">Admin Override</span>
-                <span style="font-size:10px;font-weight:700;color:#f57c00;">{admin_count:,} &nbsp;({admin_pct}%)</span>
+                <span style="font-size:9px;color:#8b1a1a;font-weight:600;">Admin Override</span>
+                <span style="font-size:10px;font-weight:700;color:#8b1a1a;">{admin_count:,} &nbsp;({admin_pct}%)</span>
             </div>
-            {_bar(admin_pct, '#f57c00')}
+            {_bar(admin_pct, '#8b1a1a')}
         </div>"""
 
     hourly_card = _submission_card(
