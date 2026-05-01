@@ -1058,7 +1058,6 @@ class ReportDataService:
                 feeder_id__in=feeder_ids,
                 date__range=(self.from_date, self.to_date),
             )
-            actual_hourly = hourly_qs.count()
             dso_hourly   = hourly_qs.filter(submission_type='dso').count()
             admin_hourly = hourly_qs.filter(submission_type='admin_override').count()
             late_hourly  = hourly_qs.filter(is_late=True).count()
@@ -1068,13 +1067,13 @@ class ReportDataService:
                 feeder_id__in=feeder_ids,
                 reading_date__range=(self.from_date, self.to_date),
             )
-            actual_energy = energy_qs.count()
             dso_energy    = energy_qs.filter(submission_type='dso').count()
             admin_energy  = energy_qs.filter(submission_type='admin_override').count()
             late_energy   = energy_qs.filter(is_late=True).count()
 
-            hourly_pct = round((actual_hourly / expected_hourly * 100) if expected_hourly else 0, 1)
-            energy_pct = round((actual_energy / expected_energy * 100) if expected_energy else 0, 1)
+            # Compliance is DSO submissions only — admin override means DSO didn't submit
+            hourly_pct = round((dso_hourly / expected_hourly * 100) if expected_hourly else 0, 1)
+            energy_pct = round((dso_energy / expected_energy * 100) if expected_energy else 0, 1)
             is_compliant = hourly_pct >= 80 and energy_pct >= 80
             if is_compliant:
                 compliant_count += 1
@@ -1084,13 +1083,11 @@ class ReportDataService:
                 'station_type':   station.get_station_type_display(),
                 'feeder_count':   n,
                 'expected_hourly': expected_hourly,
-                'actual_hourly':  actual_hourly,
                 'dso_hourly':     dso_hourly,
                 'admin_hourly':   admin_hourly,
                 'late_hourly':    late_hourly,
                 'hourly_pct':     hourly_pct,
                 'expected_energy': expected_energy,
-                'actual_energy':  actual_energy,
                 'dso_energy':     dso_energy,
                 'admin_energy':   admin_energy,
                 'late_energy':    late_energy,
@@ -1103,16 +1100,30 @@ class ReportDataService:
 
         compliance_rate = round((compliant_count / total_stations * 100) if total_stations else 0, 1)
 
+        # Network-wide totals for dashboard summary
+        net_exp_hourly   = sum(r['expected_hourly'] for r in station_rows)
+        net_dso_hourly   = sum(r['dso_hourly']      for r in station_rows)
+        net_admin_hourly = sum(r['admin_hourly']     for r in station_rows)
+        net_exp_energy   = sum(r['expected_energy']  for r in station_rows)
+        net_dso_energy   = sum(r['dso_energy']       for r in station_rows)
+        net_admin_energy = sum(r['admin_energy']     for r in station_rows)
+
         return {
-            'total_stations':   total_stations,
-            'compliant_count':  compliant_count,
+            'total_stations':      total_stations,
+            'compliant_count':     compliant_count,
             'non_compliant_count': total_stations - compliant_count,
-            'compliance_rate':  compliance_rate,
-            'period_days':      self.period_days,
+            'compliance_rate':     compliance_rate,
+            'period_days':         self.period_days,
             'period': (
                 f"{self.from_date.strftime('%d %b %Y')} – "
                 f"{self.to_date.strftime('%d %b %Y')}"
             ),
+            'net_exp_hourly':   net_exp_hourly,
+            'net_dso_hourly':   net_dso_hourly,
+            'net_admin_hourly': net_admin_hourly,
+            'net_exp_energy':   net_exp_energy,
+            'net_dso_energy':   net_dso_energy,
+            'net_admin_energy': net_admin_energy,
             'stations': station_rows,
         }
 

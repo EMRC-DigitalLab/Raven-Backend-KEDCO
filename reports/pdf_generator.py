@@ -3073,38 +3073,53 @@ def render_dso_compliance_overview(data, context, page_number):
         font-family="Arial,sans-serif">Compliant</text>
 </svg>"""
 
-    station_rows = data.get('stations', [])
-    # Show top 5 non-compliant stations in overview
-    non_comp_rows = sorted(
-        [s for s in station_rows if not s.get('is_compliant')],
-        key=lambda r: (r['hourly_pct'] + r['energy_pct']) / 2
-    )[:5]
-    non_comp_html = ''
-    for s in non_comp_rows:
-        non_comp_html += f"""
-        <tr>
-            <td>{s['station_name']}</td>
-            <td style="text-align:center;">{s['station_type']}</td>
-            <td style="text-align:right;">{s['feeder_count']}</td>
-            <td style="text-align:right;">{s['hourly_pct']}%</td>
-            <td style="text-align:right;">{s['energy_pct']}%</td>
-        </tr>"""
+    # Network-wide submission totals
+    net_exp_h   = data.get('net_exp_hourly', 0)
+    net_dso_h   = data.get('net_dso_hourly', 0)
+    net_adm_h   = data.get('net_admin_hourly', 0)
+    net_exp_e   = data.get('net_exp_energy', 0)
+    net_dso_e   = data.get('net_dso_energy', 0)
+    net_adm_e   = data.get('net_admin_energy', 0)
 
-    non_comp_table = f"""
-<div class="table-container" style="margin-top:10px;">
-  <table>
-    <thead>
-      <tr>
-        <th>Station</th>
-        <th style="text-align:center;">Type</th>
-        <th style="text-align:right;">11kV Feeders</th>
-        <th style="text-align:right;">Hourly Load %</th>
-        <th style="text-align:right;">Energy Rdg %</th>
-      </tr>
-    </thead>
-    <tbody>{non_comp_html if non_comp_html else '<tr><td colspan="5" style="text-align:center;opacity:0.5;">All stations compliant</td></tr>'}</tbody>
-  </table>
-</div>""" if non_comp_rows else ''
+    dso_h_pct  = round(net_dso_h / net_exp_h * 100, 1) if net_exp_h else 0
+    adm_h_pct  = round(net_adm_h / net_exp_h * 100, 1) if net_exp_h else 0
+    dso_e_pct  = round(net_dso_e / net_exp_e * 100, 1) if net_exp_e else 0
+    adm_e_pct  = round(net_adm_e / net_exp_e * 100, 1) if net_exp_e else 0
+
+    def _bar(filled_pct, color):
+        filled = min(filled_pct, 100)
+        return (
+            f'<div style="background:#e8eaf0;border-radius:4px;height:8px;margin-top:6px;">'
+            f'<div style="width:{filled}%;background:{color};height:8px;border-radius:4px;"></div>'
+            f'</div>'
+        )
+
+    def _submission_card(title, expected, dso_count, dso_pct, admin_count, admin_pct):
+        dso_color = '#2e7d32' if dso_pct >= 80 else ('#f57c00' if dso_pct >= 50 else '#c62828')
+        return f"""
+        <div style="flex:1;background:#f7f9fc;border-radius:12px;padding:16px;margin-right:10px;">
+            <div style="font-size:9px;font-weight:700;text-transform:uppercase;
+                        letter-spacing:0.5px;color:#002050;opacity:0.7;margin-bottom:10px;">{title}</div>
+            <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
+                <span style="font-size:9px;opacity:0.55;">Expected</span>
+                <span style="font-size:10px;font-weight:700;color:#002050;">{expected:,}</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;margin-bottom:2px;">
+                <span style="font-size:9px;color:#2e7d32;font-weight:600;">DSO Submitted</span>
+                <span style="font-size:10px;font-weight:700;color:{dso_color};">{dso_count:,} &nbsp;({dso_pct}%)</span>
+            </div>
+            {_bar(dso_pct, dso_color)}
+            <div style="display:flex;justify-content:space-between;margin-top:8px;margin-bottom:2px;">
+                <span style="font-size:9px;color:#f57c00;font-weight:600;">Admin Override</span>
+                <span style="font-size:10px;font-weight:700;color:#f57c00;">{admin_count:,} &nbsp;({admin_pct}%)</span>
+            </div>
+            {_bar(admin_pct, '#f57c00')}
+        </div>"""
+
+    hourly_card = _submission_card(
+        'Hourly Load Submissions', net_exp_h, net_dso_h, dso_h_pct, net_adm_h, adm_h_pct)
+    energy_card = _submission_card(
+        'Energy Reading Submissions', net_exp_e, net_dso_e, dso_e_pct, net_adm_e, adm_e_pct)
 
     return f"""
     <div class="page">
@@ -3117,32 +3132,39 @@ def render_dso_compliance_overview(data, context, page_number):
             <h1 class="page-title">DSO Compliance Overview</h1>
 
             <div style="font-size:11px;opacity:0.65;margin-bottom:14px;">
-                Reporting period: {period} &nbsp;|&nbsp; Compliance threshold: 80% submissions received
+                Reporting period: {period} &nbsp;|&nbsp; Compliance threshold: 80% DSO submissions received
             </div>
 
-            <div style="display:flex;align-items:center;margin-bottom:18px;">
-                <div style="flex-shrink:0;margin-right:32px;">{donut_svg}</div>
+            <!-- Row 1: Donut + station KPI cards -->
+            <div style="display:flex;align-items:center;margin-bottom:16px;">
+                <div style="flex-shrink:0;margin-right:28px;">{donut_svg}</div>
                 <div style="display:flex;flex:1;gap:0;">
-                    <div style="flex:1;background:#f0f4f8;border-radius:12px;padding:18px;text-align:center;margin-right:10px;">
+                    <div style="flex:1;background:#f0f4f8;border-radius:12px;padding:16px;text-align:center;margin-right:10px;">
                         <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;opacity:0.6;margin-bottom:6px;">Total Stations</div>
-                        <div style="font-size:32px;font-weight:700;color:#002050;">{total}</div>
+                        <div style="font-size:30px;font-weight:700;color:#002050;">{total}</div>
                         <div style="font-size:9px;opacity:0.5;">with 11kV feeders</div>
                     </div>
-                    <div style="flex:1;background:#e8f5e9;border-radius:12px;padding:18px;text-align:center;margin-right:10px;">
+                    <div style="flex:1;background:#e8f5e9;border-radius:12px;padding:16px;text-align:center;margin-right:10px;">
                         <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;opacity:0.7;margin-bottom:6px;color:#2e7d32;">Compliant</div>
-                        <div style="font-size:32px;font-weight:700;color:#2e7d32;">{compliant}</div>
-                        <div style="font-size:9px;opacity:0.5;">≥ 80% submissions</div>
+                        <div style="font-size:30px;font-weight:700;color:#2e7d32;">{compliant}</div>
+                        <div style="font-size:9px;opacity:0.5;">&#8805; 80% DSO submissions</div>
                     </div>
-                    <div style="flex:1;background:#fce4ec;border-radius:12px;padding:18px;text-align:center;">
+                    <div style="flex:1;background:#fce4ec;border-radius:12px;padding:16px;text-align:center;">
                         <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;opacity:0.7;margin-bottom:6px;color:#c62828;">Non-Compliant</div>
-                        <div style="font-size:32px;font-weight:700;color:#c62828;">{non_comp}</div>
+                        <div style="font-size:30px;font-weight:700;color:#c62828;">{non_comp}</div>
                         <div style="font-size:9px;opacity:0.5;">below threshold</div>
                     </div>
                 </div>
             </div>
 
-            {'<div style="font-size:12px;font-weight:600;margin-bottom:6px;color:#002050;">Non-Compliant Stations (lowest compliance first)</div>' if non_comp_rows else ''}
-            {non_comp_table}
+            <!-- Row 2: Submission breakdown cards -->
+            <div style="font-size:11px;font-weight:600;color:#002050;margin-bottom:8px;">
+                Network-Wide Submission Summary
+            </div>
+            <div style="display:flex;margin-bottom:16px;">
+                {hourly_card}
+                {energy_card}
+            </div>
         </div>
 
         <div class="footer">
@@ -3212,10 +3234,11 @@ def render_dso_compliance_table(data, context, page_number):
         dot_color = '#2e7d32' if both_compliant else ('#f57c00' if one_compliant else '#c62828')
 
         p = 'padding:3px 6px;'
+        stype = 'Trans.' if 'trans' in s['station_type'].lower() else 'Inj.'
         row_strings.append(f"""
         <tr>
             <td style="{p}font-weight:600;">{s['station_name']}</td>
-            <td style="{p}text-align:center;font-size:9px;">{s['station_type']}</td>
+            <td style="{p}text-align:center;font-size:9px;">{stype}</td>
             <td style="{p}text-align:right;">{s['feeder_count']}</td>
             <td style="{p}text-align:right;font-weight:700;color:{h_color};">{h_pct}%</td>
             <td style="{p}text-align:right;">{s['dso_hourly']:,}</td>
