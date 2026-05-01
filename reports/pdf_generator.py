@@ -3154,65 +3154,77 @@ def render_dso_compliance_table(data, context, page_number):
     """Render per-station DSO compliance breakdown table (paginated)."""
     stations = data.get('stations', [])
 
-    header_html = """
+    legend_bar = (
+        '<div style="display:flex;align-items:center;gap:20px;margin-bottom:8px;'
+        'font-size:9px;font-weight:600;color:#444;">'
+        '<span style="color:#555;font-weight:400;margin-right:4px;">Status legend:</span>'
+        '<span><span style="color:#2e7d32;font-size:13px;">&#9679;</span>&nbsp;Compliant '
+        '(Hourly &amp; Energy &ge;80%)</span>'
+        '<span><span style="color:#f57c00;font-size:13px;">&#9679;</span>&nbsp;Partial '
+        '(one metric &ge;80%)</span>'
+        '<span><span style="color:#c62828;font-size:13px;">&#9679;</span>&nbsp;Non-Compliant '
+        '(both below 80%)</span>'
+        '</div>'
+    )
+
+    # 7 data columns — no energy DSO/Admin (too noisy); status is a dot only
+    header_html = f"""
+        {legend_bar}
         <colgroup>
-            <col style="width:22%">
-            <col style="width:10%">
+            <col style="width:24%">
+            <col style="width:9%">
             <col style="width:6%">
+            <col style="width:13%">
             <col style="width:11%">
             <col style="width:10%">
-            <col style="width:9%">
-            <col style="width:11%">
-            <col style="width:10%">
-            <col style="width:9%">
-            <col style="width:7%">
+            <col style="width:13%">
+            <col style="width:8%">
         </colgroup>
         <thead>
             <tr>
-                <th rowspan="2">Station</th>
-                <th rowspan="2" style="text-align:center;">Type</th>
-                <th rowspan="2" style="text-align:right;">Fdrs</th>
-                <th colspan="3" style="text-align:center;border-bottom:1px solid rgba(255,255,255,0.2);">Hourly Load</th>
-                <th colspan="3" style="text-align:center;border-bottom:1px solid rgba(255,255,255,0.2);">Energy Reading</th>
-                <th rowspan="2" style="text-align:center;">Status</th>
+                <th rowspan="2" style="padding:4px 6px;">Station</th>
+                <th rowspan="2" style="text-align:center;padding:4px 6px;">Type</th>
+                <th rowspan="2" style="text-align:right;padding:4px 6px;">Fdrs</th>
+                <th colspan="3" style="text-align:center;padding:4px 6px;
+                    border-bottom:1px solid rgba(255,255,255,0.2);">Hourly Load</th>
+                <th rowspan="2" style="text-align:right;padding:4px 6px;">Energy Comp%</th>
+                <th rowspan="2" style="text-align:center;padding:4px 6px;">&#11044;</th>
             </tr>
             <tr>
-                <th style="text-align:right;">Comp%</th>
-                <th style="text-align:right;">DSO</th>
-                <th style="text-align:right;">Admin</th>
-                <th style="text-align:right;">Comp%</th>
-                <th style="text-align:right;">DSO</th>
-                <th style="text-align:right;">Admin</th>
+                <th style="text-align:right;padding:4px 6px;">Comp%</th>
+                <th style="text-align:right;padding:4px 6px;">DSO</th>
+                <th style="text-align:right;padding:4px 6px;">Admin</th>
             </tr>
         </thead>"""
 
     row_strings = []
     for s in stations:
-        status_color = '#2e7d32' if s['is_compliant'] else '#c62828'
-        status_label = 'Compliant' if s['is_compliant'] else 'Non-Compliant'
         h_pct = s['hourly_pct']
         e_pct = s['energy_pct']
         h_color = '#2e7d32' if h_pct >= 80 else ('#f57c00' if h_pct >= 50 else '#c62828')
         e_color = '#2e7d32' if e_pct >= 80 else ('#f57c00' if e_pct >= 50 else '#c62828')
 
+        both_compliant = s['is_compliant']
+        one_compliant  = (h_pct >= 80) != (e_pct >= 80)
+        dot_color = '#2e7d32' if both_compliant else ('#f57c00' if one_compliant else '#c62828')
+
+        p = 'padding:3px 6px;'
         row_strings.append(f"""
         <tr>
-            <td style="font-weight:600;">{s['station_name']}</td>
-            <td style="text-align:center;font-size:10px;">{s['station_type']}</td>
-            <td style="text-align:right;">{s['feeder_count']}</td>
-            <td style="text-align:right;font-weight:700;color:{h_color};">{h_pct}%</td>
-            <td style="text-align:right;">{s['dso_hourly']:,}</td>
-            <td style="text-align:right;opacity:0.75;">{s['admin_hourly']:,}</td>
-            <td style="text-align:right;font-weight:700;color:{e_color};">{e_pct}%</td>
-            <td style="text-align:right;">{s['dso_energy']:,}</td>
-            <td style="text-align:right;opacity:0.75;">{s['admin_energy']:,}</td>
-            <td style="text-align:center;font-size:9px;font-weight:700;color:{status_color};">{status_label}</td>
+            <td style="{p}font-weight:600;">{s['station_name']}</td>
+            <td style="{p}text-align:center;font-size:9px;">{s['station_type']}</td>
+            <td style="{p}text-align:right;">{s['feeder_count']}</td>
+            <td style="{p}text-align:right;font-weight:700;color:{h_color};">{h_pct}%</td>
+            <td style="{p}text-align:right;">{s['dso_hourly']:,}</td>
+            <td style="{p}text-align:right;opacity:0.75;">{s['admin_hourly']:,}</td>
+            <td style="{p}text-align:right;font-weight:700;color:{e_color};">{e_pct}%</td>
+            <td style="{p}text-align:center;font-size:14px;color:{dot_color};">&#9679;</td>
         </tr>""")
 
     return _paginate_table(
         row_strings, header_html,
         'DSO Submission Compliance by Station',
-        context, page_number, max_rows=14, landscape=True,
+        context, page_number, max_rows=20, landscape=True,
     )
 
 

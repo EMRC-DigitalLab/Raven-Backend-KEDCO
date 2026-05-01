@@ -517,9 +517,9 @@ class ReportDataService:
         )
 
         # Average load + peak load — shared utility (one source of truth)
-        avg_load, peak_load = calculate_average_load(
-            self.feeder_ids, self.from_date, self.to_date
-        )
+        _load = calculate_average_load(self.feeder_ids, self.from_date, self.to_date)
+        avg_load  = _load['avg']
+        peak_load = _load['peak']
 
         # Energy — shared hybrid utility (one source of truth)
         total_energy = self._calculate_energy_delivered_hybrid()
@@ -1030,7 +1030,7 @@ class ReportDataService:
 
         substations = (
             InjectionSubstation.objects
-            .filter(status='active', station_type='injection')
+            .filter(status='active')
             .prefetch_related('feeders')
             .order_by('name')
         )

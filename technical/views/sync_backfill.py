@@ -44,8 +44,16 @@ from rest_framework import status
 
 # ── permission helper ──────────────────────────────────────────────────────────
 
-def _is_admin(user):
-    return getattr(user, 'role', None) in ('super_admin', 'admin')
+def _can_trigger_backfill(user):
+    """Allow admin/super_admin OR any user with active technical module access."""
+    if getattr(user, 'role', None) in ('super_admin', 'admin'):
+        return True
+    from users.models import UserSectionAccess
+    return UserSectionAccess.objects.filter(
+        user=user,
+        section__name='technical',
+        is_active=True,
+    ).exists()
 
 
 # ── views ──────────────────────────────────────────────────────────────────────
@@ -57,7 +65,7 @@ def trigger_backfill(request):
     Trigger a historical data backfill from DataNest into Raven.
     Only admin / super_admin users may call this.
     """
-    if not _is_admin(request.user):
+    if not _can_trigger_backfill(request.user):
         return Response(
             {'error': 'Only admin or super_admin users can trigger a backfill.'},
             status=status.HTTP_403_FORBIDDEN,
