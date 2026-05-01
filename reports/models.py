@@ -37,6 +37,7 @@ class ReportTemplate(UUIDModel):
         ('financial', 'Financial Performance'),
         ('hr', 'Human Resources'),
         ('executive', 'Executive Performance'),
+        ('compliance', 'Compliance Report'),
         ('general', 'General Report'),
     ]
 
@@ -128,6 +129,10 @@ class ReportSection(UUIDModel):
         ('board_kpi_status', 'Board KPI Status'),
         ('kpi_trends', 'KPI Trends Over Time'),
         
+        # DSO Compliance sections
+        ('dso_compliance_overview', 'DSO Compliance Overview'),
+        ('dso_compliance_table', 'DSO Compliance by Station'),
+
         # Generic sections
         ('custom_text', 'Custom Text/Notes'),
         ('gaps_improvements', 'Gaps and Improvement Areas'),

@@ -76,6 +76,9 @@ SECTION_DISPLAY_NAMES = {
     'financial_overview': 'Financial Overview',
     'opex_by_category':   'OPEX by Category',
     'opex_by_district':   'OPEX by District',
+    # DSO Compliance
+    'dso_compliance_overview': 'DSO Compliance Overview',
+    'dso_compliance_table':    'DSO Compliance by Station',
 }
 
 
@@ -490,7 +493,7 @@ tbody td {
     font-weight: 700;
     line-height: 1;
     margin-bottom: 8px;
-    color: #fcd300;
+    color: #002050;
 }
 
 .reliability-description {
@@ -641,7 +644,7 @@ tbody td {
 }
 
 /* ── Cover Page (Modern) ──────────────────────────────────────────────────── */
-/* Layout: 8 px yellow accent bar (left) + full content column (right)        */
+/* Layout: thin white accent bar (left) + full content column (right)         */
 .cover-page {
     padding: 0;
     display: -webkit-flex;
@@ -655,7 +658,7 @@ tbody td {
 
 .cover-left-accent {
     width: 10px;
-    background-color: #fcd300;
+    background-color: rgba(255, 255, 255, 0.25);
     flex-shrink: 0;
 }
 
@@ -714,7 +717,7 @@ tbody td {
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 3.5px;
-    color: #fcd300;
+    color: rgba(255, 255, 255, 0.65);
     margin-bottom: 20px;
 }
 
@@ -728,13 +731,14 @@ tbody td {
 }
 
 .cover-main-title-accent {
-    color: #fcd300;
+    color: #ffffff;
+    opacity: 0.75;
 }
 
 .cover-accent-rule {
     width: 70px;
     height: 5px;
-    background-color: #fcd300;
+    background-color: rgba(255, 255, 255, 0.4);
     border-radius: 3px;
     margin: 28px 0;
 }
@@ -814,7 +818,7 @@ tbody td {
 .toc-number {
     font-size: 13px;
     font-weight: 600;
-    color: #fcd300;
+    color: #002050;
     flex: 0 0 30px;
 }
 
@@ -834,7 +838,7 @@ tbody td {
 .toc-page {
     font-size: 18px;
     font-weight: 700;
-    color: #fcd300;
+    color: #002050;
     flex: 0 0 36px;
     text-align: right;
 }
@@ -1152,7 +1156,25 @@ def render_technical_metrics(data, context, page_number, config=None):
             'label': 'ENERGY<br/>DELIVERED',
             'value': f"{data.get('energy_delivered', 0):,.2f} MWh",
             'subtitle': 'Total (Meter + System estimate)',
-            'description': 'Total energy delivered through monitored feeders',
+            'description': (
+                'Total energy delivered through monitored feeders'
+                + (
+                    f'<div style="display:flex;gap:6px;margin-top:6px;">'
+                    f'<div style="flex:1;background:rgba(0,32,80,0.07);border-radius:6px;'
+                    f'padding:5px 8px;text-align:center;">'
+                    f'<div style="font-size:8px;font-weight:700;opacity:0.6;margin-bottom:2px;">33kV</div>'
+                    f'<div style="font-size:10px;font-weight:700;color:#002050;">{data["energy_33kv"]:,.1f} MWh</div>'
+                    f'</div>'
+                    f'<div style="flex:1;background:rgba(0,32,80,0.07);border-radius:6px;'
+                    f'padding:5px 8px;text-align:center;">'
+                    f'<div style="font-size:8px;font-weight:700;opacity:0.6;margin-bottom:2px;">11kV</div>'
+                    f'<div style="font-size:10px;font-weight:700;color:#002050;">{data["energy_11kv"]:,.1f} MWh</div>'
+                    f'</div>'
+                    f'</div>'
+                    if data.get('energy_33kv') is not None and data.get('energy_11kv') is not None
+                    else ''
+                )
+            ),
         },
         'daily_average_consumption': {
             'label': 'DAILY AVG<br/>CONSUMPTION',
@@ -1311,7 +1333,7 @@ def render_feeder_performance_table(data, context, page_number):
                 <th style="text-align:right; line-height: 1.2;">
                     Energy (MWh)<br>
                     <span style="font-size:7px; font-weight:normal; color:#4caf50;">&#9679; METER</span> &nbsp;
-                    <span style="font-size:7px; font-weight:normal; color:#fcd300;">&#9679; SYSTEM</span>
+                    <span style="font-size:7px; font-weight:normal; color:#6c9bd1;">&#9679; SYSTEM</span>
                 </th>
             </tr>
         </thead>"""
@@ -1330,18 +1352,27 @@ def render_feeder_performance_table(data, context, page_number):
                 font-size:11px;
                 letter-spacing:1.5px;
                 text-transform:uppercase;
-                color:#fcd300;
+                color:#ffffff;
                 padding:6px 10px;
                 border-bottom:2px solid rgba(255,255,255,0.2);
             ">&#9658; Band {band}</td>
         </tr>""")
         # Color code the energy source
         source_label = feeder.get('energy_source', 'system').upper()
-        dot_color = '#4caf50' if source_label == 'METER' else '#fcd300'
-        
+        dot_color = '#4caf50' if source_label == 'METER' else '#6c9bd1'
+
+        # Flag minigrids/solar feeders
+        feeder_name = feeder['name']
+        is_minigrid = any(kw in feeder_name.upper() for kw in ('SOLAR', 'MINIGRID', 'MINI-GRID'))
+        name_html = (
+            f'{feeder_name} <span style="font-size:8px;font-weight:700;color:#c62828;'
+            f'background:#fce4ec;padding:1px 4px;border-radius:3px;">MINIGRID</span>'
+            if is_minigrid else feeder_name
+        )
+
         row_strings.append(f"""
         <tr>
-            <td>{feeder['name']}</td>
+            <td>{name_html}</td>
             <td>{feeder['band']}</td>
             <td style="text-align:right;">{float(feeder['hours_of_supply']):,.2f} hrs</td>
             <td style="text-align:right;">{float(feeder['availability_percentage']):,.1f}%</td>
@@ -1650,9 +1681,285 @@ def _split_trend_rows(data, key_date, key_value, unit):
     return make_rows(left), make_rows(right)
 
 
+# =============================================================================
+# SVG CHART HELPERS
+# =============================================================================
+
+def _render_svg_line_chart(
+    data_points, value_key, unit,
+    color='#002050', fill='rgba(0,32,80,0.08)',
+    prev_data_points=None, curr_label='Current', prev_label='Previous',
+):
+    """
+    Inline SVG line chart.  Works in both Playwright and WeasyPrint.
+
+    When prev_data_points is supplied a second dashed line is drawn for
+    the previous period using the same y-scale so the two can be compared
+    visually.  Both series are indexed by position (Day 1, Day 2, …) so
+    they always share the same x-axis regardless of calendar differences.
+    """
+    curr_items = data_points if isinstance(data_points, list) else []
+    prev_items = prev_data_points if isinstance(prev_data_points, list) else []
+    has_prev   = bool(prev_items)
+
+    if not curr_items:
+        return '<div style="text-align:center;padding:30px;color:#aaa;font-size:11px;">No data available</div>'
+
+    PREV_COLOR = '#6c9bd1'
+
+    W, H = 780, 155
+    # Reserve right margin for legend when comparison is active
+    ml, mr, mt, mb = 52, (115 if has_prev else 15), 12, 32
+    pw = W - ml - mr
+    ph = H - mt - mb
+
+    curr_vals = [float(d.get(value_key) or 0) for d in curr_items]
+    prev_vals = [float(d.get(value_key) or 0) for d in prev_items] if has_prev else []
+
+    all_vals  = curr_vals + prev_vals
+    v_min, v_max = min(all_vals), max(all_vals)
+    if v_max == v_min:
+        v_max = v_min + 1
+    span  = v_max - v_min
+    y_min = max(0, v_min - span * 0.05)
+    y_max = v_max + span * 0.12
+
+    n = len(curr_vals)
+
+    def xp(i, total=None):
+        total = total or n
+        return ml + (i / (total - 1)) * pw if total > 1 else ml + pw / 2
+
+    def yp(v):
+        return mt + ph - ((v - y_min) / (y_max - y_min)) * ph
+
+    # Current period polyline + fill
+    pts_curr  = ' '.join(f"{xp(i):.1f},{yp(v):.1f}" for i, v in enumerate(curr_vals))
+    fill_pts  = f"{xp(0):.1f},{mt + ph:.1f} {pts_curr} {xp(n - 1):.1f},{mt + ph:.1f}"
+
+    # Previous period polyline (mapped to same x-axis by position)
+    prev_line_svg = ''
+    if has_prev:
+        pts_prev = ' '.join(
+            f"{xp(i, n):.1f},{yp(v):.1f}"   # x mapped via current-period scale
+            for i, v in enumerate(prev_vals)
+        )
+        prev_line_svg = (
+            f'<polyline points="{pts_prev}" fill="none" stroke="{PREV_COLOR}" '
+            f'stroke-width="1.8" stroke-dasharray="5,3" '
+            f'stroke-linejoin="round" stroke-linecap="round" opacity="0.8"/>'
+        )
+
+    # Y-axis gridlines + labels (5 ticks)
+    ticks_svg = ''
+    for k in range(5):
+        tv = y_min + (y_max - y_min) * k / 4
+        ty = yp(tv)
+        ticks_svg += (
+            f'<line x1="{ml}" y1="{ty:.1f}" x2="{W - mr}" y2="{ty:.1f}" '
+            f'stroke="#e4e8ef" stroke-width="1"/>'
+            f'<text x="{ml - 4}" y="{ty:.1f}" text-anchor="end" '
+            f'dominant-baseline="middle" fill="#888" font-size="9" '
+            f'font-family="Arial,sans-serif">{tv:.1f}</text>'
+        )
+
+    # X-axis day-index labels (max 10, shows day number not date)
+    step = max(1, n // 10)
+    xlabels_svg = ''
+    for i in range(0, n, step):
+        label = str(curr_items[i].get('date', ''))[-5:]  # MM-DD of current period
+        xlabels_svg += (
+            f'<text x="{xp(i):.1f}" y="{mt + ph + 14}" text-anchor="middle" '
+            f'fill="#888" font-size="9" font-family="Arial,sans-serif">{label}</text>'
+        )
+
+    # Dots on current line (only when ≤ 62 points)
+    dots_svg = ''
+    if n <= 62:
+        for i, v in enumerate(curr_vals):
+            dots_svg += f'<circle cx="{xp(i):.1f}" cy="{yp(v):.1f}" r="2.5" fill="{color}"/>'
+
+    unit_label = (
+        f'<text x="{ml}" y="{mt - 2}" text-anchor="start" fill="#aaa" '
+        f'font-size="9" font-family="Arial,sans-serif">({unit})</text>'
+    )
+
+    # Legend (top-right, only when comparison is active)
+    legend_svg = ''
+    if has_prev:
+        lx = W - mr + 8
+        legend_svg = (
+            # Current period — solid line swatch
+            f'<line x1="{lx}" y1="{mt + 10}" x2="{lx + 18}" y2="{mt + 10}" '
+            f'stroke="{color}" stroke-width="2.5"/>'
+            f'<text x="{lx + 22}" y="{mt + 13}" fill="#444" font-size="9" '
+            f'font-family="Arial,sans-serif" font-weight="600">{curr_label}</text>'
+            # Previous period — dashed line swatch
+            f'<line x1="{lx}" y1="{mt + 26}" x2="{lx + 18}" y2="{mt + 26}" '
+            f'stroke="{PREV_COLOR}" stroke-width="1.8" stroke-dasharray="5,3" opacity="0.8"/>'
+            f'<text x="{lx + 22}" y="{mt + 29}" fill="#888" font-size="9" '
+            f'font-family="Arial,sans-serif">{prev_label}</text>'
+        )
+
+    return (
+        f'<svg viewBox="0 0 {W} {H}" width="100%" style="display:block;overflow:visible;" '
+        f'xmlns="http://www.w3.org/2000/svg">'
+        f'<polygon points="{fill_pts}" fill="{fill}"/>'
+        f'{ticks_svg}'
+        f'<line x1="{ml}" y1="{mt + ph}" x2="{W - mr}" y2="{mt + ph}" stroke="#ccc" stroke-width="1"/>'
+        f'{prev_line_svg}'
+        f'<polyline points="{pts_curr}" fill="none" stroke="{color}" stroke-width="2.5" '
+        f'stroke-linejoin="round" stroke-linecap="round"/>'
+        f'{dots_svg}'
+        f'{xlabels_svg}'
+        f'{unit_label}'
+        f'{legend_svg}'
+        f'</svg>'
+    )
+
+
+def _render_svg_bar_chart(data_points, value_key, unit, color='#002050'):
+    """Generate an inline SVG bar chart. Works in both Playwright and WeasyPrint."""
+    items = data_points if isinstance(data_points, list) else []
+    if not items:
+        return '<div style="text-align:center;padding:30px;color:#aaa;font-size:11px;">No data available</div>'
+
+    W, H = 780, 155
+    ml, mr, mt, mb = 52, 15, 12, 32
+    pw = W - ml - mr
+    ph = H - mt - mb
+
+    values = [float(d.get(value_key) or 0) for d in items]
+    n = len(values)
+
+    y_max = (max(values) if values else 1) * 1.12 or 1
+
+    def yp(v):
+        return mt + ph - (v / y_max) * ph
+
+    bar_w = pw / n * 0.72
+    bar_gap = pw / n * 0.28
+
+    ticks_svg = ''
+    for k in range(5):
+        tv = y_max * k / 4
+        ty = yp(tv)
+        ticks_svg += (
+            f'<line x1="{ml}" y1="{ty:.1f}" x2="{W - mr}" y2="{ty:.1f}" '
+            f'stroke="#e4e8ef" stroke-width="1"/>'
+            f'<text x="{ml - 4}" y="{ty:.1f}" text-anchor="end" '
+            f'dominant-baseline="middle" fill="#888" font-size="9" '
+            f'font-family="Arial,sans-serif">{tv:.1f}</text>'
+        )
+
+    bars_svg = ''
+    xlabels_svg = ''
+    step = max(1, n // 10)
+    for i, v in enumerate(items):
+        val = float(v.get(value_key) or 0)
+        bx = ml + i * (pw / n) + bar_gap / 2
+        bh = max(0, (val / y_max) * ph)
+        by = mt + ph - bh
+        bars_svg += f'<rect x="{bx:.1f}" y="{by:.1f}" width="{bar_w:.1f}" height="{bh:.1f}" fill="{color}" rx="2" opacity="0.85"/>'
+        if i % step == 0:
+            label = str(v.get('date', ''))[-5:]
+            xlabels_svg += (
+                f'<text x="{bx + bar_w / 2:.1f}" y="{mt + ph + 14}" text-anchor="middle" '
+                f'fill="#888" font-size="9" font-family="Arial,sans-serif">{label}</text>'
+            )
+
+    unit_label = (
+        f'<text x="{ml}" y="{mt - 2}" text-anchor="start" fill="#aaa" '
+        f'font-size="9" font-family="Arial,sans-serif">({unit})</text>'
+    )
+
+    return (
+        f'<svg viewBox="0 0 {W} {H}" width="100%" style="display:block;overflow:visible;" '
+        f'xmlns="http://www.w3.org/2000/svg">'
+        f'{ticks_svg}'
+        f'<line x1="{ml}" y1="{mt + ph}" x2="{W - mr}" y2="{mt + ph}" stroke="#ccc" stroke-width="1"/>'
+        f'{bars_svg}'
+        f'{xlabels_svg}'
+        f'{unit_label}'
+        f'</svg>'
+    )
+
+
+def _trend_summary_row(values, unit, prev_values=None, prev_label='Prev period'):
+    """
+    Mini HTML summary strip: Min / Avg / Max / Trend arrow / vs Previous.
+
+    When prev_values is supplied a fifth card shows the % change between
+    the previous-period average and the current-period average.
+    """
+    if not values:
+        return ''
+    mn  = min(values)
+    mx  = max(values)
+    avg = sum(values) / len(values)
+
+    # Internal trend: first-half avg vs second-half avg
+    mid        = len(values) // 2
+    first_avg  = sum(values[:mid]) / mid if mid else avg
+    second_avg = sum(values[mid:]) / (len(values) - mid) if (len(values) - mid) else avg
+    arrow       = '&#9650;' if second_avg > first_avg else ('&#9660;' if second_avg < first_avg else '&#9654;')
+    trend_color = '#2e7d32' if second_avg > first_avg else ('#c62828' if second_avg < first_avg else '#555')
+
+    # Period-over-period delta card
+    vs_card = ''
+    if prev_values:
+        prev_avg = sum(prev_values) / len(prev_values)
+        if prev_avg != 0:
+            delta_pct = ((avg - prev_avg) / abs(prev_avg)) * 100
+            sign      = '+' if delta_pct >= 0 else ''
+            d_color   = '#2e7d32' if delta_pct >= 0 else '#c62828'
+            d_arrow   = '&#9650;' if delta_pct > 0 else ('&#9660;' if delta_pct < 0 else '&#9654;')
+            vs_card = f"""
+  <div style="flex:1;text-align:center;background:#eef2f8;border-radius:8px;padding:8px 4px;margin-left:8px;border:1px solid #d0d8e8;">
+    <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;opacity:0.6;margin-bottom:3px;">vs {prev_label}</div>
+    <div style="font-size:16px;font-weight:700;color:{d_color};">{d_arrow} {sign}{delta_pct:.1f}%</div>
+    <div style="font-size:9px;opacity:0.5;">prev avg {prev_avg:.2f} {unit}</div>
+  </div>"""
+
+    return f"""
+<div style="display:flex;gap:0;margin-top:10px;">
+  <div style="flex:1;text-align:center;background:#f0f4f8;border-radius:8px;padding:8px 4px;margin-right:8px;">
+    <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;opacity:0.6;margin-bottom:3px;">Min</div>
+    <div style="font-size:16px;font-weight:700;color:#002050;">{mn:.2f} <span style="font-size:9px;font-weight:400;">{unit}</span></div>
+  </div>
+  <div style="flex:1;text-align:center;background:#f0f4f8;border-radius:8px;padding:8px 4px;margin-right:8px;">
+    <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;opacity:0.6;margin-bottom:3px;">Avg</div>
+    <div style="font-size:16px;font-weight:700;color:#002050;">{avg:.2f} <span style="font-size:9px;font-weight:400;">{unit}</span></div>
+  </div>
+  <div style="flex:1;text-align:center;background:#f0f4f8;border-radius:8px;padding:8px 4px;margin-right:8px;">
+    <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;opacity:0.6;margin-bottom:3px;">Max</div>
+    <div style="font-size:16px;font-weight:700;color:#002050;">{mx:.2f} <span style="font-size:9px;font-weight:400;">{unit}</span></div>
+  </div>
+  <div style="flex:1;text-align:center;background:#f0f4f8;border-radius:8px;padding:8px 4px;">
+    <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;opacity:0.6;margin-bottom:3px;">Trend</div>
+    <div style="font-size:20px;font-weight:700;color:{trend_color};">{arrow}</div>
+  </div>
+  {vs_card}
+</div>"""
+
+
 def render_hours_of_supply_chart(data, context, page_number):
-    """Render hours of supply trend table HTML — two-column layout"""
-    left_rows, right_rows = _split_trend_rows(data, 'date', 'hours', 'hrs')
+    """Render hours of supply: SVG line chart + summary strip + two-column data table."""
+    # data is now a dict {current, previous, curr_label, prev_label, …}
+    curr_items  = data.get('current', []) if isinstance(data, dict) else (data or [])
+    prev_items  = data.get('previous', []) if isinstance(data, dict) else []
+    curr_label  = data.get('curr_label', 'Current')  if isinstance(data, dict) else 'Current'
+    prev_label  = data.get('prev_label', 'Previous') if isinstance(data, dict) else 'Previous'
+
+    values      = [float(d.get('hours') or 0) for d in curr_items]
+    prev_values = [float(d.get('hours') or 0) for d in prev_items]
+
+    chart_svg    = _render_svg_line_chart(
+        curr_items, 'hours', 'hrs',
+        prev_data_points=prev_items, curr_label=curr_label, prev_label=prev_label,
+    )
+    summary_html = _trend_summary_row(values, 'hrs', prev_values=prev_values, prev_label=prev_label)
+    left_rows, right_rows = _split_trend_rows(curr_items, 'date', 'hours', 'hrs')
 
     col_header = """
         <thead>
@@ -1664,22 +1971,32 @@ def render_hours_of_supply_chart(data, context, page_number):
 
     return f"""
     <div class="page">
-        <div class="header">
-            <div class="company-name">{context.get('company_name', '')} | {context.get('report_scope', '')}</div>
-            <div class="date">{context.get('report_date', '')}</div>
-        </div>
-
-        <h1 class="page-title">Hours of Supply Trend</h1>
-
-        <div class="trend-columns">
-            <div class="trend-column">
-                <div class="table-container">
-                    <table>{col_header}<tbody>{left_rows}</tbody></table>
-                </div>
+        <div class="page-content">
+            <div class="header">
+                <div class="company-name">{context.get('company_name', '')} | {context.get('report_scope', '')}</div>
+                <div class="date">{context.get('report_date', '')}</div>
             </div>
-            <div class="trend-column">
-                <div class="table-container">
-                    <table>{col_header}<tbody>{right_rows}</tbody></table>
+
+            <h1 class="page-title">Hours of Supply Trend</h1>
+
+            <div style="background:#f8fafc;border-radius:12px;padding:12px 14px;margin-bottom:8px;">
+                {chart_svg}
+            </div>
+
+            {summary_html}
+
+            <div style="margin-top:12px;">
+                <div class="trend-columns">
+                    <div class="trend-column">
+                        <div class="table-container">
+                            <table>{col_header}<tbody>{left_rows}</tbody></table>
+                        </div>
+                    </div>
+                    <div class="trend-column">
+                        <div class="table-container">
+                            <table>{col_header}<tbody>{right_rows}</tbody></table>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -1693,8 +2010,21 @@ def render_hours_of_supply_chart(data, context, page_number):
 
 
 def render_load_trend_chart(data, context, page_number):
-    """Render load trend table HTML — two-column layout"""
-    left_rows, right_rows = _split_trend_rows(data, 'date', 'value', 'MW')
+    """Render load trend: SVG line chart + summary strip + two-column data table."""
+    curr_items  = data.get('current', []) if isinstance(data, dict) else (data or [])
+    prev_items  = data.get('previous', []) if isinstance(data, dict) else []
+    curr_label  = data.get('curr_label', 'Current')  if isinstance(data, dict) else 'Current'
+    prev_label  = data.get('prev_label', 'Previous') if isinstance(data, dict) else 'Previous'
+
+    values      = [float(d.get('value') or 0) for d in curr_items]
+    prev_values = [float(d.get('value') or 0) for d in prev_items]
+
+    chart_svg    = _render_svg_line_chart(
+        curr_items, 'value', 'MW', color='#1a5276',
+        prev_data_points=prev_items, curr_label=curr_label, prev_label=prev_label,
+    )
+    summary_html = _trend_summary_row(values, 'MW', prev_values=prev_values, prev_label=prev_label)
+    left_rows, right_rows = _split_trend_rows(curr_items, 'date', 'value', 'MW')
 
     col_header = """
         <thead>
@@ -1706,22 +2036,32 @@ def render_load_trend_chart(data, context, page_number):
 
     return f"""
     <div class="page">
-        <div class="header">
-            <div class="company-name">{context.get('company_name', '')} | {context.get('report_scope', '')}</div>
-            <div class="date">{context.get('report_date', '')}</div>
-        </div>
-
-        <h1 class="page-title">Load Trend</h1>
-
-        <div class="trend-columns">
-            <div class="trend-column">
-                <div class="table-container">
-                    <table>{col_header}<tbody>{left_rows}</tbody></table>
-                </div>
+        <div class="page-content">
+            <div class="header">
+                <div class="company-name">{context.get('company_name', '')} | {context.get('report_scope', '')}</div>
+                <div class="date">{context.get('report_date', '')}</div>
             </div>
-            <div class="trend-column">
-                <div class="table-container">
-                    <table>{col_header}<tbody>{right_rows}</tbody></table>
+
+            <h1 class="page-title">Load Trend</h1>
+
+            <div style="background:#f8fafc;border-radius:12px;padding:12px 14px;margin-bottom:8px;">
+                {chart_svg}
+            </div>
+
+            {summary_html}
+
+            <div style="margin-top:12px;">
+                <div class="trend-columns">
+                    <div class="trend-column">
+                        <div class="table-container">
+                            <table>{col_header}<tbody>{left_rows}</tbody></table>
+                        </div>
+                    </div>
+                    <div class="trend-column">
+                        <div class="table-container">
+                            <table>{col_header}<tbody>{right_rows}</tbody></table>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -1735,8 +2075,17 @@ def render_load_trend_chart(data, context, page_number):
 
 
 def render_energy_delivered_chart(data, context, page_number):
-    """Render energy delivered trend table HTML — two-column layout"""
-    left_rows, right_rows = _split_trend_rows(data, 'date', 'value', 'MWh')
+    """Render energy delivered: SVG bar chart + summary strip + two-column data table."""
+    curr_items  = data.get('current', []) if isinstance(data, dict) else (data or [])
+    prev_items  = data.get('previous', []) if isinstance(data, dict) else []
+    prev_label  = data.get('prev_label', 'Previous') if isinstance(data, dict) else 'Previous'
+
+    values      = [float(d.get('value') or 0) for d in curr_items]
+    prev_values = [float(d.get('value') or 0) for d in prev_items]
+
+    chart_svg    = _render_svg_bar_chart(curr_items, 'value', 'MWh')
+    summary_html = _trend_summary_row(values, 'MWh', prev_values=prev_values, prev_label=prev_label)
+    left_rows, right_rows = _split_trend_rows(curr_items, 'date', 'value', 'MWh')
 
     col_header = """
         <thead>
@@ -1748,22 +2097,32 @@ def render_energy_delivered_chart(data, context, page_number):
 
     return f"""
     <div class="page">
-        <div class="header">
-            <div class="company-name">{context.get('company_name', '')} | {context.get('report_scope', '')}</div>
-            <div class="date">{context.get('report_date', '')}</div>
-        </div>
-
-        <h1 class="page-title">Energy Delivered Trend</h1>
-
-        <div class="trend-columns">
-            <div class="trend-column">
-                <div class="table-container">
-                    <table>{col_header}<tbody>{left_rows}</tbody></table>
-                </div>
+        <div class="page-content">
+            <div class="header">
+                <div class="company-name">{context.get('company_name', '')} | {context.get('report_scope', '')}</div>
+                <div class="date">{context.get('report_date', '')}</div>
             </div>
-            <div class="trend-column">
-                <div class="table-container">
-                    <table>{col_header}<tbody>{right_rows}</tbody></table>
+
+            <h1 class="page-title">Energy Delivered Trend</h1>
+
+            <div style="background:#f8fafc;border-radius:12px;padding:12px 14px;margin-bottom:8px;">
+                {chart_svg}
+            </div>
+
+            {summary_html}
+
+            <div style="margin-top:12px;">
+                <div class="trend-columns">
+                    <div class="trend-column">
+                        <div class="table-container">
+                            <table>{col_header}<tbody>{left_rows}</tbody></table>
+                        </div>
+                    </div>
+                    <div class="trend-column">
+                        <div class="table-container">
+                            <table>{col_header}<tbody>{right_rows}</tbody></table>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -2705,6 +3064,222 @@ def render_opex_by_district(data, context, page_number):
     return _paginate_table(rows, header_html, 'OPEX by District', context, page_number)
 
 
+# =============================================================================
+# DSO COMPLIANCE SECTION RENDERERS
+# =============================================================================
+
+def render_dso_compliance_overview(data, context, page_number):
+    """Render DSO compliance KPI summary — compliant vs non-compliant stations."""
+    total     = data.get('total_stations', 0)
+    compliant = data.get('compliant_count', 0)
+    non_comp  = data.get('non_compliant_count', 0)
+    rate      = data.get('compliance_rate', 0.0)
+    period    = data.get('period', '')
+
+    # Simple inline donut-like SVG for compliance rate
+    pct = min(max(rate, 0), 100)
+    arc_color = '#2e7d32' if pct >= 80 else ('#f57c00' if pct >= 50 else '#c62828')
+
+    # SVG donut chart (pure SVG, no JS)
+    r = 45
+    cx, cy = 60, 60
+    circumference = 2 * 3.14159 * r
+    dash = circumference * pct / 100
+    gap  = circumference - dash
+
+    donut_svg = f"""
+<svg width="120" height="120" viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg">
+  <circle cx="{cx}" cy="{cy}" r="{r}" fill="none" stroke="#e0e5ee" stroke-width="14"/>
+  <circle cx="{cx}" cy="{cy}" r="{r}" fill="none" stroke="{arc_color}" stroke-width="14"
+          stroke-dasharray="{dash:.1f} {gap:.1f}"
+          stroke-dashoffset="{circumference / 4:.1f}"
+          stroke-linecap="round"/>
+  <text x="{cx}" y="{cy - 5}" text-anchor="middle" font-size="15" font-weight="700"
+        fill="#002050" font-family="Arial,sans-serif">{pct:.0f}%</text>
+  <text x="{cx}" y="{cy + 12}" text-anchor="middle" font-size="9" fill="#888"
+        font-family="Arial,sans-serif">Compliant</text>
+</svg>"""
+
+    # Network-wide submission totals
+    net_exp_h   = data.get('net_exp_hourly', 0)
+    net_dso_h   = data.get('net_dso_hourly', 0)
+    net_adm_h   = data.get('net_admin_hourly', 0)
+    net_exp_e   = data.get('net_exp_energy', 0)
+    net_dso_e   = data.get('net_dso_energy', 0)
+    net_adm_e   = data.get('net_admin_energy', 0)
+
+    dso_h_pct  = round(net_dso_h / net_exp_h * 100, 1) if net_exp_h else 0
+    adm_h_pct  = round(net_adm_h / net_exp_h * 100, 1) if net_exp_h else 0
+    dso_e_pct  = round(net_dso_e / net_exp_e * 100, 1) if net_exp_e else 0
+    adm_e_pct  = round(net_adm_e / net_exp_e * 100, 1) if net_exp_e else 0
+
+    def _bar(filled_pct, color):
+        filled = min(filled_pct, 100)
+        return (
+            f'<div style="background:#dde3ed;border-radius:4px;height:7px;margin-top:5px;">'
+            f'<div style="width:{filled}%;background:{color};height:7px;border-radius:4px;"></div>'
+            f'</div>'
+        )
+
+    def _submission_card(title, expected, dso_count, dso_pct, admin_count, admin_pct):
+        return f"""
+        <div style="flex:1;background:#f0f4f8;border-radius:12px;padding:16px;margin-right:10px;">
+            <div style="font-size:9px;font-weight:700;text-transform:uppercase;
+                        letter-spacing:0.5px;color:#002050;opacity:0.6;margin-bottom:10px;">{title}</div>
+            <div style="display:flex;justify-content:space-between;margin-bottom:6px;">
+                <span style="font-size:9px;opacity:0.5;">Expected</span>
+                <span style="font-size:10px;font-weight:700;color:#002050;">{expected:,}</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;margin-bottom:2px;">
+                <span style="font-size:9px;color:#002050;font-weight:600;">DSO Submitted</span>
+                <span style="font-size:10px;font-weight:700;color:#002050;">{dso_count:,} &nbsp;({dso_pct}%)</span>
+            </div>
+            {_bar(dso_pct, '#002050')}
+            <div style="display:flex;justify-content:space-between;margin-top:8px;margin-bottom:2px;">
+                <span style="font-size:9px;color:#8b1a1a;font-weight:600;">Admin Override</span>
+                <span style="font-size:10px;font-weight:700;color:#8b1a1a;">{admin_count:,} &nbsp;({admin_pct}%)</span>
+            </div>
+            {_bar(admin_pct, '#8b1a1a')}
+        </div>"""
+
+    hourly_card = _submission_card(
+        'Hourly Load Submissions', net_exp_h, net_dso_h, dso_h_pct, net_adm_h, adm_h_pct)
+    energy_card = _submission_card(
+        'Energy Reading Submissions', net_exp_e, net_dso_e, dso_e_pct, net_adm_e, adm_e_pct)
+
+    return f"""
+    <div class="page">
+        <div class="page-content">
+            <div class="header">
+                <div class="company-name">{context.get('company_name', '')} | {context.get('report_scope', '')}</div>
+                <div class="date">{context.get('report_date', '')}</div>
+            </div>
+
+            <h1 class="page-title">DSO Compliance Overview</h1>
+
+            <div style="font-size:11px;opacity:0.65;margin-bottom:14px;">
+                Reporting period: {period} &nbsp;|&nbsp; Compliance threshold: 80% DSO submissions received
+            </div>
+
+            <!-- Row 1: Donut + station KPI cards -->
+            <div style="display:flex;align-items:center;margin-bottom:16px;">
+                <div style="flex-shrink:0;margin-right:28px;">{donut_svg}</div>
+                <div style="display:flex;flex:1;gap:0;">
+                    <div style="flex:1;background:#f0f4f8;border-radius:12px;padding:16px;text-align:center;margin-right:10px;">
+                        <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;opacity:0.6;margin-bottom:6px;">Total Stations</div>
+                        <div style="font-size:30px;font-weight:700;color:#002050;">{total}</div>
+                        <div style="font-size:9px;opacity:0.5;">with 11kV feeders</div>
+                    </div>
+                    <div style="flex:1;background:#e8f5e9;border-radius:12px;padding:16px;text-align:center;margin-right:10px;">
+                        <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;opacity:0.7;margin-bottom:6px;color:#2e7d32;">Compliant</div>
+                        <div style="font-size:30px;font-weight:700;color:#2e7d32;">{compliant}</div>
+                        <div style="font-size:9px;opacity:0.5;">&#8805; 80% DSO submissions</div>
+                    </div>
+                    <div style="flex:1;background:#fce4ec;border-radius:12px;padding:16px;text-align:center;">
+                        <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;opacity:0.7;margin-bottom:6px;color:#c62828;">Non-Compliant</div>
+                        <div style="font-size:30px;font-weight:700;color:#c62828;">{non_comp}</div>
+                        <div style="font-size:9px;opacity:0.5;">below threshold</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Row 2: Submission breakdown cards -->
+            <div style="font-size:11px;font-weight:600;color:#002050;margin-bottom:8px;">
+                Network-Wide Submission Summary
+            </div>
+            <div style="display:flex;margin-bottom:16px;">
+                {hourly_card}
+                {energy_card}
+            </div>
+        </div>
+
+        <div class="footer">
+            <img src="{context.get('footer_logo_url', '')}" alt="Powered by EMRC" />
+            <div class="page-number">{page_number}</div>
+        </div>
+    </div>
+    """
+
+
+def render_dso_compliance_table(data, context, page_number):
+    """Render per-station DSO compliance breakdown table (paginated)."""
+    stations = data.get('stations', [])
+
+    legend_bar = (
+        '<div style="display:flex;align-items:center;gap:20px;margin-bottom:8px;'
+        'font-size:9px;font-weight:600;color:#444;">'
+        '<span style="color:#555;font-weight:400;margin-right:4px;">Status legend:</span>'
+        '<span><span style="color:#2e7d32;font-size:13px;">&#9679;</span>&nbsp;Compliant '
+        '(Hourly &amp; Energy &ge;80%)</span>'
+        '<span><span style="color:#f57c00;font-size:13px;">&#9679;</span>&nbsp;Partial '
+        '(one metric &ge;80%)</span>'
+        '<span><span style="color:#c62828;font-size:13px;">&#9679;</span>&nbsp;Non-Compliant '
+        '(both below 80%)</span>'
+        '</div>'
+    )
+
+    # 7 data columns — no energy DSO/Admin (too noisy); status is a dot only
+    header_html = f"""
+        {legend_bar}
+        <colgroup>
+            <col style="width:24%">
+            <col style="width:9%">
+            <col style="width:6%">
+            <col style="width:13%">
+            <col style="width:11%">
+            <col style="width:10%">
+            <col style="width:13%">
+            <col style="width:8%">
+        </colgroup>
+        <thead>
+            <tr>
+                <th rowspan="2" style="padding:4px 6px;">Station</th>
+                <th rowspan="2" style="text-align:center;padding:4px 6px;">Type</th>
+                <th rowspan="2" style="text-align:right;padding:4px 6px;">Fdrs</th>
+                <th colspan="3" style="text-align:center;padding:4px 6px;
+                    border-bottom:1px solid rgba(255,255,255,0.2);">Hourly Load</th>
+                <th rowspan="2" style="text-align:right;padding:4px 6px;">Energy Comp%</th>
+                <th rowspan="2" style="text-align:center;padding:4px 6px;">&#11044;</th>
+            </tr>
+            <tr>
+                <th style="text-align:right;padding:4px 6px;">Comp%</th>
+                <th style="text-align:right;padding:4px 6px;">DSO</th>
+                <th style="text-align:right;padding:4px 6px;">Admin</th>
+            </tr>
+        </thead>"""
+
+    row_strings = []
+    for s in stations:
+        h_pct = s['hourly_pct']
+        e_pct = s['energy_pct']
+        h_color = '#2e7d32' if h_pct >= 80 else ('#f57c00' if h_pct >= 50 else '#c62828')
+        e_color = '#2e7d32' if e_pct >= 80 else ('#f57c00' if e_pct >= 50 else '#c62828')
+
+        both_compliant = s['is_compliant']
+        one_compliant  = (h_pct >= 80) != (e_pct >= 80)
+        dot_color = '#2e7d32' if both_compliant else ('#f57c00' if one_compliant else '#c62828')
+
+        p = 'padding:3px 6px;'
+        stype = 'Trans.' if 'trans' in s['station_type'].lower() else 'Inj.'
+        row_strings.append(f"""
+        <tr>
+            <td style="{p}font-weight:600;">{s['station_name']}</td>
+            <td style="{p}text-align:center;font-size:9px;">{stype}</td>
+            <td style="{p}text-align:right;">{s['feeder_count']}</td>
+            <td style="{p}text-align:right;font-weight:700;color:{h_color};">{h_pct}%</td>
+            <td style="{p}text-align:right;">{s['dso_hourly']:,}</td>
+            <td style="{p}text-align:right;opacity:0.75;">{s['admin_hourly']:,}</td>
+            <td style="{p}text-align:right;font-weight:700;color:{e_color};">{e_pct}%</td>
+            <td style="{p}text-align:center;font-size:14px;color:{dot_color};">&#9679;</td>
+        </tr>""")
+
+    return _paginate_table(
+        row_strings, header_html,
+        'DSO Submission Compliance by Station',
+        context, page_number, max_rows=20, landscape=True,
+    )
+
+
 def render_back_page(context):
     """Render the always-last branded back/closing page."""
     company_name = context.get('company_name', 'KANO ELECTRICITY DISTRIBUTION COMPANY')
@@ -2786,6 +3361,9 @@ class PDFGenerator:
         'financial_overview': render_financial_overview,
         'opex_by_category':   render_opex_by_category,
         'opex_by_district':   render_opex_by_district,
+        # DSO Compliance
+        'dso_compliance_overview': render_dso_compliance_overview,
+        'dso_compliance_table':    render_dso_compliance_table,
     }
 
     def __init__(self, report_config, data_service):
