@@ -861,7 +861,7 @@ PORTRAIT_STYLES = """
 # TABLE PAGINATION HELPER
 # =============================================================================
 
-def _paginate_table(rows_data, header_html, page_title, context, start_page, max_rows=12, landscape=False):
+def _paginate_table(rows_data, header_html, page_title, context, start_page, max_rows=12, landscape=False, note_html=''):
     """
     Split a potentially long table into multiple .page divs of max_rows rows.
 
@@ -890,6 +890,7 @@ def _paginate_table(rows_data, header_html, page_title, context, start_page, max
             </div>
 
             <h1 class="page-title">{page_title}{suffix}</h1>
+            {note_html if idx == 0 else ''}
 
             <div class="table-container">
                 <table>
@@ -3220,7 +3221,6 @@ def render_dso_compliance_table(data, context, page_number):
 
     # 7 data columns — no energy DSO/Admin (too noisy); status is a dot only
     header_html = f"""
-        {legend_bar}
         <colgroup>
             <col style="width:24%">
             <col style="width:9%">
@@ -3277,6 +3277,7 @@ def render_dso_compliance_table(data, context, page_number):
         row_strings, header_html,
         'DSO Submission Compliance by Station',
         context, page_number, max_rows=20, landscape=True,
+        note_html=legend_bar,
     )
 
 
