@@ -514,7 +514,7 @@ class ReportDataService:
         # Hours of supply — shared utility (one source of truth)
         hours_of_supply = calculate_hours_of_supply(
             self.feeder_ids, self.from_date, self.to_date
-        )
+        )['hours']
 
         # Average load + peak load — shared utility (one source of truth)
         _load = calculate_average_load(self.feeder_ids, self.from_date, self.to_date)
@@ -590,7 +590,7 @@ class ReportDataService:
         # avg_duration = 24 - hours_of_supply (shared utility — one source of truth)
         hours_of_supply = calculate_hours_of_supply(
             self.feeder_ids, self.from_date, self.to_date
-        )
+        )['hours']
         avg_duration = round(max(0.0, min(24.0 - hours_of_supply, 24.0)), 2)
 
         # Cumulative interruption hours = avg_duration × feeders × period_days
@@ -1098,8 +1098,8 @@ class ReportDataService:
                 'is_compliant':   is_compliant,
             })
 
-        # Non-compliant first, then by station name
-        station_rows.sort(key=lambda r: (r['is_compliant'], r['station_name']))
+        # Best performing first (highest avg compliance %), worst last
+        station_rows.sort(key=lambda r: -(r['hourly_pct'] + r['energy_pct']) / 2)
 
         compliance_rate = round((compliant_count / total_stations * 100) if total_stations else 0, 1)
 

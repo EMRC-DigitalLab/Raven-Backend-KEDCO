@@ -3075,7 +3075,10 @@ def render_dso_compliance_overview(data, context, page_number):
 
     station_rows = data.get('stations', [])
     # Show top 5 non-compliant stations in overview
-    non_comp_rows = [s for s in station_rows if not s.get('is_compliant')][:5]
+    non_comp_rows = sorted(
+        [s for s in station_rows if not s.get('is_compliant')],
+        key=lambda r: (r['hourly_pct'] + r['energy_pct']) / 2
+    )[:5]
     non_comp_html = ''
     for s in non_comp_rows:
         non_comp_html += f"""
