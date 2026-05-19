@@ -251,6 +251,13 @@ class Command(BaseCommand):
                 skipped += 1
                 continue
 
+            # Compute consumption/billed_consumption when DataNest leaves them NULL
+            if cons is None and pres_r is not None and prev_r is not None:
+                cons = pres_r - prev_r
+            if billed_cons is None and cons is not None:
+                factor = mult if mult is not None else 1
+                billed_cons = cons * factor
+
             seen.add(ext_id)
             objects.append(MeterReading(
                 external_id=ext_id,

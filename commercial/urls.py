@@ -8,9 +8,12 @@ from commercial.views.customers.customer_views import customer_list, customer_de
 from commercial.views.service_bands.service_band_views import all_bands, single_band
 from commercial.views.trend.trend_views import commercial_trend
 from commercial.views.sync_status import commercial_sync_status
+from commercial.views.sync_backfill import trigger_backfill, backfill_status
 
 urlpatterns = [
     path('sync-status/', commercial_sync_status, name='commercial-sync-status'),
+    path('sync/backfill/', trigger_backfill, name='commercial-sync-backfill-trigger'),
+    path('sync/backfill/<str:job_id>/', backfill_status, name='commercial-sync-backfill-status'),
     path('overview/', commercial_overview, name='commercial-overview'),
     path('trend/', commercial_trend, name='commercial-trend'),
     path('states/', all_states, name='commercial-states'),
