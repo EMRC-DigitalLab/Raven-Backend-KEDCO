@@ -147,6 +147,14 @@ def run_sync() -> dict:
                 valid_types = {'MDI', 'MDNI'}
                 r_type = reading_type if reading_type in valid_types else customer_type
 
+                # Compute consumption/billed_consumption when DataNest leaves them NULL
+                consumption = None
+                if pres_reading is not None and prev_reading is not None:
+                    consumption = pres_reading - prev_reading
+                if billed_consumption is None and consumption is not None:
+                    factor = multiplier if multiplier is not None else 1
+                    billed_consumption = consumption * factor
+
                 kwargs = dict(
                     external_id=ext_id,
                     customer_id=customer_pk,
@@ -154,6 +162,7 @@ def run_sync() -> dict:
                     reading_time=reading_time,
                     previous_reading=prev_reading,
                     present_reading=pres_reading,
+                    consumption=consumption,
                     multiplier_factor=multiplier,
                     billed_consumption=billed_consumption,
                     tariff_rate=tariff_rate,

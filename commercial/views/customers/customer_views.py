@@ -18,7 +18,7 @@ Top or bottom N customers by billed amount in the selected period.
 
 from decimal import Decimal
 
-from django.db.models import Q, Sum
+from django.db.models import F, Q, Sum
 from rest_framework import status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
@@ -94,11 +94,24 @@ def customer_list(request):
     except ValueError:
         page, page_size = 1, 50
 
+    # Annotate with period billed kWh for sort — customers with readings rise to top
+    customers_qs = customers_qs.annotate(
+        period_kwh=Sum(
+            'readings__billed_consumption',
+            filter=Q(
+                readings__reading_date__gte=date_range['start_date'],
+                readings__reading_date__lte=date_range['end_date'],
+                readings__billed_consumption__isnull=False,
+                readings__customer__feeder__commercial_is_onboarded=True,
+            ),
+        )
+    )
+
     total_count = customers_qs.count()
     offset      = (page - 1) * page_size
     customers   = customers_qs.select_related(
         'feeder__business_district__state'
-    ).order_by('customer_name')[offset: offset + page_size]
+    ).order_by(F('period_kwh').desc(nulls_last=True), 'customer_name')[offset: offset + page_size]
 
     results = []
     for c in customers:
