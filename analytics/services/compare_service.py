@@ -1311,6 +1311,7 @@ TREND_ORDER = [
     'Declined Trend',
     'Major Declined Trend',
     'No Previous Data',
+    'No Current Data',
 ]
 
 
@@ -1419,25 +1420,69 @@ def compare_customers(
 
         Readings before the feeder's commercial_onboarded_at date are excluded
         so pre-onboarding historical data never pollutes comparisons.
+
+        billed_consumption is preferred. When NULL (readings synced before the
+        compute fix), falls back to present_reading - previous_reading so that
+        historical periods don't appear empty.
         """
+        from django.db.models import Case, Q, When
+
+        # Effective kWh: use billed_consumption when present, fall back to
+        # present_reading − previous_reading for readings with NULL billed_consumption.
+        effective_kwh = Case(
+            When(billed_consumption__isnull=False, then=F('billed_consumption')),
+            When(
+                billed_consumption__isnull=True,
+                present_reading__isnull=False,
+                previous_reading__isnull=False,
+                then=ExpressionWrapper(
+                    F('present_reading') - F('previous_reading'),
+                    output_field=DField(max_digits=20, decimal_places=4),
+                ),
+            ),
+            default=None,
+            output_field=DField(max_digits=20, decimal_places=4),
+        )
+
+        effective_amount = Case(
+            When(
+                billed_consumption__isnull=False,
+                tariff_rate__isnull=False,
+                then=ExpressionWrapper(
+                    F('billed_consumption') * F('tariff_rate'),
+                    output_field=DField(max_digits=20, decimal_places=4),
+                ),
+            ),
+            When(
+                billed_consumption__isnull=True,
+                present_reading__isnull=False,
+                previous_reading__isnull=False,
+                tariff_rate__isnull=False,
+                then=ExpressionWrapper(
+                    (F('present_reading') - F('previous_reading')) * F('tariff_rate'),
+                    output_field=DField(max_digits=20, decimal_places=4),
+                ),
+            ),
+            default=None,
+            output_field=DField(max_digits=20, decimal_places=4),
+        )
+
         rows = (
             MeterReading.objects
             .filter(
                 customer__in=cust_qs,
                 reading_date__range=(from_d, to_d),
                 reading_date__gte=F('customer__feeder__commercial_onboarded_at'),
-                billed_consumption__isnull=False,
+            )
+            .filter(
+                Q(billed_consumption__isnull=False) |
+                Q(present_reading__isnull=False, previous_reading__isnull=False)
             )
             .values('customer_id')
             .annotate(
-                total_kwh=Sum('billed_consumption'),
+                total_kwh=Sum(effective_kwh),
                 total_count=Count('id'),
-                total_amount=Sum(
-                    ExpressionWrapper(
-                        F('billed_consumption') * F('tariff_rate'),
-                        output_field=DField(max_digits=20, decimal_places=4),
-                    )
-                ),
+                total_amount=Sum(effective_amount),
             )
         )
         return {
@@ -1504,12 +1549,21 @@ def compare_customers(
         if curr_kwh is not None and prev_kwh is not None and prev_kwh > 0:
             var_kwh = round(curr_kwh - prev_kwh, 2)
             var_pct = round((curr_kwh - prev_kwh) / prev_kwh * 100, 2)
+            trend   = _classify_trend(var_pct, positive_threshold, declined_threshold)
         elif curr_kwh is not None and (prev_kwh is None or prev_kwh == 0):
+            # Customer was read this period but has no prior reading to compare
             var_kwh = curr_kwh
             var_pct = None
+            trend   = 'No Previous Data'
+        elif curr_kwh is None and prev_kwh is not None:
+            # Customer was read before but NOT in the current period
+            var_kwh = None
+            var_pct = None
+            trend   = 'No Current Data'
         else:
             var_kwh = None
             var_pct = None
+            trend   = 'No Previous Data'
 
         rows.append({
             'account_no':               cust.account_no,
@@ -1532,7 +1586,7 @@ def compare_customers(
             'billing_variance':         round(curr_amount - prev_amount, 2),
             'variance_kwh':             var_kwh,
             'variance_pct':             var_pct,
-            'trend':                    _classify_trend(var_pct, positive_threshold, declined_threshold),
+            'trend':                    trend,
         })
 
     # ── Sort ───────────────────────────────────────────────────────────────────
