@@ -23,7 +23,7 @@ from datetime import date, datetime, timedelta
 from dateutil.relativedelta import relativedelta
 from django.db import connection
 from django.db.models import (
-    Count, ExpressionWrapper, F, Sum,
+    ExpressionWrapper, F, Sum,
     DecimalField as DField,
 )
 from django.utils import timezone
@@ -1416,58 +1416,28 @@ def compare_customers(
 
     # ── Aggregate consumption per customer for both periods ────────────────────
     def _period_consumption(from_d: date, to_d: date) -> dict:
-        """Returns {customer_id: {'kwh', 'count', 'amount'}} for the given period.
-
-        Readings before the feeder's commercial_onboarded_at date are excluded
-        so pre-onboarding historical data never pollutes comparisons.
-
-        billed_consumption is preferred. When NULL (readings synced before the
-        compute fix), falls back to present_reading - previous_reading so that
-        historical periods don't appear empty.
         """
-        from django.db.models import Case, Q, When
+        Returns {customer_id: {'kwh', 'count', 'amount'}} for the given period.
 
-        # Effective kWh: use billed_consumption when present, fall back to
-        # present_reading − previous_reading for readings with NULL billed_consumption.
-        effective_kwh = Case(
-            When(billed_consumption__isnull=False, then=F('billed_consumption')),
-            When(
-                billed_consumption__isnull=True,
-                present_reading__isnull=False,
-                previous_reading__isnull=False,
-                then=ExpressionWrapper(
-                    F('present_reading') - F('previous_reading'),
-                    output_field=DField(max_digits=20, decimal_places=4),
-                ),
-            ),
-            default=None,
-            output_field=DField(max_digits=20, decimal_places=4),
-        )
+        Each reading's billed_consumption covers a billing cycle of variable length
+        (e.g. 7 days, 30 days, or longer for first-ever readings). To make any two
+        dates comparable, consumption is normalised to a per-day rate and then
+        scaled to the selected comparison period:
 
-        effective_amount = Case(
-            When(
-                billed_consumption__isnull=False,
-                tariff_rate__isnull=False,
-                then=ExpressionWrapper(
-                    F('billed_consumption') * F('tariff_rate'),
-                    output_field=DField(max_digits=20, decimal_places=4),
-                ),
-            ),
-            When(
-                billed_consumption__isnull=True,
-                present_reading__isnull=False,
-                previous_reading__isnull=False,
-                tariff_rate__isnull=False,
-                then=ExpressionWrapper(
-                    (F('present_reading') - F('previous_reading')) * F('tariff_rate'),
-                    output_field=DField(max_digits=20, decimal_places=4),
-                ),
-            ),
-            default=None,
-            output_field=DField(max_digits=20, decimal_places=4),
-        )
+            normalized_kwh = raw_kwh / billing_days * period_days
 
-        rows = (
+        billing_days = reading_date - previous_reading_date (from DB).
+        If no previous reading exists in the system, defaults to 30 days (monthly).
+
+        billed_consumption is preferred; falls back to present_reading −
+        previous_reading for readings where billed_consumption is NULL.
+        """
+        from django.db.models import Max, Q
+
+        period_days = max((to_d - from_d).days + 1, 1)
+
+        # ── Step 1: fetch all qualifying readings in the period ────────────────
+        readings = list(
             MeterReading.objects
             .filter(
                 customer__in=cust_qs,
@@ -1478,21 +1448,69 @@ def compare_customers(
                 Q(billed_consumption__isnull=False) |
                 Q(present_reading__isnull=False, previous_reading__isnull=False)
             )
-            .values('customer_id')
-            .annotate(
-                total_kwh=Sum(effective_kwh),
-                total_count=Count('id'),
-                total_amount=Sum(effective_amount),
+            .values(
+                'customer_id', 'reading_date',
+                'billed_consumption', 'present_reading', 'previous_reading',
+                'tariff_rate',
             )
         )
-        return {
-            str(r['customer_id']): {
-                'kwh':    float(r['total_kwh'] or 0),
-                'count':  int(r['total_count'] or 0),
-                'amount': float(r['total_amount'] or 0),
-            }
-            for r in rows
+
+        if not readings:
+            return {}
+
+        customer_ids_in_period = list({r['customer_id'] for r in readings})
+
+        # ── Step 2: find each customer's most recent reading before this period ─
+        # This tells us how long this reading's billing cycle actually is.
+        prev_date_map = {
+            r['customer_id']: r['prev_date']
+            for r in (
+                MeterReading.objects
+                .filter(customer_id__in=customer_ids_in_period, reading_date__lt=from_d)
+                .values('customer_id')
+                .annotate(prev_date=Max('reading_date'))
+            )
         }
+
+        # ── Step 3: normalise and aggregate per customer ───────────────────────
+        result: dict = {}
+        for r in readings:
+            cid  = r['customer_id']
+            rdate = r['reading_date']
+
+            # Effective raw kWh
+            bc, pr, prev_r = r['billed_consumption'], r['present_reading'], r['previous_reading']
+            if bc is not None:
+                raw_kwh = float(bc)
+            elif pr is not None and prev_r is not None:
+                raw_kwh = float(pr) - float(prev_r)
+            else:
+                continue
+            if raw_kwh <= 0:
+                continue
+
+            # Billing period length for this reading
+            prev_date = prev_date_map.get(cid)
+            billing_days = max((rdate - prev_date).days, 1) if prev_date else 30
+
+            # Normalise to the selected comparison period
+            normalized_kwh    = raw_kwh / billing_days * period_days
+            tr                = float(r['tariff_rate']) if r['tariff_rate'] else 0.0
+            normalized_amount = (raw_kwh * tr) / billing_days * period_days
+
+            cid_str = str(cid)
+            if cid_str in result:
+                result[cid_str]['kwh']    += normalized_kwh
+                result[cid_str]['count']  += 1
+                result[cid_str]['amount'] += normalized_amount
+            else:
+                result[cid_str] = {
+                    'kwh':    normalized_kwh,
+                    'count':  1,
+                    'amount': normalized_amount,
+                }
+
+        return result
 
     current_map  = _period_consumption(current_from, current_to)
     previous_map = _period_consumption(previous_from, previous_to)
