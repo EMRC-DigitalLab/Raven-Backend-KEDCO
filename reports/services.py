@@ -344,6 +344,79 @@ SECTION_DEFINITIONS = {
         'supports_chart': True,
         'config_options': {},
     },
+    # ── Comparison sections ───────────────────────────────────────────────────
+    # These sections are populated by the compare engine and rendered client-side.
+    # Access is gated: entity/period comparison require any module; customer requires commercial.
+    'entity_comparison': {
+        'display_name': 'Entity Comparison',
+        'description': 'Compare multiple states, districts, feeders, or bands across the report period',
+        'category': 'comparison',
+        'supports_chart': True,
+        'config_options': {
+            'entity_type': {
+                'type': 'select',
+                'options': ['state', 'district', 'feeder', 'band'],
+                'default': 'district',
+            },
+            'entity_ids': {'type': 'multi_select', 'default': []},
+            'metrics': {'type': 'multi_select', 'default': []},
+            'granularity': {
+                'type': 'select',
+                'options': ['daily', 'monthly'],
+                'default': 'monthly',
+            },
+            'feeder_type': {
+                'type': 'select',
+                'options': ['11kv', '33kv'],
+                'default': '11kv',
+            },
+            'include_trend': {'type': 'boolean', 'default': True},
+        },
+    },
+    'period_comparison': {
+        'display_name': 'Period Comparison',
+        'description': 'Compare a single entity across multiple custom time periods',
+        'category': 'comparison',
+        'supports_chart': True,
+        'config_options': {
+            'entity_type': {
+                'type': 'select',
+                'options': ['state', 'district', 'feeder', 'band'],
+                'default': 'feeder',
+            },
+            'entity_id': {'type': 'select', 'default': None},
+            'metrics': {'type': 'multi_select', 'default': []},
+            'periods': {'type': 'list', 'default': []},
+            'feeder_type': {
+                'type': 'select',
+                'options': ['11kv', '33kv'],
+                'default': '11kv',
+            },
+        },
+    },
+    'customer_comparison': {
+        'display_name': 'Customer Comparison',
+        'description': 'Compare top MDI/MDNI customers by consumption across two periods',
+        'category': 'commercial',
+        'supports_chart': True,
+        'config_options': {
+            'customer_type': {
+                'type': 'select',
+                'options': ['MDI', 'MDNI', 'all'],
+                'default': 'MDI',
+            },
+            'current_period': {'type': 'date_range', 'default': None},
+            'previous_period': {'type': 'date_range', 'default': None},
+            'scope_type': {
+                'type': 'select',
+                'options': ['feeder', 'district', 'state', 'station'],
+                'default': None,
+            },
+            'scope_id': {'type': 'uuid', 'default': None},
+            'top_n': {'type': 'number', 'default': 50},
+            'include_insights': {'type': 'boolean', 'default': False},
+        },
+    },
 }
 
 
@@ -377,7 +450,14 @@ def get_available_sections(user=None):
         accessible_modules = permanent | temporary
 
     def _allowed(category):
-        return category == 'general' or category in accessible_modules
+        if category == 'general':
+            return True
+        # 'comparison' sections (entity/period compare) are available to any
+        # user who has at least one module — the compare engine enforces finer
+        # metric-level access internally.
+        if category == 'comparison':
+            return bool(accessible_modules)
+        return category in accessible_modules
 
     return [
         {'section_type': key, **value}
@@ -392,11 +472,11 @@ def get_available_sections(user=None):
 
 class ReportDataService:
     """Service for fetching data for report sections"""
-    
-    def __init__(self, filters):
+
+    def __init__(self, filters, user=None):
         """
-        Initialize with filters.
-        
+        Initialize with filters and optional user (required for comparison sections).
+
         filters = {
             'from_date': '2025-01-01',
             'to_date': '2025-01-31',
@@ -408,6 +488,7 @@ class ReportDataService:
         }
         """
         self.filters = filters
+        self._user = user
         self.from_date = self._parse_date(filters.get('from_date'))
         self.to_date = self._parse_date(filters.get('to_date'))
         
@@ -1140,6 +1221,140 @@ class ReportDataService:
         }
 
     # =========================================================================
+    # COMPARISON DATA METHODS
+    # These delegate to the analytics compare engine, reusing the same logic
+    # and access-control that powers the standalone compare endpoints.
+    # =========================================================================
+
+    def get_entity_comparison_data(self, config, user):
+        from analytics.services.compare_service import compare_entities
+
+        entity_type   = config.get('entity_type', 'district')
+        entity_ids    = config.get('entity_ids', [])
+        metrics       = config.get('metrics', [])
+        granularity   = config.get('granularity', 'monthly')
+        feeder_type   = config.get('feeder_type') or None
+        include_trend = bool(config.get('include_trend', True))
+
+        if not entity_ids or not metrics:
+            return {'error': 'entity_ids and metrics are required for entity_comparison'}
+
+        try:
+            return compare_entities(
+                user=user,
+                entity_type=entity_type,
+                entity_ids=entity_ids,
+                metrics=metrics,
+                from_date=self.from_date,
+                to_date=self.to_date,
+                feeder_type=feeder_type,
+                granularity=granularity,
+                include_trend=include_trend,
+            )
+        except Exception as exc:
+            logger.error("entity_comparison failed in report: %s", exc)
+            return {'error': str(exc)}
+
+    def get_period_comparison_data(self, config, user):
+        from analytics.services.compare_service import compare_periods
+
+        entity_type = config.get('entity_type', 'feeder')
+        entity_id   = config.get('entity_id')
+        metrics     = config.get('metrics', [])
+        feeder_type = config.get('feeder_type') or None
+        periods     = config.get('periods', [])
+
+        if not entity_id or not metrics:
+            return {'error': 'entity_id and metrics are required for period_comparison'}
+
+        try:
+            return compare_periods(
+                user=user,
+                entity_type=entity_type,
+                entity_id=entity_id,
+                metrics=metrics,
+                periods=periods,
+                feeder_type=feeder_type,
+            )
+        except Exception as exc:
+            logger.error("period_comparison failed in report: %s", exc)
+            return {'error': str(exc)}
+
+    def get_customer_comparison_data(self, config, user):
+        from datetime import timedelta
+
+        from analytics.services.compare_service import compare_customers, user_has_permission
+
+        if not user_has_permission(user, 'view_customer_comparison'):
+            return {'error': 'No permission for customer comparison'}
+
+        customer_type   = config.get('customer_type', 'all')
+        current_period  = config.get('current_period')
+        previous_period = config.get('previous_period')
+
+        if current_period and previous_period:
+            try:
+                from datetime import datetime
+                current_from  = datetime.strptime(str(current_period['from_date'])[:10], '%Y-%m-%d').date()
+                current_to    = datetime.strptime(str(current_period['to_date'])[:10],   '%Y-%m-%d').date()
+                previous_from = datetime.strptime(str(previous_period['from_date'])[:10], '%Y-%m-%d').date()
+                previous_to   = datetime.strptime(str(previous_period['to_date'])[:10],   '%Y-%m-%d').date()
+            except (KeyError, ValueError, TypeError) as exc:
+                return {'error': f'Invalid period format in customer_comparison config: {exc}'}
+        else:
+            # Fall back to the report's main date range as current period
+            current_from  = self.from_date
+            current_to    = self.to_date
+            previous_to   = current_from - timedelta(days=1)
+            previous_from = previous_to - timedelta(days=(current_to - current_from).days)
+
+        sort_by = config.get('sort_by', 'current_consumption')
+        if sort_by not in ('current_consumption', 'variance_pct', 'decline'):
+            sort_by = 'current_consumption'
+
+        try:
+            result = compare_customers(
+                user=user,
+                current_from=current_from,
+                current_to=current_to,
+                previous_from=previous_from,
+                previous_to=previous_to,
+                customer_type=customer_type,
+                scope_type=config.get('scope_type') or None,
+                scope_id=config.get('scope_id') or None,
+                customer_ids=config.get('customer_ids') or None,
+                select_all=bool(config.get('select_all', False)),
+                top_n=min(int(config.get('top_n', 50)), 200),
+                sort_by=sort_by,
+                positive_threshold=float(config.get('positive_threshold', 10.0)),
+                declined_threshold=float(config.get('declined_threshold', -30.0)),
+            )
+        except Exception as exc:
+            logger.error("customer_comparison failed in report: %s", exc)
+            return {'error': str(exc)}
+
+        if config.get('include_insights') and 'error' not in result:
+            try:
+                from analytics.services.ai_insights import get_comparison_insights
+                result['ai_insights'] = get_comparison_insights(
+                    comparison=result,
+                    customer_type=customer_type,
+                    current_from=current_from,
+                    current_to=current_to,
+                    previous_from=previous_from,
+                    previous_to=previous_to,
+                    scope_type=config.get('scope_type') or None,
+                    scope_id=config.get('scope_id') or None,
+                    positive_threshold=float(config.get('positive_threshold', 10.0)),
+                    declined_threshold=float(config.get('declined_threshold', -30.0)),
+                )
+            except Exception as exc:
+                logger.warning("AI insights failed in report: %s", exc)
+                result['ai_insights'] = None
+
+        return result
+
+    # =========================================================================
     # LAZY SUB-SERVICE ACCESSORS
     # Each sub-service is instantiated once on first use using self.filters
     # mapped to the filter keys each service expects.
@@ -1204,6 +1419,7 @@ class ReportDataService:
                             'department_headcount', 'attrition_analysis', 'recruitment_summary'}
     _COMMERCIAL_SECTIONS = {'commercial_overview', 'revenue_by_district', 'customer_type_summary'}
     _FINANCIAL_SECTIONS  = {'financial_overview', 'opex_by_category', 'opex_by_district'}
+    _COMPARISON_SECTIONS = {'entity_comparison', 'period_comparison', 'customer_comparison'}
 
     def get_all_section_data(self, section_type, config=None):
         """Get data for a specific section type"""
@@ -1216,6 +1432,18 @@ class ReportDataService:
             return self._get_commercial_service().get_all_section_data(section_type, config)
         if section_type in self._FINANCIAL_SECTIONS:
             return self._get_financial_service().get_all_section_data(section_type, config)
+
+        # ── Comparison sections — require user in context ─────────────────────
+        if section_type in self._COMPARISON_SECTIONS:
+            user = self._user
+            if user is None:
+                return {'error': 'User context required for comparison sections'}
+            if section_type == 'entity_comparison':
+                return self.get_entity_comparison_data(config, user)
+            if section_type == 'period_comparison':
+                return self.get_period_comparison_data(config, user)
+            if section_type == 'customer_comparison':
+                return self.get_customer_comparison_data(config, user)
 
         # ── Technical / general sections ─────────────────────────────────────
         data_methods = {

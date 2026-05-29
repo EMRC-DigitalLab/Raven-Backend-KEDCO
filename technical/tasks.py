@@ -26,12 +26,15 @@ logger = logging.getLogger(__name__)
 
 # ── shared helper ──────────────────────────────────────────────────────────────
 
-def _run_sync(data_type: str, sync_fn):
+def _run_sync(data_type: str, sync_fn, notify_on_success: bool = True):
     """
     Boilerplate wrapper around any sync service function.
 
     sync_fn must return the stats dict produced by run_sync() in each
     service module.
+
+    notify_on_success=False suppresses success notifications for high-frequency
+    syncs (every 5-15 minutes) to avoid notification noise.
     """
     log = DataSyncLog.objects.create(data_type=data_type, status='running')
     try:
@@ -60,13 +63,25 @@ def _run_sync(data_type: str, sync_fn):
             log.records_skipped, log.records_errored,
         )
 
+        _emit_sync_notification(data_type, status, log, notify_on_success)
+
     except Exception as exc:
         log.status = 'error'
         log.completed_at = timezone.now()
         log.error_message = str(exc)
         log.save()
         logger.exception('[DataSync] %s → UNHANDLED ERROR: %s', data_type, exc)
+        _emit_sync_notification(data_type, 'error', log, notify_on_success=True)
         raise  # let Celery handle retry / failure tracking
+
+
+def _emit_sync_notification(data_type: str, status: str, log, notify_on_success: bool = True):
+    """Call NotificationService.notify_datasync — fails silently so it never breaks a sync."""
+    try:
+        from notifications.services import NotificationService
+        NotificationService.notify_datasync(data_type, status, log, notify_on_success)
+    except Exception as exc:
+        logger.warning('[DataSync] notify failed silently for %s: %s', data_type, exc)
 
 
 # ── tasks ──────────────────────────────────────────────────────────────────────
@@ -81,7 +96,7 @@ def sync_hourly_load_task(self):
     """Sync Technicalhourlydata → HourlyLoad. Runs every 15 minutes."""
     from technical.sync.hourly_load import run_sync
     try:
-        _run_sync('technical_hourly_load', run_sync)
+        _run_sync('technical_hourly_load', run_sync, notify_on_success=False)
     except Exception as exc:
         raise self.retry(exc=exc)
 
@@ -94,11 +109,68 @@ def sync_hourly_load_task(self):
 )
 def sync_interruptions_task(self):
     """Sync technicalenergyfault → FeederInterruption. Runs every 15 minutes."""
+    from technical.models import FeederInterruption
     from technical.sync.interruptions import run_sync
     try:
-        _run_sync('technical_interruptions', run_sync)
+        # Snapshot open interruptions before sync to detect restorations
+        open_before = frozenset(
+            FeederInterruption.objects
+            .filter(restored_at__isnull=True)
+            .values_list('id', flat=True)
+        )
+
+        _run_sync('technical_interruptions', run_sync, notify_on_success=False)
+
+        # Notify for any feeder that was just restored during this sync cycle
+        if open_before:
+            newly_restored = list(
+                FeederInterruption.objects
+                .filter(id__in=open_before, restored_at__isnull=False)
+                .select_related('feeder', 'feeder__band', 'feeder__business_district')
+            )
+            if newly_restored:
+                _notify_restorations(newly_restored)
+
     except Exception as exc:
         raise self.retry(exc=exc)
+
+
+def _notify_restorations(interruptions: list):
+    """Notify admins/managers that feeders have been restored after an outage."""
+    try:
+        from notifications.services import NotificationService
+
+        count = len(interruptions)
+        feeder_lines = []
+        for intr in interruptions[:10]:
+            feeder = intr.feeder
+            band = getattr(feeder.band, 'name', '?') if getattr(feeder, 'band', None) else '?'
+            duration = getattr(intr, 'duration_hours', None) or 0
+            feeder_lines.append(
+                f"• {feeder.name} (Band {band}) — restored after {float(duration):.1f} hrs"
+            )
+        if count > 10:
+            feeder_lines.append(f"… and {count - 10} more")
+
+        NotificationService.notify_role(
+            title=f"Feeder Restoration: {count} feeder{'s' if count != 1 else ''} back online",
+            message=(
+                f"{count} feeder{'s' if count != 1 else ''} "
+                f"restored in the latest DataNest sync:\n\n"
+                + "\n".join(feeder_lines)
+            ),
+            category='technical',
+            roles=['super_admin', 'admin', 'manager'],
+            priority='medium',
+            send_email=False,
+            action_url='/technical/interruptions',
+            metadata={
+                'restored_count': count,
+                'restored_ids': [str(i.id) for i in interruptions[:20]],
+            },
+        )
+    except Exception as exc:
+        logger.warning('[DataSync] _notify_restorations failed silently: %s', exc)
 
 
 @shared_task(

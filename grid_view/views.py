@@ -126,17 +126,17 @@ def _fetch_technical(month_date, feeder_ids):
 
 
 def _fetch_commercial(month_date, feeder_ids):
-    """feeder_id (str) → commercial metrics dict."""
-    # Customer counts per feeder
+    """feeder_id (str) → commercial metrics dict. Only onboarded feeders count."""
+    # Customer counts per feeder — onboarded feeders only
     cust_map = {
         str(r['feeder']): r['cnt']
         for r in CommercialCustomer.objects
-            .filter(feeder_id__in=feeder_ids)
+            .filter(feeder_id__in=feeder_ids, feeder__commercial_is_onboarded=True)
             .values('feeder')
             .annotate(cnt=Count('id'))
     }
 
-    # Meter readings aggregated per feeder for the given month
+    # Meter readings aggregated per feeder for the given month — onboarded feeders only
     reading_map = {}
     for r in (
         MeterReading.objects
@@ -144,6 +144,7 @@ def _fetch_commercial(month_date, feeder_ids):
             reading_date__year=month_date.year,
             reading_date__month=month_date.month,
             customer__feeder_id__in=feeder_ids,
+            customer__feeder__commercial_is_onboarded=True,
         )
         .values('customer__feeder')
         .annotate(cnt=Count('id'), consumption=Sum('billed_consumption'))

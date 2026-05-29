@@ -210,7 +210,16 @@ def customer_compare_report(request):
     # ── Build report config ────────────────────────────────────────────────────
     ctype_label = {'MDI': 'MDI', 'MDNI': 'MDNI', 'all': 'MDI + MDNI'}.get(customer_type, customer_type)
     scope_label = comparison.get('scope', {}).get('label') or 'KEDCO-wide'
-    period_label = f"{current_from.strftime('%d %b')} – {current_to.strftime('%d %b %Y')}"
+
+    def _fmt_period(from_d, to_d):
+        if from_d == to_d:
+            return from_d.strftime('%d %b')
+        return f"{from_d.strftime('%d %b')} – {to_d.strftime('%d %b')}"
+
+    curr_label   = _fmt_period(current_from, current_to)
+    prev_label   = _fmt_period(previous_from, previous_to)
+    year_label   = current_from.strftime('%Y')
+    period_label = f"{curr_label} vs {prev_label} {year_label}"
 
     default_title = f"{ctype_label} Consumption Comparison — {period_label}"
     report_title  = body.get('report_title') or default_title

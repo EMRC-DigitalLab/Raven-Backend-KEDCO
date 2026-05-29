@@ -304,9 +304,14 @@ def all_feeders(request):
 def single_feeder(request, slug):
     """Full commercial metrics for one feeder."""
     try:
-        feeder = Feeder.objects.select_related('business_district__state').get(slug=slug)
+        feeder = Feeder.objects.select_related('business_district__state').get(
+            slug=slug, commercial_is_onboarded=True
+        )
     except Feeder.DoesNotExist:
-        return Response({'error': f'Feeder "{slug}" not found.'}, status=status.HTTP_404_NOT_FOUND)
+        return Response(
+            {'error': f'Feeder "{slug}" not found or not commercially onboarded.'},
+            status=status.HTTP_404_NOT_FOUND,
+        )
 
     date_range   = parse_date_range(request)
     customers_qs = CommercialCustomer.objects.filter(**customer_filter_kwargs(request))

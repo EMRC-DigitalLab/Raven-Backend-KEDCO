@@ -43,6 +43,16 @@ app.conf.update(
             'task': 'notifications.tasks.daily_restoration_check',
             'schedule': crontab(hour=23, minute=30),
         },
+        # DSO meter reading compliance — runs every day at 22:00 Africa/Lagos
+        'daily-dso-meter-reading-check': {
+            'task': 'notifications.tasks.daily_dso_meter_reading_check',
+            'schedule': crontab(hour=22, minute=0),
+        },
+        # EA monthly submission check — runs on the 10th of each month at 18:00
+        'monthly-ea-submission-check': {
+            'task': 'notifications.tasks.monthly_ea_submission_check',
+            'schedule': crontab(day_of_month=10, hour=18, minute=0),
+        },
 
         # ── DataNest → Raven Technical Sync ───────────────────────────────────
         # Hourly load: every 5 minutes

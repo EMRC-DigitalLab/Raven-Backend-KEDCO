@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 
 # ── shared helper (same as technical/tasks.py) ────────────────────────────────
 
-def _run_sync(data_type: str, sync_fn):
+def _run_sync(data_type: str, sync_fn, notify_on_success: bool = True):
     log = DataSyncLog.objects.create(data_type=data_type, status='running')
     try:
         stats = sync_fn()
@@ -63,13 +63,25 @@ def _run_sync(data_type: str, sync_fn):
             log.records_skipped, log.records_errored,
         )
 
+        _emit_sync_notification(data_type, status, log, notify_on_success)
+
     except Exception as exc:
         log.status        = 'error'
         log.completed_at  = timezone.now()
         log.error_message = str(exc)
         log.save()
         logger.exception('[EA Sync] %s → UNHANDLED ERROR: %s', data_type, exc)
+        _emit_sync_notification(data_type, 'error', log, notify_on_success=True)
         raise
+
+
+def _emit_sync_notification(data_type: str, status: str, log, notify_on_success: bool = True):
+    """Call NotificationService.notify_datasync — fails silently so it never breaks a sync."""
+    try:
+        from notifications.services import NotificationService
+        NotificationService.notify_datasync(data_type, status, log, notify_on_success)
+    except Exception as exc:
+        logger.warning('[EA Sync] notify failed silently for %s: %s', data_type, exc)
 
 
 # ── tasks ──────────────────────────────────────────────────────────────────────
@@ -105,7 +117,7 @@ def sync_grid_meters(self):
 def sync_monthly_returns(self):
     from energy_account.sync.monthly_returns import run_sync
     try:
-        _run_sync('ea_monthly_returns', run_sync)
+        _run_sync('ea_monthly_returns', run_sync, notify_on_success=False)
     except Exception as exc:
         raise self.retry(exc=exc)
 
@@ -114,7 +126,7 @@ def sync_monthly_returns(self):
 def sync_monthly_readings(self):
     from energy_account.sync.monthly_readings import run_sync
     try:
-        _run_sync('ea_monthly_readings', run_sync)
+        _run_sync('ea_monthly_readings', run_sync, notify_on_success=False)
     except Exception as exc:
         raise self.retry(exc=exc)
 
@@ -132,7 +144,7 @@ def sync_feeder_technical_energy(self):
 def sync_tcn_reconciliation(self):
     from energy_account.sync.tcn_reconciliation import run_sync
     try:
-        _run_sync('ea_tcn_reconciliation', run_sync)
+        _run_sync('ea_tcn_reconciliation', run_sync, notify_on_success=False)
     except Exception as exc:
         raise self.retry(exc=exc)
 
@@ -141,7 +153,7 @@ def sync_tcn_reconciliation(self):
 def sync_tcn_reconciliation_notes(self):
     from energy_account.sync.tcn_reconciliation_notes import run_sync
     try:
-        _run_sync('ea_tcn_reconciliation_notes', run_sync)
+        _run_sync('ea_tcn_reconciliation_notes', run_sync, notify_on_success=False)
     except Exception as exc:
         raise self.retry(exc=exc)
 

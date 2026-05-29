@@ -24,8 +24,9 @@ urlpatterns = [
     path('preview/section/', views.preview_section_data, name='preview-section'),
     path('preview/all/', views.preview_all_sections, name='preview-all'),
     
-    # PDF generation
-    path('generate/pdf/', views.generate_report_pdf, name='generate-pdf'),
+    # Report generation
+    path('generate/pdf/', views.generate_report_pdf, name='generate-pdf'),           # legacy — kept for backward compat
+    path('generate/data/', views.generate_report_data, name='generate-data'),        # new — JSON for client-side PDF
     path('generate/html-preview/', views.generate_report_html_preview, name='generate-html-preview'),
     
     # History
