@@ -25,7 +25,7 @@ from technical.models import DataSyncLog
 logger = logging.getLogger(__name__)
 
 
-def _run_sync(data_type: str, sync_fn):
+def _run_sync(data_type: str, sync_fn, notify_on_success: bool = True):
     log = DataSyncLog.objects.create(data_type=data_type, status='running')
     try:
         stats = sync_fn()
@@ -51,13 +51,25 @@ def _run_sync(data_type: str, sync_fn):
             log.records_skipped, log.records_errored,
         )
 
+        _emit_sync_notification(data_type, log.status, log, notify_on_success)
+
     except Exception as exc:
         log.status = 'error'
         log.completed_at = timezone.now()
         log.error_message = str(exc)
         log.save()
         logger.exception('[CommercialSync] %s -> UNHANDLED ERROR: %s', data_type, exc)
+        _emit_sync_notification(data_type, 'error', log, notify_on_success=True)
         raise
+
+
+def _emit_sync_notification(data_type: str, status: str, log, notify_on_success: bool = True):
+    """Call NotificationService.notify_datasync — fails silently so it never breaks a sync."""
+    try:
+        from notifications.services import NotificationService
+        NotificationService.notify_datasync(data_type, status, log, notify_on_success)
+    except Exception as exc:
+        logger.warning('[CommercialSync] notify failed silently for %s: %s', data_type, exc)
 
 
 @shared_task(
@@ -70,7 +82,7 @@ def sync_commercial_readings_task(self):
     """Sync DataNest meter_readings -> MeterReading. Runs every 5 minutes."""
     from commercial.sync.readings import run_sync
     try:
-        _run_sync('commercial_readings', run_sync)
+        _run_sync('commercial_readings', run_sync, notify_on_success=False)
     except Exception as exc:
         raise self.retry(exc=exc)
 

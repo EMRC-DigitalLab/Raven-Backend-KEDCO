@@ -524,3 +524,247 @@ def daily_restoration_check():
 
     logger.info(f"[Restoration Check {today}] {count} feeders still unrestored — notification sent.")
     return f"{count} feeders unrestored on {today}"
+
+
+@shared_task
+def daily_dso_meter_reading_check():
+    """
+    Runs daily at 22:00 Africa/Lagos.
+
+    Checks which feeders have NOT submitted a meter reading for today.
+    Only checks feeders in Band A and Band B (high-priority feeders).
+    Notifies admins/managers if any readings are missing or flagged as late.
+    """
+    from datetime import date
+
+    from django.contrib.auth import get_user_model
+
+    from technical.models import CumulativeMeterReading
+
+    from .services import NotificationService
+
+    today = date.today()
+    User = get_user_model()
+    recipients = User.objects.filter(role__in=['super_admin', 'admin', 'manager'], is_active=True)
+
+    # Feeders with readings today
+    submitted_today = set(
+        CumulativeMeterReading.objects
+        .filter(reading_date=today)
+        .values_list('feeder_id', flat=True)
+    )
+
+    # Late readings submitted today
+    late_today = list(
+        CumulativeMeterReading.objects
+        .filter(reading_date=today, is_late=True)
+        .select_related('feeder', 'feeder__band', 'feeder__business_district')
+        .order_by('feeder__name')
+    )
+
+    # Feeders that should have readings (Band A & B only — high-priority)
+    from common.models import Feeder
+    priority_feeders = list(
+        Feeder.objects
+        .filter(band__name__in=['A', 'B'])
+        .select_related('band', 'business_district')
+        .order_by('name')
+    )
+
+    missing = [f for f in priority_feeders if f.id not in submitted_today]
+
+    notifications_sent = 0
+
+    if missing:
+        count = len(missing)
+        lines = [
+            f"• {f.name} (Band {getattr(f.band, 'name', '?')}"
+            + (f", {f.business_district.name}" if f.business_district else "")
+            + ")"
+            for f in missing[:15]
+        ]
+        if count > 15:
+            lines.append(f"… and {count - 15} more")
+
+        NotificationService.notify(
+            title=f"Missing Meter Readings — {count} Band A/B feeder{'s' if count != 1 else ''} ({today})",
+            message=(
+                f"{count} high-priority feeder{'s' if count != 1 else ''} have not submitted meter "
+                f"readings for {today}:\n\n"
+                + "\n".join(lines)
+            ),
+            notification_type='action',
+            category='technical',
+            recipients=recipients,
+            priority='high',
+            send_email=False,
+            action_url='/technical/meter-readings',
+            metadata={'date': str(today), 'missing_count': count},
+        )
+        notifications_sent += 1
+
+    if late_today:
+        lcount = len(late_today)
+        late_lines = [
+            f"• {r.feeder.name} (Band {getattr(r.feeder.band, 'name', '?')})"
+            for r in late_today[:10]
+        ]
+        if lcount > 10:
+            late_lines.append(f"… and {lcount - 10} more")
+
+        NotificationService.notify(
+            title=f"Late Meter Submissions — {lcount} feeder{'s' if lcount != 1 else ''} ({today})",
+            message=(
+                f"{lcount} feeder{'s' if lcount != 1 else ''} submitted meter readings late today ({today}):\n\n"
+                + "\n".join(late_lines)
+                + "\n\nLate submissions may indicate field officer compliance issues."
+            ),
+            notification_type='alert',
+            category='technical',
+            recipients=recipients,
+            priority='medium',
+            send_email=False,
+            action_url='/technical/meter-readings?filter=late',
+            metadata={'date': str(today), 'late_count': lcount},
+        )
+        notifications_sent += 1
+
+    if not missing and not late_today:
+        logger.info(f"[DSO Check {today}] All Band A/B meter readings submitted on time.")
+
+    return f"DSO check {today}: {len(missing)} missing, {len(late_today)} late"
+
+
+@shared_task
+def monthly_ea_submission_check():
+    """
+    Runs on the 10th of each month at 18:00 Africa/Lagos.
+
+    Checks Energy Account monthly returns for the previous month.
+    Identifies stations that:
+      1. Have NOT yet submitted (status='draft' — no return created or still draft)
+      2. Submitted late (is_late=True)
+
+    Sends an urgent notification to admins and finance managers.
+    """
+    import calendar
+    from datetime import date
+
+    from django.contrib.auth import get_user_model
+
+    from energy_account.models import EAMonthlyReturn
+
+    from .services import NotificationService
+
+    today = date.today()
+    # Target: previous month
+    if today.month == 1:
+        target_month, target_year = 12, today.year - 1
+    else:
+        target_month, target_year = today.month - 1, today.year
+
+    month_label = f"{calendar.month_name[target_month]} {target_year}"
+    User = get_user_model()
+    recipients = User.objects.filter(role__in=['super_admin', 'admin'], is_active=True)
+
+    # All stations that should have monthly returns
+    from common.models import InjectionSubstation
+    all_stations = list(InjectionSubstation.objects.all().order_by('name'))
+
+    if not all_stations:
+        logger.info(f"[EA Submission Check {month_label}] No injection substations found.")
+        return f"No substations found"
+
+    # Returns that exist for the target month
+    returns_this_month = {
+        r.station_id: r
+        for r in EAMonthlyReturn.objects.filter(month=target_month, year=target_year)
+    }
+
+    # Stations with no return at all (draft not yet created)
+    no_return_stations = [s for s in all_stations if s.id not in returns_this_month]
+
+    # Stations with a draft return (not yet submitted)
+    draft_returns = [
+        r for r in returns_this_month.values()
+        if r.status == 'draft'
+    ]
+
+    # Stations with late submissions
+    late_returns = [r for r in returns_this_month.values() if r.is_late]
+
+    notifications_sent = 0
+
+    if no_return_stations or draft_returns:
+        unsubmitted_count = len(no_return_stations) + len(draft_returns)
+        lines = []
+        for s in no_return_stations[:10]:
+            lines.append(f"• {s.name} — No return created")
+        for r in draft_returns[:10]:
+            lines.append(f"• {r.station.name if hasattr(r, 'station') else 'Unknown'} — Draft (not submitted)")
+        if unsubmitted_count > 20:
+            lines.append(f"… and {unsubmitted_count - 20} more")
+
+        NotificationService.notify(
+            title=f"EA Submission Alert: {unsubmitted_count} station{'s' if unsubmitted_count != 1 else ''} pending for {month_label}",
+            message=(
+                f"{unsubmitted_count} injection station{'s' if unsubmitted_count != 1 else ''} have not yet "
+                f"submitted their Energy Account monthly return for {month_label}:\n\n"
+                + "\n".join(lines)
+                + "\n\nPlease follow up with the relevant stations immediately."
+            ),
+            notification_type='action',
+            category='system',
+            recipients=recipients,
+            priority='high',
+            send_email=True,
+            action_url='/energy-account/monthly-returns',
+            metadata={
+                'month': target_month,
+                'year': target_year,
+                'unsubmitted_count': unsubmitted_count,
+                'no_return_count': len(no_return_stations),
+                'draft_count': len(draft_returns),
+            },
+        )
+        notifications_sent += 1
+
+    if late_returns:
+        lcount = len(late_returns)
+        lines = []
+        for r in late_returns[:10]:
+            station_name = r.station.name if hasattr(r, 'station') else 'Unknown'
+            reason = r.late_reason or 'No reason provided'
+            lines.append(f"• {station_name} — {reason[:80]}")
+        if lcount > 10:
+            lines.append(f"… and {lcount - 10} more")
+
+        NotificationService.notify(
+            title=f"EA Late Submissions: {lcount} station{'s' if lcount != 1 else ''} submitted late for {month_label}",
+            message=(
+                f"{lcount} station{'s' if lcount != 1 else ''} submitted late EA returns for {month_label}:\n\n"
+                + "\n".join(lines)
+            ),
+            notification_type='alert',
+            category='system',
+            recipients=recipients,
+            priority='medium',
+            send_email=False,
+            action_url='/energy-account/monthly-returns?filter=late',
+            metadata={
+                'month': target_month,
+                'year': target_year,
+                'late_count': lcount,
+            },
+        )
+        notifications_sent += 1
+
+    if not no_return_stations and not draft_returns and not late_returns:
+        logger.info(f"[EA Submission Check {month_label}] All stations submitted on time.")
+        return f"All stations submitted for {month_label}"
+
+    logger.info(
+        f"[EA Submission Check {month_label}] "
+        f"{len(no_return_stations)} missing, {len(draft_returns)} draft, {len(late_returns)} late"
+    )
+    return f"EA check {month_label}: {len(no_return_stations)} missing, {len(draft_returns)} draft, {len(late_returns)} late"

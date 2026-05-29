@@ -254,3 +254,111 @@ class NotificationService:
                     'new_band': new_band,
                 },
             )
+
+    # ── DataNest sync notifications ───────────────────────────────────────────
+
+    _SYNC_LABELS: dict = {
+        'technical_hourly_load':         'Technical Hourly Load',
+        'technical_interruptions':       'Technical Interruptions',
+        'technical_meter_readings':      'Technical Meter Readings',
+        'commercial_readings':           'Commercial Meter Readings',
+        'commercial_customers':          'Commercial Customers',
+        'commercial_managers':           'Commercial Feeder Managers',
+        'commercial_tariff_rates':       'Commercial Tariff Rates',
+        'ea_nbet_rates':                 'EA: NBET Rates',
+        'ea_settings':                   'EA: Settings',
+        'ea_grid_meters':                'EA: Grid Meters',
+        'ea_monthly_returns':            'EA: Monthly Returns',
+        'ea_monthly_readings':           'EA: Monthly Readings',
+        'ea_feeder_technical_energy':    'EA: Feeder Technical Energy',
+        'ea_tcn_reconciliation':         'EA: TCN Reconciliation',
+        'ea_tcn_reconciliation_notes':   'EA: TCN Reconciliation Notes',
+        'ea_mo_reconciliation':          'EA: MO Reconciliation',
+        'ea_weekly_readings':            'EA: Weekly Readings',
+        'ea_station_assignments':        'EA: Station Assignments',
+        'ea_meter_check_schedules':      'EA: Meter Check Schedules',
+        'ea_meter_check_records':        'EA: Meter Check Records',
+        'ea_coupling_log':               'EA: Coupling Log',
+    }
+
+    @staticmethod
+    def notify_datasync(data_type: str, sync_status: str, log, notify_on_success: bool = True):
+        """
+        Fire a notification for a DataNest sync event.
+
+        notify_on_success=False suppresses success messages for high-frequency syncs
+        (e.g., every 5-15 minutes) to avoid inbox noise for admins.
+
+        Error and partial notifications always fire regardless of the flag.
+        Success fires only when there are new/updated records.
+        """
+        label = NotificationService._SYNC_LABELS.get(
+            data_type, data_type.replace('_', ' ').title()
+        )
+        created   = getattr(log, 'records_created', 0) or 0
+        updated   = getattr(log, 'records_updated', 0) or 0
+        errored   = getattr(log, 'records_errored', 0) or 0
+        error_msg = (getattr(log, 'error_message', '') or '').strip()
+
+        if sync_status == 'error':
+            NotificationService.notify_role(
+                title=f"DataNest Sync Failed: {label}",
+                message=(
+                    f"The DataNest sync for '{label}' encountered an unhandled error "
+                    f"and could not complete."
+                    + (f"\n\nError: {error_msg[:400]}" if error_msg else "")
+                ),
+                category='system',
+                roles=['super_admin', 'admin'],
+                priority='high',
+                send_email=True,
+                action_url='/technical/sync',
+                metadata={
+                    'data_type': data_type,
+                    'sync_status': sync_status,
+                    'error': error_msg[:500],
+                },
+            )
+
+        elif sync_status == 'partial':
+            NotificationService.notify_role(
+                title=f"DataNest Sync Completed with Errors: {label}",
+                message=(
+                    f"The '{label}' sync completed but encountered {errored} error(s). "
+                    f"{created} new record{'s' if created != 1 else ''} added, {updated} updated."
+                    + (f"\n\nErrors: {error_msg[:300]}" if error_msg else "")
+                ),
+                category='system',
+                roles=['super_admin', 'admin'],
+                priority='medium',
+                send_email=False,
+                action_url='/technical/sync',
+                metadata={
+                    'data_type': data_type,
+                    'sync_status': sync_status,
+                    'records_created': created,
+                    'records_updated': updated,
+                    'records_errored': errored,
+                },
+            )
+
+        elif sync_status == 'success' and notify_on_success and (created + updated) > 0:
+            NotificationService.notify_role(
+                title=f"DataNest Sync Complete: {label}",
+                message=(
+                    f"DataNest sync for '{label}' completed successfully: "
+                    f"{created} new record{'s' if created != 1 else ''} added, "
+                    f"{updated} updated."
+                ),
+                category='system',
+                roles=['super_admin', 'admin'],
+                priority='low',
+                send_email=False,
+                action_url='/technical/sync',
+                metadata={
+                    'data_type': data_type,
+                    'sync_status': sync_status,
+                    'records_created': created,
+                    'records_updated': updated,
+                },
+            )

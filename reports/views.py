@@ -548,6 +548,20 @@ def generate_report_data(request):
                 generation_method='data',
             )
             report_id = str(generated_report.id)
+
+            # Fire report_generated signal so the requesting user gets an in-app notification
+            try:
+                from notifications.signals import report_generated as _rg_signal
+                _rg_signal.send(
+                    sender=generated_report,
+                    user=user,
+                    report_type=generated_report.category or 'performance',
+                    report_title=generated_report.report_title,
+                    report_object_id=report_id,
+                )
+            except Exception as sig_err:
+                logger.warning('Could not fire report_generated signal: %s', sig_err)
+
         except Exception as save_error:
             logger.warning('Could not save report audit entry: %s', save_error)
 
