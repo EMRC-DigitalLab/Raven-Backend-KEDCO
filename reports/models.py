@@ -1,5 +1,4 @@
 # reports/models.py - UPDATED WITH HR AND EXECUTIVE CATEGORIES
-import json
 from uuid import uuid4
 
 from django.contrib.auth import get_user_model
@@ -136,11 +135,16 @@ class ReportSection(UUIDModel):
         # Generic sections
         ('custom_text', 'Custom Text/Notes'),
         ('gaps_improvements', 'Gaps and Improvement Areas'),
-        
+
         # Commercial & Financial (existing placeholders)
         ('commercial_summary', 'Commercial Summary'),
         ('financial_summary', 'Financial Summary'),
         ('collection_efficiency', 'Collection Efficiency'),
+
+        # Comparison sections (data served by compare engine, rendered client-side)
+        ('entity_comparison', 'Entity Comparison'),
+        ('period_comparison', 'Period Comparison'),
+        ('customer_comparison', 'Customer Comparison'),
     ]
 
     template = models.ForeignKey(
@@ -174,35 +178,48 @@ class GeneratedReport(UUIDModel):
     """
     Stores information about generated reports for history/audit.
     """
+    GENERATION_METHOD_CHOICES = [
+        ('pdf', 'PDF (server-side)'),
+        ('data', 'Data (client-side)'),
+    ]
+
     template = models.ForeignKey(
-        ReportTemplate, 
-        on_delete=models.SET_NULL, 
+        ReportTemplate,
+        on_delete=models.SET_NULL,
         null=True,
         related_name='generated_reports'
     )
-    
+
     # Report details at time of generation
     report_title = models.CharField(max_length=255)
-    
+
     # ✅ NEW: Category tracking
     category = models.CharField(
         max_length=20,
         choices=ReportTemplate.CATEGORY_CHOICES,
         default='general'
     )
-    
+
     filters_used = models.JSONField(default=dict)
     sections_included = models.JSONField(default=list)
-    
+
+    # 'pdf' = server generated PDF, 'data' = JSON returned for client-side PDF
+    generation_method = models.CharField(
+        max_length=10,
+        choices=GENERATION_METHOD_CHOICES,
+        default='pdf',
+        blank=True,
+    )
+
     # Generation info
     generated_by = models.ForeignKey(
-        User, 
-        on_delete=models.CASCADE, 
+        User,
+        on_delete=models.CASCADE,
         related_name='generated_reports'
     )
     generated_at = models.DateTimeField(auto_now_add=True)
-    
-    # File reference (if stored)
+
+    # File reference (only set for server-side PDFs)
     file_path = models.CharField(max_length=500, blank=True)
     file_size = models.PositiveIntegerField(null=True, blank=True)
 
@@ -215,3 +232,23 @@ class GeneratedReport(UUIDModel):
 
     def __str__(self):
         return f"{self.report_title} ({self.get_category_display()}) - {self.generated_at.strftime('%Y-%m-%d %H:%M')}"
+
+
+class ReportInsightsCache(models.Model):
+    """
+    Caches Claude AI insights for a report section or overall report summary.
+
+    Keyed by a SHA-256 hash of (section_type + normalised section data).
+    Same data always returns the same insight — no duplicate API calls.
+    Expires after 24 hours.
+    """
+    cache_key  = models.CharField(max_length=64, unique=True, db_index=True)
+    insights   = models.JSONField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'ReportInsightsCache {self.cache_key[:12]}… (expires {self.expires_at:%Y-%m-%d %H:%M})'

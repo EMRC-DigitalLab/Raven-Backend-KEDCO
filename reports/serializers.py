@@ -149,6 +149,8 @@ class GeneratedReportSerializer(serializers.ModelSerializer):
             'template',
             'template_name',
             'report_title',
+            'category',
+            'generation_method',
             'filters_used',
             'sections_included',
             'generated_by',
@@ -182,9 +184,10 @@ class ReportGenerateRequestSerializer(serializers.Serializer):
     def validate_sections(self, value):
         if not value:
             raise serializers.ValidationError("At least one section is required")
-        
-        valid_section_types = [choice[0] for choice in ReportSection.SECTION_TYPE_CHOICES]
-        
+
+        from .services import SECTION_DEFINITIONS
+        valid_section_types = set(SECTION_DEFINITIONS.keys())
+
         for section in value:
             if 'section_type' not in section:
                 raise serializers.ValidationError("Each section must have a section_type")
@@ -192,7 +195,7 @@ class ReportGenerateRequestSerializer(serializers.Serializer):
                 raise serializers.ValidationError(
                     f"Invalid section_type: {section['section_type']}"
                 )
-        
+
         return value
 
 

@@ -7,12 +7,15 @@ Flow:
   1. Hash the comparison parameters → cache key
   2. Check CommercialComparisonCache — return cached insights if still valid
   3. Build a focused prompt from the comparison data
-  4. Call Anthropic API (claude-sonnet-4-6)
+  4. Call Anthropic API (claude-sonnet-4-6) with prompt caching
   5. Parse the structured JSON response
   6. Store in cache (24-hour TTL)
   7. Return insights dict
 
 The insights are purposefully helpful and conversational — not rigid rankings.
+
+Fix (2026-05-29): max_tokens raised 1024 → 2048 (old limit caused truncated JSON
+that silently failed json.loads). Prompt caching added to reduce API cost.
 """
 
 from __future__ import annotations
@@ -20,6 +23,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 from datetime import date
 
 from django.conf import settings
@@ -65,7 +69,6 @@ def _build_prompt(comparison: dict) -> str:
     cur_per  = comparison.get('current_period', {})
     prev_per = comparison.get('previous_period', {})
 
-    # Pick top 5 decliners and top 5 growers to include in the prompt
     customers = comparison.get('customers', [])
     with_pct  = [c for c in customers if c.get('variance_pct') is not None]
     top_grow  = sorted(with_pct, key=lambda c: -(c['variance_pct'] or 0))[:5]
@@ -80,7 +83,7 @@ def _build_prompt(comparison: dict) -> str:
             f"Change: {c.get('variance_pct', 0):+.1f}%"
         )
 
-    growers_text  = "\n".join(fmt_customer(c) for c in top_grow)  or "  None"
+    growers_text   = "\n".join(fmt_customer(c) for c in top_grow)  or "  None"
     decliners_text = "\n".join(fmt_customer(c) for c in top_decl) or "  None"
 
     scope_label = scope.get('label') or 'All feeders / KEDCO-wide'
@@ -88,12 +91,12 @@ def _build_prompt(comparison: dict) -> str:
                    'MDNI': 'Maximum Demand Non-Industrial (MDNI)',
                    'all': 'All MDI + MDNI'}.get(ctype, ctype)
 
-    curr_kwh  = totals.get('current_consumption_kwh', 0) or 0
-    prev_kwh  = totals.get('previous_consumption_kwh', 0) or 0
-    var_pct   = totals.get('variance_pct')
-    curr_amt  = totals.get('current_billed_amount', 0) or 0
-    prev_amt  = totals.get('previous_billed_amount', 0) or 0
-    bv        = totals.get('billing_variance', 0) or 0
+    curr_kwh = totals.get('current_consumption_kwh', 0) or 0
+    prev_kwh = totals.get('previous_consumption_kwh', 0) or 0
+    var_pct  = totals.get('variance_pct')
+    curr_amt = totals.get('current_billed_amount', 0) or 0
+    prev_amt = totals.get('previous_billed_amount', 0) or 0
+    bv       = totals.get('billing_variance', 0) or 0
 
     trend_summary = ", ".join(
         f"{v} {k}" for k, v in trend_d.items() if v > 0
@@ -165,33 +168,77 @@ Rules:
     return prompt
 
 
+# ─── JSON extraction ───────────────────────────────────────────────────────────
+
+def _extract_json(raw: str) -> dict:
+    """
+    Robustly extract a JSON object from a Claude response.
+
+    Handles:
+      - Clean JSON responses
+      - Responses wrapped in ```json ... ``` fences
+      - Responses with leading/trailing prose around the JSON block
+    """
+    text = raw.strip()
+
+    # Strip any markdown code fences first
+    if text.startswith('```'):
+        lines = text.splitlines()
+        text = '\n'.join(
+            line for line in lines
+            if not line.strip().startswith('```')
+        ).strip()
+
+    # Try direct parse
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    # Fall back: extract the first {...} block (handles leading/trailing prose)
+    match = re.search(r'\{.*\}', text, re.DOTALL)
+    if match:
+        return json.loads(match.group())
+
+    raise ValueError(f"No valid JSON found in Claude response. Raw: {text[:200]}")
+
+
 # ─── Anthropic call ────────────────────────────────────────────────────────────
 
-def _call_claude(prompt: str) -> dict:
+SYSTEM_PROMPT = (
+    "You are a senior energy analyst for KEDCO (Kano Electricity Distribution Company), "
+    "a Nigerian electricity distribution company. You provide concise, data-driven insights "
+    "for internal reports. Always respond with valid JSON only — no markdown fences, no prose "
+    "outside the JSON object."
+)
+
+
+def _call_claude(prompt: str, model: str = 'claude-sonnet-4-6', max_tokens: int = 2048) -> dict:
     import anthropic
 
     api_key = getattr(settings, 'ANTHROPIC_API_KEY', '')
     if not api_key:
         raise ValueError("ANTHROPIC_API_KEY is not configured.")
 
-    client  = anthropic.Anthropic(api_key=api_key)
+    client = anthropic.Anthropic(api_key=api_key)
+
     message = client.messages.create(
-        model='claude-sonnet-4-6',
-        max_tokens=1024,
+        model=model,
+        max_tokens=max_tokens,
+        system=[
+            {
+                "type": "text",
+                "text": SYSTEM_PROMPT,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ],
         messages=[{'role': 'user', 'content': prompt}],
     )
 
     raw = message.content[0].text.strip()
+    logger.debug("Claude raw response (first 300 chars): %s", raw[:300])
 
-    # Strip markdown code fences if Claude wraps with them
-    if raw.startswith('```'):
-        lines = raw.splitlines()
-        raw = '\n'.join(
-            line for line in lines
-            if not line.strip().startswith('```')
-        )
-
-    return json.loads(raw)
+    return _extract_json(raw)
 
 
 # ─── Public API ────────────────────────────────────────────────────────────────
@@ -240,7 +287,7 @@ def get_comparison_insights(
         prompt   = _build_prompt(comparison)
         insights = _call_claude(prompt)
     except Exception as exc:
-        logger.exception("Claude API call failed: %s", exc)
+        logger.exception("Claude API call failed for customer comparison: %s", exc)
         return {'error': f"AI insights unavailable: {exc}", 'cached': False}
 
     # ── Store in cache (24-hour TTL) ───────────────────────────────────────────

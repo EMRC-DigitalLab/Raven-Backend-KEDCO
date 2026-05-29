@@ -4,6 +4,7 @@ import logging
 from django.db import models
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.decorators import api_view
 from rest_framework.generics import (
@@ -26,7 +27,7 @@ from .serializers import (
     ReportTemplateDetailSerializer,
     ReportTemplateListSerializer,
 )
-from .services import ReportDataService, get_available_sections
+from .services import SECTION_DEFINITIONS, ReportDataService, get_available_sections
 
 logger = logging.getLogger(__name__)
 
@@ -98,11 +99,12 @@ def available_sections(request):
     return Response({
         "sections": sections,
         "categories": [
-            {"id": "general", "name": "General"},
-            {"id": "technical", "name": "Technical"},
-            {"id": "hr", "name": "Human Resources"},
-            {"id": "commercial", "name": "Commercial"},
-            {"id": "financial", "name": "Financial"},
+            {"id": "general",     "name": "General"},
+            {"id": "technical",   "name": "Technical"},
+            {"id": "hr",          "name": "Human Resources"},
+            {"id": "commercial",  "name": "Commercial"},
+            {"id": "financial",   "name": "Financial"},
+            {"id": "comparison",  "name": "Comparisons"},
         ]
     })
 
@@ -407,6 +409,172 @@ def generate_report_pdf(request):
             {"error": str(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+
+
+@api_view(['POST'])
+def generate_report_data(request):
+    """
+    POST /api/reports/generate/data/
+
+    Unified JSON data endpoint — the frontend receives structured section data
+    and is responsible for rendering and generating the PDF client-side.
+
+    Same request body as /generate/pdf/ with one addition:
+        "company_name": "KANO ELECTRICITY DISTRIBUTION COMPANY"  // optional
+
+    Response:
+    {
+        "report_id": "<uuid>",          // audit trail ID
+        "report_title": "...",
+        "report_subtitle": "...",
+        "orientation": "portrait",
+        "company_name": "...",
+        "generated_at": "<iso8601>",
+        "generated_by": "Full Name",
+        "period": { "from_date", "to_date", "days", "label" },
+        "sections_denied": ["hr_overview"],  // stripped due to role
+        "sections": [
+            {
+                "section_type": "technical_metrics",
+                "title": "",
+                "config": {},
+                "data": { ... }           // pure data, no rendering hints
+            }
+        ]
+    }
+
+    Comparison sections (entity_comparison, period_comparison, customer_comparison)
+    are first-class section types here — the compare engine is called internally
+    and the result is embedded in the section's data field.
+
+    Always writes an audit entry to GeneratedReport (generation_method='data').
+    The old /generate/pdf/ endpoint is untouched for backward compatibility.
+    """
+    serializer = ReportGenerateRequestSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    data = serializer.validated_data
+    filters = data.get('filters', {})
+    user = request.user
+
+    if not filters.get('from_date') or not filters.get('to_date'):
+        return Response(
+            {'error': 'from_date and to_date are required in filters'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # ── Role-based section filtering ──────────────────────────────────────────
+    allowed_section_types = {s['section_type'] for s in get_available_sections(user)}
+    requested_sections = data.get('sections', [])
+
+    allowed_sections = []
+    denied_sections = []
+    for section in requested_sections:
+        st = section.get('section_type', '')
+        if st in allowed_section_types:
+            allowed_sections.append(section)
+        else:
+            denied_sections.append(st)
+
+    try:
+        data_service = ReportDataService(filters, user=user)
+
+        sections_data = []
+        for section in allowed_sections:
+            section_type = section.get('section_type', '')
+            config = section.get('config', {})
+            title = section.get('title', '')
+
+            if section_type == 'table_of_contents':
+                # Build TOC from the other allowed sections so the frontend
+                # can render a live, accurate table of contents.
+                section_payload = {
+                    'entries': [
+                        {
+                            'section_type': s.get('section_type'),
+                            'title': (
+                                s.get('title')
+                                or SECTION_DEFINITIONS.get(s.get('section_type', ''), {}).get('display_name', '')
+                            ),
+                            'order': i,
+                        }
+                        for i, s in enumerate(allowed_sections)
+                        if s.get('section_type') not in ('cover_page', 'table_of_contents')
+                    ]
+                }
+            else:
+                section_payload = data_service.get_all_section_data(section_type, config)
+
+            sections_data.append({
+                'section_type': section_type,
+                'title': title,
+                'config': config,
+                'data': section_payload,
+            })
+
+        company_name  = request.data.get('company_name', 'KANO ELECTRICITY DISTRIBUTION COMPANY')
+        period_label  = ReportDataService._period_label(data_service.from_date, data_service.to_date)
+
+        # ── AI insights (opt-in) ──────────────────────────────────────────────
+        ai_insights_result = None
+        if request.data.get('include_ai_insights', False):
+            try:
+                from analytics.services.report_insights import get_report_insights
+                ai_insights_result = get_report_insights(
+                    sections_data=sections_data,
+                    period_label=period_label,
+                    company_name=company_name,
+                    include_summary=request.data.get('include_ai_summary', True),
+                )
+                # Attach per-section insights into each section's dict
+                if ai_insights_result:
+                    per_section = ai_insights_result.get('sections', {})
+                    for s in sections_data:
+                        s['ai_insights'] = per_section.get(s['section_type'])
+            except Exception as ai_err:
+                logger.warning('AI insights generation failed: %s', ai_err)
+                ai_insights_result = {'error': str(ai_err), 'sections': {}, 'overall': None}
+
+        # ── Audit trail — always recorded ────────────────────────────────────
+        report_id = None
+        try:
+            generated_report = GeneratedReport.objects.create(
+                template_id=data.get('template_id'),
+                report_title=data.get('report_title', 'Performance Report'),
+                filters_used=filters,
+                sections_included=[s['section_type'] for s in allowed_sections],
+                generated_by=user,
+                generation_method='data',
+            )
+            report_id = str(generated_report.id)
+        except Exception as save_error:
+            logger.warning('Could not save report audit entry: %s', save_error)
+
+        return Response({
+            'report_id': report_id,
+            'report_title': data.get('report_title', 'Performance Report'),
+            'report_subtitle': data.get('report_subtitle', ''),
+            'orientation': data.get('orientation', 'portrait'),
+            'company_name': company_name,
+            'generated_at': timezone.now().isoformat(),
+            'generated_by': user.get_full_name() or user.username,
+            'period': {
+                'from_date': str(data_service.from_date),
+                'to_date': str(data_service.to_date),
+                'days': data_service.period_days,
+                'label': period_label,
+            },
+            'sections_denied': denied_sections,
+            'sections': sections_data,
+            'ai_summary': ai_insights_result.get('overall') if ai_insights_result else None,
+        })
+
+    except Exception as e:
+        logger.error('Error generating report data: %s', e)
+        import traceback
+        traceback.print_exc()
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @api_view(['POST'])
