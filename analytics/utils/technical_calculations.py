@@ -96,10 +96,10 @@ class TechnicalCalculator:
         is_suspect = False
         reason = ""
         if system_estimate > 10:
-            if total_reading_energy > (system_estimate * 3):
+            if total_reading_energy > (system_estimate * Decimal('3')):
                 is_suspect = True
                 reason = "Inflation (Readings > 3x Estimate)"
-            elif total_reading_energy < (system_estimate * 0.5) and total_reading_energy > 0:
+            elif total_reading_energy < (system_estimate * Decimal('0.5')) and total_reading_energy > 0:
                 is_suspect = True
                 reason = "Partial Coverage (Readings < 0.5x Estimate)"
         

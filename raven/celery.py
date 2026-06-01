@@ -54,6 +54,13 @@ app.conf.update(
             'schedule': crontab(day_of_month=10, hour=18, minute=0),
         },
 
+        # ── Analytics Overview Summary ────────────────────────────────────────────
+        # Refresh current month's dashboard summary every day at 01:00 Lagos time
+        'daily-overview-summary-refresh': {
+            'task': 'analytics.tasks.update_current_month_summary',
+            'schedule': crontab(hour=1, minute=0),
+        },
+
         # ── DataNest → Raven Technical Sync ───────────────────────────────────
         # Hourly load: every 5 minutes
         'datanest-sync-hourly-load': {
