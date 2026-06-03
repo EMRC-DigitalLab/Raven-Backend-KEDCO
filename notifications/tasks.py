@@ -190,7 +190,7 @@ def send_report_email(self, report_recipient_id: int):
     html = _base_email_html(
         title=f"Report: {rr.report_title}",
         body_html=body_html,
-        action_url=f'/reports/{rr.report_type}/{rr.report_object_id}',
+        action_url=f'/{rr.report_type}-report' if rr.report_type in ('technical', 'commercial', 'financial') else '/overview/overviewpage',
         action_label="View Report in Raven",
     )
 
@@ -315,7 +315,7 @@ def daily_band_a_supply_check():
             recipients=recipients,
             priority='high',
             send_email=True,
-            action_url='/technical/feeders?band=A',
+            action_url='/technical/technical-feeder',
             metadata={'date': str(today), 'issue': 'no_data'},
         )
         logger.warning(f"[Band A Check {today}] No supply data found for Band A feeders.")
@@ -402,7 +402,7 @@ def daily_band_a_supply_check():
         recipients=recipients,
         priority='urgent',
         send_email=True,
-        action_url='/technical/feeders?band=A',
+        action_url='/technical/technical-feeder',
         metadata={
             'date': str(today),
             'defaulting_count': count,
@@ -453,7 +453,7 @@ def daily_restoration_check():
             recipients=recipients,
             priority='medium',
             send_email=False,   # In-app only — just a data-completeness nudge
-            action_url='/technical/interruptions',
+            action_url='/technical/technical-overview',
             metadata={'date': str(today), 'issue': 'no_data'},
         )
         logger.warning(f"[Restoration Check {today}] No interruption data found for today.")
@@ -528,7 +528,7 @@ def daily_restoration_check():
         recipients=recipients,
         priority='urgent',
         send_email=True,
-        action_url='/technical/interruptions?status=unresolved',
+        action_url='/technical/technical-overview',
         metadata={
             'date': str(today),
             'unrestored_count': count,
@@ -609,7 +609,7 @@ def daily_dso_meter_reading_check():
             recipients=recipients,
             priority='high',
             send_email=False,
-            action_url='/technical/meter-readings',
+            action_url='/technical/technical-overview',
             metadata={'date': str(today), 'missing_count': count},
         )
         notifications_sent += 1
@@ -635,7 +635,7 @@ def daily_dso_meter_reading_check():
             recipients=recipients,
             priority='medium',
             send_email=False,
-            action_url='/technical/meter-readings?filter=late',
+            action_url='/technical/technical-overview',
             metadata={'date': str(today), 'late_count': lcount},
         )
         notifications_sent += 1
@@ -726,7 +726,7 @@ def monthly_ea_submission_check():
             recipients=recipients,
             priority='high',
             send_email=True,
-            action_url='/energy-account/monthly-returns',
+            action_url='/energy-account/ea-all-stations',
             metadata={
                 'month': target_month,
                 'year': target_year,
@@ -758,7 +758,7 @@ def monthly_ea_submission_check():
             recipients=recipients,
             priority='medium',
             send_email=False,
-            action_url='/energy-account/monthly-returns?filter=late',
+            action_url='/energy-account/ea-all-stations',
             metadata={
                 'month': target_month,
                 'year': target_year,

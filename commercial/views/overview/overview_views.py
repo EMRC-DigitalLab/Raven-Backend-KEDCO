@@ -105,7 +105,7 @@ def commercial_overview(request):
     bypass_count = customers_qs.filter(is_bypass=True).count()
 
     # ── Billing (actual from real readings) ───────────────────────────────────
-    billing = calc_billing(readings_qs)
+    billing = calc_billing(readings_qs, period_days=date_range['days'])
 
     # ── Daily consumption estimate from actual readings ────────────────────────
     daily_billed_kwh = calc_daily_estimate(billing, date_range)
@@ -117,8 +117,8 @@ def commercial_overview(request):
     estimated = calc_estimated_billing(customers_qs, coverage['read_ids'], date_range)
 
     # ── MDI vs MDNI revenue split (from actual readings) ──────────────────────
-    mdi_billing  = calc_billing(readings_qs.filter(reading_type='MDI'))
-    mdni_billing = calc_billing(readings_qs.filter(reading_type='MDNI'))
+    mdi_billing  = calc_billing(readings_qs.filter(reading_type='MDI'),  period_days=date_range['days'])
+    mdni_billing = calc_billing(readings_qs.filter(reading_type='MDNI'), period_days=date_range['days'])
     total_rev    = billing['total_billed_amount']
     mdi_split  = round(float(mdi_billing['total_billed_amount']) / float(total_rev) * 100, 2) if total_rev else 0
     mdni_split = round(float(mdni_billing['total_billed_amount']) / float(total_rev) * 100, 2) if total_rev else 0

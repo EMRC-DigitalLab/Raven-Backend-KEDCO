@@ -177,88 +177,146 @@ def calculate_metrics(delivered, billed, revenue_billed, revenue_collected, cust
         }
 
 
+def _get_periods(mode: str, year: int, month: int, from_date_str: str, to_date_str: str):
+    """
+    Build a list of 5 (start, end, label) tuples — current period last.
+
+    mode='monthly' → 5 consecutive calendar months ending on selected month
+    mode='weekly'  → 5 consecutive 7-day windows ending on the selected week
+    mode='daily'   → 5 consecutive single days ending on the selected day
+    """
+    today = date.today()
+
+    if mode == 'daily':
+        anchor = parse_date(from_date_str or to_date_str) or today
+        periods = []
+        for i in range(4, -1, -1):
+            d = anchor - timedelta(days=i)
+            periods.append((d, d, d.strftime('%d %b')))
+        return periods
+
+    if mode == 'weekly':
+        # Use to_date as the last day of the selected week
+        anchor = parse_date(to_date_str) or today
+        periods = []
+        for i in range(4, -1, -1):
+            w_end   = anchor - timedelta(weeks=i)
+            w_start = w_end  - timedelta(days=6)
+            periods.append((w_start, w_end, f"{w_start.strftime('%d %b')} – {w_end.strftime('%d %b')}"))
+        return periods
+
+    # default: monthly
+    anchor = date(year, month, 1)
+    periods = []
+    for i in range(4, -1, -1):
+        m_start = anchor - relativedelta(months=i)
+        m_end   = m_start + relativedelta(months=1) - timedelta(days=1)
+        periods.append((m_start, m_end, m_start.strftime('%b %Y')))
+    return periods
+
+
+def _fetch_period_data(state_feeders, state_transformers, p_start: date, p_end: date, mode: str):
+    """
+    Fetch and compute all commercial metrics for a single period window.
+    Monthly mode uses the pre-aggregated monthly tables; daily/weekly use daily tables.
+    """
+    if mode == 'monthly':
+        delivered_mwh   = get_energy_delivered(state_feeders, p_start)
+        billed_mwh      = get_energy_billed(state_feeders, p_start)
+        commercial_data = get_commercial_data(state_transformers, p_start)
+    else:
+        # Daily/weekly: aggregate FeederEnergyDaily for the date range
+        delivered_mwh = Decimal(str(
+            FeederEnergyDaily.objects.filter(
+                feeder__in=state_feeders,
+                date__gte=p_start,
+                date__lte=p_end,
+            ).aggregate(Sum('energy_mwh'))['energy_mwh__sum'] or 0
+        ))
+
+        # Billing and commercial data is inherently monthly; use the month the period falls in
+        month_start = date(p_start.year, p_start.month, 1)
+        billed_mwh      = get_energy_billed(state_feeders, month_start)
+        commercial_data = get_commercial_data(state_transformers, month_start)
+
+    return delivered_mwh, billed_mwh, commercial_data
+
+
 @api_view(["GET"])
 def commercial_state_metrics_view(request):
-    state_name = request.query_params.get("state")
-    mode = request.query_params.get("mode", "monthly")
-    year = int(request.query_params.get("year", date.today().year))
-    month = int(request.query_params.get("month", date.today().month))
-    from_date = request.query_params.get("from_date")
-    to_date = request.query_params.get("to_date")
+    state_name    = request.query_params.get("state")
+    mode          = request.query_params.get("mode", "monthly")
+    year          = int(request.query_params.get("year", date.today().year))
+    month         = int(request.query_params.get("month", date.today().month))
+    from_date_str = request.query_params.get("from_date")
+    to_date_str   = request.query_params.get("to_date")
 
     state = State.objects.filter(name__iexact=state_name).first()
     if not state:
         return Response({"error": "Invalid state"}, status=400)
 
-    def generate_month_list(reference_date):
-        return [reference_date - relativedelta(months=i) for i in range(4, -1, -1)]
-
-    selected_date = date(year, month, 1) if mode == "monthly" else parse_date(to_date) or date.today()
-    months = generate_month_list(selected_date)
-
-    # Pre-fetch all feeders and transformers for this state (optimize queries)
-    state_feeders = list(Feeder.objects.filter(business_district__state=state))
+    state_feeders      = list(Feeder.objects.filter(business_district__state=state))
     state_transformers = list(DistributionTransformer.objects.filter(
         feeder__business_district__state=state
     ))
 
-    data = []
-    previous_month_data = None
-    current_month_index = len(months) - 1  # Index of the current (latest) month
+    # 5 periods: [oldest … newest] — current period is last
+    periods = _get_periods(mode, year, month, from_date_str, to_date_str)
 
-    for idx, m in enumerate(months):
-        period_start = date(m.year, m.month, 1)
-        
-        # Get all required data
-        delivered_mwh = get_energy_delivered(state_feeders, period_start)
-        billed_mwh = get_energy_billed(state_feeders, period_start)
-        commercial_data = get_commercial_data(state_transformers, period_start)
-        
-        # Calculate metrics
+    all_periods = []
+    for p_start, p_end, label in periods:
+        delivered_mwh, billed_mwh, commercial_data = _fetch_period_data(
+            state_feeders, state_transformers, p_start, p_end, mode
+        )
         metrics = calculate_metrics(
             delivered_mwh,
             billed_mwh,
             commercial_data['revenue_billed'],
             commercial_data['revenue_collected'],
             commercial_data['customers_billed'],
-            commercial_data['customers_responded']
+            commercial_data['customers_responded'],
         )
 
-        current = {
-            "month": m.strftime("%b"),
-            "year": m.year,
-            "energy_delivered": safe_round(delivered_mwh),
-            "energy_billed": safe_round(billed_mwh),
-            "energy_collected": safe_round(metrics['energy_collected']),
-            "revenue_collected": safe_round(commercial_data['revenue_collected']),
-            "billing_efficiency": safe_round(metrics['billing_efficiency']),
-            "collection_efficiency": safe_round(metrics['collection_efficiency']),
-            "atcc_losses": safe_round(metrics['atcc_losses']),
-            "customer_response_rate": safe_round(metrics['response_rate']),
-            "customer_response_metric": safe_round(metrics['customer_response_metric']),
+        all_periods.append({
+            "period_label":              label,
+            "period_start":              str(p_start),
+            "period_end":                str(p_end),
+            "energy_delivered":          safe_round(delivered_mwh),
+            "energy_billed":             safe_round(billed_mwh),
+            "energy_collected":          safe_round(metrics['energy_collected']),
+            "revenue_billed":            safe_round(commercial_data['revenue_billed']),
+            "revenue_collected":         safe_round(commercial_data['revenue_collected']),
+            "billing_efficiency":        safe_round(metrics['billing_efficiency']),
+            "collection_efficiency":     safe_round(metrics['collection_efficiency']),
+            "atcc_losses":               safe_round(metrics['atcc_losses']),
+            "customer_response_rate":    safe_round(metrics['response_rate']),
+            "customer_response_metric":  safe_round(metrics['customer_response_metric']),
             "revenue_billed_per_customer": safe_round(metrics['revenue_per_cust']),
-            "collections_per_customer": safe_round(metrics['collection_per_cust']),
-            "customers_billed": commercial_data['customers_billed'],
-            "customers_responded": commercial_data['customers_responded'],
+            "collections_per_customer":  safe_round(metrics['collection_per_cust']),
+            "customers_billed":          commercial_data['customers_billed'],
+            "customers_responded":       commercial_data['customers_responded'],
+        })
+
+    current_period = all_periods[-1]
+    trend_periods  = all_periods[:-1]   # 4 previous periods — bars in the metric cards
+
+    if trend_periods:
+        prev = trend_periods[-1]
+        current_period["deltas"] = {
+            "energy_delivered":            compute_delta(current_period["energy_delivered"],            prev["energy_delivered"]),
+            "energy_billed":               compute_delta(current_period["energy_billed"],               prev["energy_billed"]),
+            "energy_collected":            compute_delta(current_period["energy_collected"],            prev["energy_collected"]),
+            "revenue_collected":           compute_delta(current_period["revenue_collected"],           prev["revenue_collected"]),
+            "billing_efficiency":          compute_delta(current_period["billing_efficiency"],          prev["billing_efficiency"]),
+            "collection_efficiency":       compute_delta(current_period["collection_efficiency"],       prev["collection_efficiency"]),
+            "atcc_losses":                 compute_delta(current_period["atcc_losses"],                 prev["atcc_losses"]),
+            "customer_response_rate":      compute_delta(current_period["customer_response_rate"],      prev["customer_response_rate"]),
+            "revenue_billed_per_customer": compute_delta(current_period["revenue_billed_per_customer"], prev["revenue_billed_per_customer"]),
+            "collections_per_customer":    compute_delta(current_period["collections_per_customer"],    prev["collections_per_customer"]),
         }
 
-        # Only add deltas for the current (latest) month for performance
-        if idx == current_month_index and previous_month_data:
-            current["deltas"] = {
-                "energy_delivered": compute_delta(current["energy_delivered"], previous_month_data["energy_delivered"]),
-                "energy_billed": compute_delta(current["energy_billed"], previous_month_data["energy_billed"]),
-                "energy_collected": compute_delta(current["energy_collected"], previous_month_data["energy_collected"]),
-                "revenue_collected": compute_delta(current["revenue_collected"], previous_month_data["revenue_collected"]),
-                "billing_efficiency": compute_delta(current["billing_efficiency"], previous_month_data["billing_efficiency"]),
-                "collection_efficiency": compute_delta(current["collection_efficiency"], previous_month_data["collection_efficiency"]),
-                "atcc_losses": compute_delta(current["atcc_losses"], previous_month_data["atcc_losses"]),
-                "customer_response_rate": compute_delta(current["customer_response_rate"], previous_month_data["customer_response_rate"]),
-                "customer_response_metric": compute_delta(current["customer_response_metric"], previous_month_data["customer_response_metric"]),
-                "revenue_billed_per_customer": compute_delta(current["revenue_billed_per_customer"], previous_month_data["revenue_billed_per_customer"]),
-                "collections_per_customer": compute_delta(current["collections_per_customer"], previous_month_data["collections_per_customer"]),
-            }
-
-        previous_month_data = current.copy()
-        data.append(current)
-
-    return Response(data)
+    return Response({
+        "mode":    mode,
+        "current": current_period,
+        "trend":   trend_periods,
+    })

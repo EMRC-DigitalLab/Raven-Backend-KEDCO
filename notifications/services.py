@@ -305,7 +305,7 @@ class NotificationService:
                 recipients=[sub.user],
                 priority='high',
                 send_email=sub.notify_email,
-                action_url=f'/technical/feeders/{feeder_id}',
+                action_url='/technical/technical-feeder',
                 metadata={
                     'feeder_id': feeder_id,
                     'feeder_name': feeder_name,
@@ -371,7 +371,7 @@ class NotificationService:
                 roles=['super_admin', 'admin'],
                 priority='high',
                 send_email=True,
-                action_url='/technical/sync',
+                action_url='/admin/dashboard',
                 metadata={
                     'data_type': data_type,
                     'sync_status': sync_status,
@@ -391,7 +391,7 @@ class NotificationService:
                 roles=['super_admin', 'admin'],
                 priority='medium',
                 send_email=False,
-                action_url='/technical/sync',
+                action_url='/admin/dashboard',
                 metadata={
                     'data_type': data_type,
                     'sync_status': sync_status,
@@ -413,7 +413,7 @@ class NotificationService:
                 roles=['super_admin', 'admin'],
                 priority='low',
                 send_email=False,
-                action_url='/technical/sync',
+                action_url='/admin/dashboard',
                 metadata={
                     'data_type': data_type,
                     'sync_status': sync_status,
