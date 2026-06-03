@@ -1,16 +1,27 @@
 """
-ASGI config for raven project.
+raven/asgi.py
 
-It exposes the ASGI callable as a module-level variable named ``application``.
-
-For more information on this file, see
-https://docs.djangoproject.com/en/5.1/howto/deployment/asgi/
+ASGI entrypoint — routes HTTP to Django and WebSocket to Channels.
 """
 
 import os
 
+from channels.routing import ProtocolTypeRouter, URLRouter
+from channels.security.websocket import AllowedHostsOriginValidator
 from django.core.asgi import get_asgi_application
 
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'raven.settings')
 
-application = get_asgi_application()
+django_asgi_app = get_asgi_application()
+
+from raven.routing import websocket_urlpatterns  # noqa: E402 — must import after Django setup
+from raven.ws_auth import JWTAuthMiddleware       # noqa: E402
+
+application = ProtocolTypeRouter({
+    'http': django_asgi_app,
+    'websocket': AllowedHostsOriginValidator(
+        JWTAuthMiddleware(
+            URLRouter(websocket_urlpatterns)
+        )
+    ),
+})

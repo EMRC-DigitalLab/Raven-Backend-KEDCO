@@ -511,6 +511,41 @@ def commercial_overview(request):
             ),
         },
 
+        # ── Actual snapshot ───────────────────────────────────────────────────
+        # Single object the frontend can use for the 4 primary overview cards.
+        # Values here are ALWAYS sourced from real meter readings for the
+        # selected period — no estimates or projections included.
+        # The 'revenue_mode' flag tells the frontend whether to label revenue
+        # as "Actual" (full coverage) or "Partial Actual" (some customers unread).
+        'actual_snapshot': {
+            'energy_delivered_kwh': metric(
+                delivered_kwh_period,
+                unit='kWh',
+                mode=delivered['mode'],
+                explanation='Total energy delivered in the selected period. Mode indicates data source: actual (meter), system (HourlyLoad), or mixed.',
+            ),
+            'actual_revenue': metric(
+                float(billing['total_billed_amount']),
+                unit='NGN',
+                explanation='Confirmed revenue from customers physically read in this period. Does not include estimates.',
+            ),
+            'projected_revenue': metric(
+                float(billing['total_billed_amount'] + estimated['estimated_revenue']),
+                unit='NGN',
+                mode='estimated',
+                explanation='Full projected revenue: actual (read customers) + estimated (unread customers). Shrinks toward actual as coverage improves.',
+            ),
+            'customers_read': coverage['read'],
+            'total_customers': coverage['read'] + coverage['unread'],
+            'coverage_rate': coverage['rate'],
+            'revenue_mode': (
+                'actual'         if coverage['rate'] >= 99.0 else
+                'partial_actual' if coverage['rate'] >= 50.0 else
+                'estimated'
+            ),
+            'period_label': date_range['label'],
+        },
+
         'total_feeders': total_feeders,
         'onboarding':    onboarding_info,
 
