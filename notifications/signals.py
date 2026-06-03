@@ -20,6 +20,18 @@ from .services import NotificationService
 report_generated = Signal()     # sender=report_instance, user=requesting_user
 band_changed = Signal()         # feeder_id, feeder_name, old_band, new_band
 
+# ── Report type → frontend print-view path ────────────────────────────────────
+_REPORT_TYPE_URL = {
+    'technical':   '/technical-report',
+    'commercial':  '/commercial-report',
+    'financial':   '/financial-report',
+    'hr':          '/staff/staff-overview',
+    'executive':   '/overview/overviewpage',
+    'compliance':  '/regulatory/performance-framework-2024',
+    'general':     '/overview/overviewpage',
+    'performance': '/overview/overviewpage',
+}
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  USERS APP
@@ -36,7 +48,7 @@ def on_user_created(sender, instance, created, **kwargs):
         category='system',
         roles=['super_admin', 'admin'],
         priority='low',
-        action_url=f'/users/{instance.id}',
+        action_url='/admin/users/all',
         metadata={'user_id': instance.id, 'role': instance.role},
     )
 
@@ -59,7 +71,7 @@ def on_user_role_changed(sender, instance, created, **kwargs):
         category='system',
         roles=['super_admin', 'admin'],
         priority='low',
-        action_url=f'/users/{instance.id}',
+        action_url='/admin/users/all',
         metadata={'user_id': instance.id, 'new_role': instance.role},
     )
 
@@ -78,7 +90,7 @@ def on_commercial_customer_created(sender, instance, created, **kwargs):
         category='commercial',
         roles=['super_admin', 'admin', 'manager'],
         priority='low',
-        action_url='/commercial/customers',
+        action_url='/commercial/commercial-customer',
         metadata={'customer_id': instance.pk},
     )
 
@@ -89,11 +101,11 @@ def on_meter_reading_uploaded(sender, instance, created, **kwargs):
         return
     NotificationService.notify_role(
         title="New meter reading uploaded",
-        message=f"A new meter reading has been recorded.",
+        message="A new meter reading has been recorded.",
         category='commercial',
         roles=['super_admin', 'admin', 'manager'],
         priority='low',
-        action_url='/commercial/meter-readings',
+        action_url='/commercial/commercial-overview',
         metadata={'reading_id': instance.pk},
     )
 
@@ -108,11 +120,11 @@ def on_nbet_invoice_created(sender, instance, created, **kwargs):
         return
     NotificationService.notify_role(
         title="New NBET invoice created",
-        message=f"A new NBET invoice has been created.",
+        message="A new NBET invoice has been created.",
         category='financial',
         roles=['super_admin', 'admin', 'manager'],
         priority='medium',
-        action_url='/financial/invoices',
+        action_url='/financial/financial-overview',
         metadata={'invoice_id': instance.pk},
     )
 
@@ -123,11 +135,11 @@ def on_mo_invoice_created(sender, instance, created, **kwargs):
         return
     NotificationService.notify_role(
         title="New MO invoice created",
-        message=f"A new Market Operator invoice has been created.",
+        message="A new Market Operator invoice has been created.",
         category='financial',
         roles=['super_admin', 'admin', 'manager'],
         priority='medium',
-        action_url='/financial/invoices',
+        action_url='/financial/financial-overview',
         metadata={'invoice_id': instance.pk},
     )
 
@@ -138,11 +150,11 @@ def on_opex_created(sender, instance, created, **kwargs):
         return
     NotificationService.notify_role(
         title="New OPEX entry recorded",
-        message=f"A new OPEX entry has been added to the financial records.",
+        message="A new OPEX entry has been added to the financial records.",
         category='financial',
         roles=['super_admin', 'admin'],
         priority='low',
-        action_url='/financial/opex',
+        action_url='/financial/financial-overview',
         metadata={'opex_id': instance.pk},
     )
 
@@ -162,7 +174,7 @@ def on_staff_created(sender, instance, created, **kwargs):
         category='hr',
         roles=['super_admin', 'admin', 'manager'],
         priority='low',
-        action_url='/hr/staff',
+        action_url='/staff/staff-overview',
         metadata={'staff_id': instance.pk},
     )
 
@@ -177,7 +189,7 @@ def on_salary_payment_created(sender, instance, created, **kwargs):
         category='financial',
         roles=['super_admin', 'admin'],
         priority='medium',
-        action_url='/financial/salary',
+        action_url='/financial/financial-overview',
         metadata={'salary_id': instance.pk},
     )
 
@@ -198,21 +210,22 @@ def on_feeder_interruption(sender, instance, created, **kwargs):
         category='technical',
         roles=['super_admin', 'admin', 'manager'],
         priority='high',
-        action_url='/technical/interruptions',
+        action_url='/technical/technical-overview',
         metadata={'interruption_id': str(instance.pk)},
     )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  REPORTS APP  (custom signal — fired from reports/services.py)
+#  REPORTS APP  (custom signal — fired from reports/views.py)
 # ══════════════════════════════════════════════════════════════════════════════
 
 @receiver(report_generated)
 def on_report_generated(_sender, user, report_type, report_title, report_object_id='', **kwargs):
     """
     Notify the requesting user that their report is ready.
-    The sender here is the report instance (or None).
+    Routes to the correct print-view page based on report category.
     """
+    action_url = _REPORT_TYPE_URL.get(report_type, '/overview/overviewpage')
     NotificationService.notify_user(
         title=f"Report ready: {report_title}",
         message=f"Your '{report_title}' report has been generated and is ready to view.",
@@ -220,7 +233,7 @@ def on_report_generated(_sender, user, report_type, report_title, report_object_
         user=user,
         priority='high',
         send_email=False,   # In-app only — user chose to generate it, they know it's ready
-        action_url=f'/reports/{report_type}/{report_object_id}',
+        action_url=action_url,
         metadata={
             'report_type': report_type,
             'report_object_id': report_object_id,
