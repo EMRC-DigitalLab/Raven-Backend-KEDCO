@@ -1622,7 +1622,7 @@ def compare_customers(
         scope_type=scope_type, scope_label=scope_label,
         current_from=current_from, current_to=current_to,
         previous_from=previous_from, previous_to=previous_to,
-        customers=top_rows, total_in_scope=total_in_scope,
+        customers=top_rows, all_rows=rows, total_in_scope=total_in_scope,
         positive_threshold=positive_threshold,
         declined_threshold=declined_threshold,
     )
@@ -1632,20 +1632,23 @@ def _customer_compare_response(
     customer_type, scope_type, scope_label,
     current_from, current_to, previous_from, previous_to,
     customers, total_in_scope,
+    all_rows=None,
     positive_threshold: float = 10.0,
     declined_threshold: float = -30.0,
 ) -> dict:
-    # Trend distribution across returned customers
+    # Trend distribution across returned customers (top N only)
     trend_dist: dict[str, int] = {t: 0 for t in TREND_ORDER}
     for c in customers:
         label = c.get('trend', 'No Previous Data')
         trend_dist[label] = trend_dist.get(label, 0) + 1
 
-    # Summary totals
-    total_curr_kwh = sum(c['current_consumption_kwh']  for c in customers)
-    total_prev_kwh = sum(c['previous_consumption_kwh'] for c in customers)
-    total_curr_amt = sum(c.get('current_billed_amount',  0) or 0 for c in customers)
-    total_prev_amt = sum(c.get('previous_billed_amount', 0) or 0 for c in customers)
+    # Summary totals always computed from ALL rows so top_n slicing
+    # does not distort the aggregate figures.
+    totals_src = all_rows if all_rows is not None else customers
+    total_curr_kwh = sum(c['current_consumption_kwh']  for c in totals_src)
+    total_prev_kwh = sum(c['previous_consumption_kwh'] for c in totals_src)
+    total_curr_amt = sum(c.get('current_billed_amount',  0) or 0 for c in totals_src)
+    total_prev_amt = sum(c.get('previous_billed_amount', 0) or 0 for c in totals_src)
     total_var_pct  = (
         round((total_curr_kwh - total_prev_kwh) / total_prev_kwh * 100, 2)
         if total_prev_kwh else None

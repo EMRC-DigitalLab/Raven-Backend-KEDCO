@@ -8,10 +8,43 @@ checking, and email queuing happen consistently.
 """
 import logging
 
+from asgiref.sync import async_to_sync
 from django.contrib.contenttypes.models import ContentType
 from django.db import transaction
 
 logger = logging.getLogger(__name__)
+
+
+def _ws_push(user_id: int, notification) -> None:
+    """
+    Push a notification to the user's WebSocket group via the channel layer.
+    Called synchronously from within notify() after DB commit.
+    Silently no-ops if channels/redis is unavailable.
+    """
+    try:
+        from channels.layers import get_channel_layer
+        layer = get_channel_layer()
+        if layer is None:
+            return
+        group_name = f'notifications_user_{user_id}'
+        payload = {
+            'id':                str(notification.id),
+            'title':             notification.title,
+            'message':           notification.message,
+            'notification_type': notification.notification_type,
+            'category':          notification.category,
+            'priority':          notification.priority,
+            'action_url':        notification.action_url,
+            'is_read':           notification.is_read,
+            'created_at':        notification.created_at.isoformat(),
+            'metadata':          notification.metadata or {},
+        }
+        async_to_sync(layer.group_send)(
+            group_name,
+            {'type': 'notification.push', 'payload': payload},
+        )
+    except Exception as exc:
+        logger.warning("WS push failed for user %s: %s", user_id, exc)
 
 
 class NotificationService:
@@ -99,8 +132,9 @@ class NotificationService:
         with transaction.atomic():
             created = Notification.objects.bulk_create(notifications_to_create)
 
-        # Queue email tasks outside the transaction so DB rows are committed first
+        # Push via WebSocket + queue email tasks (outside transaction so rows are committed)
         for notif in created:
+            _ws_push(notif.recipient_id, notif)
             if notif.send_email:
                 try:
                     send_notification_email.delay(notif.id)
@@ -113,13 +147,38 @@ class NotificationService:
 
     @staticmethod
     def notify_role(title, message, category, roles, **kwargs):
-        """Shorthand: notify all users with given roles."""
+        """
+        Notify all users who either:
+          1. Have a role in `roles`, OR
+          2. Have an active UserSectionAccess grant for the section matching `category`
+
+        This ensures that any user with module access sees the notification,
+        regardless of their system role.
+        """
+        from django.contrib.auth import get_user_model
+        from django.db.models import Q
+        from users.models import UserSectionAccess
+
+        User = get_user_model()
+
+        # Users matched by role
+        role_q = Q(role__in=roles, is_active=True)
+
+        # Users matched by active section access for this category's module
+        section_q = Q(
+            section_access__section__name=category,
+            section_access__is_active=True,
+            is_active=True,
+        )
+
+        recipients = User.objects.filter(role_q | section_q).distinct()
+
         return NotificationService.notify(
             title=title,
             message=message,
             notification_type='action',
             category=category,
-            target_roles=roles,
+            recipients=recipients,
             **kwargs,
         )
 

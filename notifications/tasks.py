@@ -226,6 +226,26 @@ def send_report_email(self, report_recipient_id: int):
         raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))
 
 
+# ── Recipient helper ──────────────────────────────────────────────────────────
+
+def _recipients_for_module(category: str):
+    """
+    Return users who should receive notifications for a given module category.
+    Includes:
+      - super_admin and admin (always)
+      - Any user with an active UserSectionAccess grant for this category's section
+    """
+    from django.contrib.auth import get_user_model
+    from django.db.models import Q
+    from users.models import UserSectionAccess
+
+    User = get_user_model()
+    return User.objects.filter(
+        Q(role__in=['super_admin', 'admin'], is_active=True) |
+        Q(section_access__section__name=category, section_access__is_active=True, is_active=True)
+    ).distinct()
+
+
 # ── End-of-day scheduled checks ───────────────────────────────────────────────
 
 def _build_fault_category_map():
@@ -266,16 +286,13 @@ def daily_band_a_supply_check():
     """
     from datetime import date
 
-    from django.contrib.auth import get_user_model
-
     from technical.models import DailyHoursOfSupply, FeederInterruption
 
     from .services import NotificationService
 
     BAND_A_MINIMUM_HOURS = 20
     today = date.today()
-    User = get_user_model()
-    recipients = User.objects.filter(role__in=['super_admin', 'admin', 'manager'], is_active=True)
+    recipients = _recipients_for_module('technical')
 
     # ── Check if any data was entered at all for Band A today ─────────────────
     all_band_a_records = DailyHoursOfSupply.objects.filter(
@@ -412,15 +429,12 @@ def daily_restoration_check():
     """
     from datetime import date
 
-    from django.contrib.auth import get_user_model
-
     from technical.models import FeederInterruption
 
     from .services import NotificationService
 
     today = date.today()
-    User = get_user_model()
-    recipients = User.objects.filter(role__in=['super_admin', 'admin', 'manager'], is_active=True)
+    recipients = _recipients_for_module('technical')
 
     # ── Check if any interruption data was entered at all today ───────────────
     all_today = FeederInterruption.objects.filter(occurred_at__date=today)
@@ -537,15 +551,12 @@ def daily_dso_meter_reading_check():
     """
     from datetime import date
 
-    from django.contrib.auth import get_user_model
-
     from technical.models import CumulativeMeterReading
 
     from .services import NotificationService
 
     today = date.today()
-    User = get_user_model()
-    recipients = User.objects.filter(role__in=['super_admin', 'admin', 'manager'], is_active=True)
+    recipients = _recipients_for_module('technical')
 
     # Feeders with readings today
     submitted_today = set(
@@ -650,8 +661,6 @@ def monthly_ea_submission_check():
     import calendar
     from datetime import date
 
-    from django.contrib.auth import get_user_model
-
     from energy_account.models import EAMonthlyReturn
 
     from .services import NotificationService
@@ -664,8 +673,7 @@ def monthly_ea_submission_check():
         target_month, target_year = today.month - 1, today.year
 
     month_label = f"{calendar.month_name[target_month]} {target_year}"
-    User = get_user_model()
-    recipients = User.objects.filter(role__in=['super_admin', 'admin'], is_active=True)
+    recipients = _recipients_for_module('energy_account')
 
     # All stations that should have monthly returns
     from common.models import InjectionSubstation

@@ -1,7 +1,7 @@
 #!/bin/bash
 # ─────────────────────────────────────────────────────────────────────────────
 # Docker entrypoint — runs inside the Raven container at startup.
-# Order: collectstatic → migrate → gunicorn
+# Order: collectstatic → migrate → daphne (ASGI — supports HTTP + WebSocket)
 # ─────────────────────────────────────────────────────────────────────────────
 set -e
 
@@ -11,10 +11,9 @@ python manage.py collectstatic --noinput
 echo "[entrypoint] Running database migrations..."
 python manage.py migrate --noinput
 
-echo "[entrypoint] Starting Gunicorn..."
-exec gunicorn raven.wsgi:application \
-    --bind 0.0.0.0:8000 \
-    --workers "${GUNICORN_WORKERS:-4}" \
-    --timeout "${GUNICORN_TIMEOUT:-120}" \
-    --access-logfile - \
-    --error-logfile -
+echo "[entrypoint] Starting Daphne (ASGI)..."
+exec daphne \
+    -b 0.0.0.0 \
+    -p 8000 \
+    --access-log - \
+    raven.asgi:application
