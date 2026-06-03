@@ -57,13 +57,13 @@ def _feeder_metrics(feeder, customers_qs, readings_qs, date_range):
     total_mdni   = c_qs.filter(customer_type='MDNI').count()
     bypass_count = c_qs.filter(is_bypass=True).count()
 
-    billing   = calc_billing(r_qs)
+    billing   = calc_billing(r_qs, period_days=date_range['days'])
     daily_kwh = calc_daily_estimate(billing, date_range)
     coverage  = calc_coverage(c_qs, r_qs)
     estimated = calc_estimated_billing(c_qs, coverage['read_ids'], date_range)
 
-    mdi_billing  = calc_billing(r_qs.filter(reading_type='MDI'))
-    mdni_billing = calc_billing(r_qs.filter(reading_type='MDNI'))
+    mdi_billing  = calc_billing(r_qs.filter(reading_type='MDI'),  period_days=date_range['days'])
+    mdni_billing = calc_billing(r_qs.filter(reading_type='MDNI'), period_days=date_range['days'])
     total_rev    = billing['total_billed_amount']
     mdi_split  = round(float(mdi_billing['total_billed_amount']) / float(total_rev) * 100, 2) if total_rev else 0
     mdni_split = round(float(mdni_billing['total_billed_amount']) / float(total_rev) * 100, 2) if total_rev else 0
