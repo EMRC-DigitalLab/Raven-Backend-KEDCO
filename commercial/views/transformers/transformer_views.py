@@ -1,105 +1,75 @@
 # commercial/views/transformers/transformer_views.py
-from calendar import monthrange
-from datetime import date
-from decimal import Decimal
-
-from django.db.models import Sum
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
-from commercial.date_filters import get_date_range_from_request
-from commercial.models import *
-from commercial.models import MonthlyCommercialSummary, MonthlyEnergyBilled
-from commercial.serializers import *
+from commercial.analytics_utils import (
+    calc_atc_loss,
+    calc_billing,
+    calc_coverage,
+    calc_energy_delivered,
+    parse_date_range,
+)
+from commercial.models import CommercialCustomer, DistributionTransformer, MeterReading
 from common.models import Feeder
-from financial.models import Opex
-from technical.models import EnergyDelivered
 
 
 @api_view(["GET"])
 def transformer_metrics_by_feeder_view(request):
     feeder_slug = request.GET.get("feeder")
     if not feeder_slug:
-        return Response({"error": "Missing feeder slug in query parameters"}, status=400)
+        return Response({"error": "Missing feeder slug"}, status=400)
 
     try:
         feeder = Feeder.objects.get(slug=feeder_slug)
     except Feeder.DoesNotExist:
         return Response({"error": "Feeder not found"}, status=404)
 
+    date_range = parse_date_range(request)
+    p_start    = date_range['start_date']
+    p_end      = date_range['end_date']
+    days       = date_range['days']
+
     transformers = DistributionTransformer.objects.filter(feeder=feeder)
-
-    mode = request.GET.get("mode", "monthly")
-    year = request.GET.get("year")
-    month = request.GET.get("month")
-
-    if mode == "monthly" and year and month:
-        year = int(year)
-        month = int(month)
-        start_day = date(year, month, 1)
-        end_day = date(year, month, monthrange(year, month)[1])
-        date_from, date_to = start_day, end_day
-    else:
-        date_from, date_to = get_date_range_from_request(request, "date")
-
     result = []
 
     for transformer in transformers:
-        sales_reps = SalesRepresentative.objects.filter(
-            assigned_transformers=transformer
-        ).distinct()
-
-        summary = MonthlyCommercialSummary.objects.filter(
-            sales_rep__in=sales_reps,
-            transformer=transformer,
-            month__range=(date_from, date_to)
-        ).aggregate(
-            revenue_billed=Sum("revenue_billed"),
-            revenue_collected=Sum("revenue_collected")
+        customers_qs = CommercialCustomer.objects.filter(
+            feeder=feeder,
+            feeder__commercial_is_onboarded=True,
+            # narrow to customers whose transformer matches
+            distribution_transformer=transformer,
+        )
+        readings_qs = MeterReading.objects.filter(
+            customer__in=customers_qs,
+            reading_date__gte=p_start,
+            reading_date__lte=p_end,
         )
 
-        revenue_billed = Decimal(summary["revenue_billed"] or 0)
-        revenue_collected = Decimal(summary["revenue_collected"] or 0)
+        billing   = calc_billing(readings_qs, period_days=days)
+        coverage  = calc_coverage(customers_qs, readings_qs)
+        delivered = calc_energy_delivered([feeder.id], date_range)
 
-        # Get energy billed for this specific transformer's feeder
-        energy_billed = MonthlyEnergyBilled.objects.filter(
-            feeder=feeder,
-            month__range=(date_from, date_to)
-        ).aggregate(energy=Sum("energy_mwh"))["energy"] or 0
-
-        # Get energy delivered for this specific transformer's feeder
-        energy_delivered = EnergyDelivered.objects.filter(
-            feeder=feeder,
-            date__range=(date_from, date_to)
-        ).aggregate(energy=Sum("energy_mwh"))["energy"] or 0
-
-        # Calculate efficiencies
-        try:
-            billing_eff = Decimal(energy_billed) / Decimal(energy_delivered) if energy_delivered else Decimal(0)
-            collection_eff = revenue_collected / revenue_billed if revenue_billed else Decimal(0)
-            
-            # Cap efficiencies at 100%
-            billing_eff = min(billing_eff, Decimal(1))
-            collection_eff = min(collection_eff, Decimal(1))
-            
-            # Calculate energy collected: Energy Delivered × Collection Efficiency
-            energy_collected = Decimal(energy_billed) * collection_eff if energy_delivered else Decimal(0)
-            
-            # Calculate ATCC: 1 - (Billing Efficiency × Collection Efficiency)
-            atcc = (1 - (billing_eff * collection_eff)) * 100
-            
-        except Exception:
-            billing_eff = collection_eff = Decimal(0)
-            energy_collected = Decimal(0)
-            atcc = 100  # 100% losses if calculation fails
+        delivered_kwh    = round(float(delivered['total_mwh']) * 1000, 2)
+        billing_eff, atc = calc_atc_loss(billing['total_billed_kwh'], delivered['total_mwh'])
 
         result.append({
-            "name": transformer.name,
-            "slug": transformer.slug,
-            "energy_delivered": round(float(energy_delivered), 2),
-            "energy_billed": round(float(energy_billed), 2), 
-            "energy_collected": round(float(energy_collected), 2),
-            "atcc": round(float(atcc), 2),
+            'name':               transformer.name,
+            'slug':               transformer.slug,
+            'energy_delivered':   delivered_kwh,
+            'energy_billed':      float(round(billing['total_billed_kwh'], 2)),
+            'revenue_billed':     float(round(billing['total_billed_amount'], 2)),
+            'billing_efficiency': float(round(billing_eff, 2)),
+            'atcc':               float(round(atc, 2)),
+            'coverage_rate':      coverage['rate'],
+            'customers_read':     coverage['read'],
         })
 
-    return Response(result)
+    return Response({
+        'period': {
+            'mode':       date_range['mode'],
+            'start_date': str(p_start),
+            'end_date':   str(p_end),
+            'label':      date_range['label'],
+        },
+        'transformers': result,
+    })
