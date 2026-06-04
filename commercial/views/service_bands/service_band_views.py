@@ -178,7 +178,7 @@ def all_bands(request):
     # ── One query builds feeder→band map; all bulk fns use it ────────────────
     f2d = feeder_dim_map(customers_qs, 'feeder__band_id')
 
-    billing_data   = bulk_billing(readings_qs, f2d)
+    billing_data   = bulk_billing(readings_qs, f2d, period_days=date_range['days'])
     type_billing   = bulk_billing_by_type(readings_qs, f2d)
     ctype_counts   = bulk_customer_types(customers_qs, f2d)
     coverage_data  = bulk_coverage(customers_qs, readings_qs, f2d)

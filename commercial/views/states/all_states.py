@@ -95,7 +95,7 @@ def _state_metrics(state, customers_qs, readings_qs, date_range):
     if f2dist:
         pf_dist   = energy_per_feeder(list(f2dist.keys()), date_range)
         e_by_dist = rollup_energy(pf_dist, f2dist)
-        b_by_dist = bulk_billing(r_qs, f2dist)
+        b_by_dist = bulk_billing(r_qs, f2dist, period_days=date_range['days'])
         c_by_dist = bulk_energy_consumed(r_qs, f2dist)
         for d_obj in BusinessDistrict.objects.filter(state=state).order_by('name'):
             did       = d_obj.id
@@ -203,7 +203,7 @@ def all_states(request):
     # ── One query builds feeder→state map; all bulk fns use it ───────────────
     f2d = feeder_dim_map(customers_qs, 'feeder__business_district__state_id')
 
-    billing_data   = bulk_billing(readings_qs, f2d)
+    billing_data   = bulk_billing(readings_qs, f2d, period_days=date_range['days'])
     type_billing   = bulk_billing_by_type(readings_qs, f2d)
     ctype_counts   = bulk_customer_types(customers_qs, f2d)
     coverage_data  = bulk_coverage(customers_qs, readings_qs, f2d)

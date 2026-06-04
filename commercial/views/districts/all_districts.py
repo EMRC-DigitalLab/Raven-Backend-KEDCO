@@ -95,7 +95,7 @@ def _district_metrics(district, customers_qs, readings_qs, date_range):
     if f2fdr:
         pf_fdr   = energy_per_feeder(list(f2fdr.keys()), date_range)
         e_by_fdr = rollup_energy(pf_fdr, f2fdr)
-        b_by_fdr = bulk_billing(r_qs, f2fdr)
+        b_by_fdr = bulk_billing(r_qs, f2fdr, period_days=date_range["days"])
         c_by_fdr = bulk_energy_consumed(r_qs, f2fdr)
         for fdr in Feeder.objects.filter(id__in=list(f2fdr.keys())).order_by('name'):
             fid     = fdr.id
@@ -211,7 +211,7 @@ def all_districts(request):
     # ── One query builds feeder→district map; all bulk fns use it ────────────
     f2d = feeder_dim_map(customers_qs, 'feeder__business_district_id')
 
-    billing_data   = bulk_billing(readings_qs, f2d)
+    billing_data   = bulk_billing(readings_qs, f2d, period_days=date_range['days'])
     type_billing   = bulk_billing_by_type(readings_qs, f2d)
     ctype_counts   = bulk_customer_types(customers_qs, f2d)
     coverage_data  = bulk_coverage(customers_qs, readings_qs, f2d)
