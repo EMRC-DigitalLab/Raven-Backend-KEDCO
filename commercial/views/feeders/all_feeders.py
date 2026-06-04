@@ -203,7 +203,7 @@ def all_feeders(request):
     feeder_ids = [f.id for f in feeders]
     f2d = {fid: fid for fid in feeder_ids}
 
-    billing_data   = bulk_billing(readings_qs, f2d)
+    billing_data   = bulk_billing(readings_qs, f2d, period_days=date_range['days'])
     type_billing   = bulk_billing_by_type(readings_qs, f2d)
     ctype_counts   = bulk_customer_types(customers_qs, f2d)
     coverage_data  = bulk_coverage(customers_qs, readings_qs, f2d)

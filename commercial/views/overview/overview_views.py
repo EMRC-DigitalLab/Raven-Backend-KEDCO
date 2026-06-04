@@ -154,16 +154,18 @@ def commercial_overview(request):
     all_breakdown_feeder_ids = list(f2s.keys())
     pf_energy = energy_per_feeder(all_breakdown_feeder_ids, date_range)
 
+    _pd = date_range['days']   # period_days — normalises billing to selected window
+
     energy_by_state    = rollup_energy(pf_energy, f2s)
-    billing_by_state   = bulk_billing(readings_qs, f2s)
+    billing_by_state   = bulk_billing(readings_qs, f2s,    period_days=_pd)
     consumed_by_state  = bulk_energy_consumed(readings_qs, f2s)
 
     energy_by_district   = rollup_energy(pf_energy, f2dmap)
-    billing_by_district  = bulk_billing(readings_qs, f2dmap)
+    billing_by_district  = bulk_billing(readings_qs, f2dmap, period_days=_pd)
     consumed_by_district = bulk_energy_consumed(readings_qs, f2dmap)
 
     energy_by_band   = rollup_energy(pf_energy, f2b)
-    billing_by_band  = bulk_billing(readings_qs, f2b)
+    billing_by_band  = bulk_billing(readings_qs, f2b,    period_days=_pd)
     consumed_by_band = bulk_energy_consumed(readings_qs, f2b)
 
     _empty_b = {'total_billed_kwh': ZERO, 'total_billed_amount': ZERO}
@@ -227,7 +229,9 @@ def commercial_overview(request):
     # Bucket trend rows per period → per state in Python (no extra DB hits)
     _ZERO_D = Decimal('0')
 
-    def _bucket_state(rows, p_start, p_end):
+    def _bucket_state(rows, p_start, p_end, p_days):
+        # Scale raw billed_consumption to the period window (same logic as calc_billing)
+        p_scale = Decimal(str(p_days)) / Decimal('30')
         acc = {}
         for r in rows:
             if not (p_start <= r['reading_date'] <= p_end):
@@ -237,7 +241,7 @@ def commercial_overview(request):
                 continue
             if sid not in acc:
                 acc[sid] = {'kwh': _ZERO_D, 'ec': _ZERO_D, 'read_ids': set()}
-            kwh  = Decimal(str(r['billed_consumption']))
+            kwh  = Decimal(str(r['billed_consumption'])) * p_scale
             rate = Decimal(str(r['tariff_rate']))
             acc[sid]['kwh'] += kwh
             acc[sid]['ec']  += kwh * rate
@@ -245,7 +249,7 @@ def commercial_overview(request):
         return acc
 
     trend_bill_by_period = [
-        _bucket_state(trend_rows, p['start_date'], p['end_date'])
+        _bucket_state(trend_rows, p['start_date'], p['end_date'], p['days'])
         for p in trend_periods
     ]
 

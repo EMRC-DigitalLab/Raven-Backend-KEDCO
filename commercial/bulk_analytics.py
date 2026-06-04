@@ -77,11 +77,16 @@ _ESTIMATED_KWH_EXPR = Case(
 )
 
 
-def bulk_billing(readings_qs, feeder_to_dim):
+def bulk_billing(readings_qs, feeder_to_dim, period_days=None):
     """
     ONE query (1 JOIN: customer→feeder) → {dim_id: billing dict}.
     Splits actual_billed_kwh (real reads, estimation_method='') from
     estimated_billed_kwh (DataNest-estimated reads, estimation_method non-empty).
+
+    period_days: when supplied, each reading's billed_consumption is scaled by
+        (period_days / 30) so daily/weekly views show period-proportionate figures
+        rather than the raw 30-day billing cycle amounts.
+        Matches the normalisation logic in calc_billing().
     """
     rows = (
         readings_qs
@@ -94,6 +99,10 @@ def bulk_billing(readings_qs, feeder_to_dim):
             raw_ec=Sum(_EC_EXPR),
         )
     )
+
+    # Scale factor: proportion the billing cycle amount to the selected period
+    scale = (Decimal(str(period_days)) / Decimal('30')) if period_days and period_days != 30 else Decimal('1')
+
     acc = {}
     for row in rows:
         dim_id = feeder_to_dim.get(row['customer__feeder_id'])
@@ -101,10 +110,10 @@ def bulk_billing(readings_qs, feeder_to_dim):
             continue
         if dim_id not in acc:
             acc[dim_id] = {'kwh': ZERO, 'actual_kwh': ZERO, 'estimated_kwh': ZERO, 'ec': ZERO}
-        acc[dim_id]['kwh']           += Decimal(str(row['total_kwh']     or 0))
-        acc[dim_id]['actual_kwh']    += Decimal(str(row['actual_kwh']    or 0))
-        acc[dim_id]['estimated_kwh'] += Decimal(str(row['estimated_kwh'] or 0))
-        acc[dim_id]['ec']            += Decimal(str(row['raw_ec']        or 0))
+        acc[dim_id]['kwh']           += Decimal(str(row['total_kwh']     or 0)) * scale
+        acc[dim_id]['actual_kwh']    += Decimal(str(row['actual_kwh']    or 0)) * scale
+        acc[dim_id]['estimated_kwh'] += Decimal(str(row['estimated_kwh'] or 0)) * scale
+        acc[dim_id]['ec']            += Decimal(str(row['raw_ec']        or 0)) * scale
 
     result = {}
     for dim_id, r in acc.items():
