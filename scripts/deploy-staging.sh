@@ -38,7 +38,18 @@ echo "${GITHUB_TOKEN}" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-st
 echo "[deploy-staging] Pulling ${IMAGE}..."
 docker pull "${IMAGE}"
 
-# ── 3. Start new containers ───────────────────────────────────────────────────
+# ── 3. Ensure system nginx allows 180s for management report endpoint ─────────
+NGINX_SNIPPET="/etc/nginx/conf.d/raven-report-timeout.conf"
+if ! grep -q "proxy_read_timeout 180s" "${NGINX_SNIPPET}" 2>/dev/null; then
+  sudo tee "${NGINX_SNIPPET}" > /dev/null <<'NGINXEOF'
+# Extended timeout for management report generation (AI + PDF render)
+proxy_read_timeout 180s;
+NGINXEOF
+  sudo nginx -t && sudo systemctl reload nginx
+  echo "[deploy-staging] System nginx reloaded with extended report timeout."
+fi
+
+# ── 4. Start new containers ───────────────────────────────────────────────────
 echo "[deploy-staging] Starting containers..."
 docker compose -f "${COMPOSE_FILE}" down --remove-orphans 2>/dev/null || true
 GITHUB_REPOSITORY="${REPO_LOWER}" \
