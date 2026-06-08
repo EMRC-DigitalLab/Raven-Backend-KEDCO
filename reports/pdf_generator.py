@@ -1,4 +1,4 @@
-# reports/pdf_generator.py
+﻿# reports/pdf_generator.py
 """
 PDF generation service.
 Primary engine: Playwright (headless Chromium) — produces output identical to
@@ -3502,7 +3502,8 @@ def render_segment_compliance_trend(data, context, page_number):
             </div>
             <h1 class="page-title">Segment Compliance Trend</h1>
             <p style="margin-top:24px;opacity:0.5;">No daily data available for this period.</p>"""
-        return f'<div class="page"><div class="page-content">{content}</div><div class="footer"><img src="{context.get('footer_logo_url', '')}" alt="Powered by EMRC"/><div class="page-number">{page_number}</div></div></div>'
+        footer_logo = context.get('footer_logo_url', '')
+        return f'<div class="page"><div class="page-content">{content}</div><div class="footer"><img src="{footer_logo}" alt="Powered by EMRC"/><div class="page-number">{page_number}</div></div></div>'
 
     SEG_COLORS = {
         'MDI':                '#1565c0',
