@@ -64,15 +64,13 @@ except (OSError, ImportError):
 # =============================================================================
 
 MANAGEMENT_STYLES = """
-@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap');
-
 @page { size: A4 portrait; margin: 0; }
 @page :first { margin: 0; }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
 body {
-    font-family: 'Outfit', 'Helvetica', 'Arial', sans-serif;
+    font-family: -apple-system, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
     background: #ffffff;
     color: #002050;
     font-size: 10.5px;
@@ -1269,7 +1267,7 @@ class ManagementPDFGenerator:
                 with sync_playwright() as p:
                     browser = p.chromium.launch()
                     page    = browser.new_page()
-                    page.set_content(html, wait_until='networkidle')
+                    page.set_content(html, wait_until='domcontentloaded')
                     pdf_bytes = page.pdf(
                         format='A4',
                         landscape=False,

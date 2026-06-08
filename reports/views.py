@@ -643,27 +643,33 @@ def generate_management_report(request):
     """
     POST /api/reports/generate/management/
 
-    Generates a narrative management report (executive summary, RAG KPI dashboard,
-    reliability review, feeder performance, state analysis, service-band recovery
-    actions, priority issues, action plan).
+    Queues a management PDF report for background generation and immediately
+    returns a job_id.  Poll GET /api/reports/generate/management/<job_id>/
+    every 3-5 seconds until state == SUCCESS, then use pdf_base64 to trigger
+    a client-side download.
 
     Body:
     {
-        "report_title":  "May 2026 11kV Management Report",      // optional
-        "report_subtitle": "",                                    // optional
-        "company_name":  "KANO ELECTRICITY DISTRIBUTION COMPANY",// optional
-        "theme":         { "primary_color": "#002050", ... },    // optional
-        "include_ai":    true,                                    // default true
-        "return_base64": false,                                   // default false (returns file download)
+        "report_title":    "May 2026 11kV Management Report",       // optional
+        "report_subtitle": "",                                       // optional
+        "company_name":    "KANO ELECTRICITY DISTRIBUTION COMPANY", // optional
+        "theme":           { "primary_color": "#002050", ... },     // optional
+        "include_ai":      true,                                     // default true
         "filters": {
             "from_date": "2026-05-01",
             "to_date":   "2026-05-31",
             ...
         }
     }
+
+    Response 202:
+    {
+        "job_id":     "<celery-uuid>",
+        "status_url": "/api/reports/generate/management/<job_id>/",
+        "message":    "Report queued. Poll status_url for progress."
+    }
     """
-    from .management_report import ManagementPDFGenerator
-    from .services import ReportDataService
+    from .tasks import generate_management_report_task
 
     filters = request.data.get('filters', {})
     if not filters.get('from_date') or not filters.get('to_date'):
@@ -672,34 +678,94 @@ def generate_management_report(request):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    try:
-        data_service = ReportDataService(filters, user=request.user)
+    report_config = {
+        'report_title':    request.data.get('report_title', 'Management Report'),
+        'report_subtitle': request.data.get('report_subtitle', ''),
+        'company_name':    request.data.get('company_name', 'KANO ELECTRICITY DISTRIBUTION COMPANY'),
+        'theme':           request.data.get('theme', {}),
+        'include_ai':      bool(request.data.get('include_ai', True)),
+    }
 
-        report_config = {
-            'report_title':    request.data.get('report_title', 'Management Report'),
-            'report_subtitle': request.data.get('report_subtitle', ''),
-            'company_name':    request.data.get('company_name', 'KANO ELECTRICITY DISTRIBUTION COMPANY'),
-            'theme':           request.data.get('theme', {}),
-            'include_ai':      bool(request.data.get('include_ai', True)),
-        }
+    task = generate_management_report_task.apply_async(
+        kwargs={
+            'report_config': report_config,
+            'filters':       filters,
+            'user_id':       request.user.id,
+        },
+        queue='default',
+    )
 
-        generator = ManagementPDFGenerator(report_config, data_service)
+    status_url = f'/api/reports/generate/management/{task.id}/'
+    return Response(
+        {
+            'job_id':     task.id,
+            'status_url': status_url,
+            'message':    'Report queued. Poll status_url for progress.',
+        },
+        status=status.HTTP_202_ACCEPTED,
+    )
 
-        if request.data.get('return_base64', False):
-            pdf_b64  = generator.generate_pdf_base64()
-            filename = report_config['report_title'].replace(' ', '_') + '.pdf'
-            return Response({'pdf_base64': pdf_b64, 'filename': filename})
 
-        pdf_buffer = generator.generate_pdf()
-        filename   = report_config['report_title'].replace(' ', '_') + '.pdf'
-        response   = HttpResponse(pdf_buffer.read(), content_type='application/pdf')
-        response['Content-Disposition'] = f'attachment; filename="{filename}"'
-        return response
+@api_view(['GET'])
+def management_report_status(request, job_id):
+    """
+    GET /api/reports/generate/management/<job_id>/
 
-    except Exception as exc:
-        logger.error('Management report generation failed: %s', exc)
-        import traceback; traceback.print_exc()
-        return Response({'error': str(exc)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    Poll until state == SUCCESS, then decode pdf_base64 and trigger a download.
+
+    Response while running:
+    {
+        "job_id": "...",
+        "state":  "PROGRESS",
+        "stage":  "Rendering PDF"
+    }
+
+    Response on success:
+    {
+        "job_id":     "...",
+        "state":      "SUCCESS",
+        "pdf_base64": "<base64>",
+        "filename":   "May_2026_Management_Report.pdf"
+    }
+
+    Response on failure:
+    {
+        "job_id": "...",
+        "state":  "FAILURE",
+        "error":  "..."
+    }
+    """
+    from celery.result import AsyncResult
+
+    result = AsyncResult(job_id)
+    state  = result.state
+
+    if state == 'PROGRESS':
+        meta = result.info or {}
+        return Response({
+            'job_id': job_id,
+            'state':  'PROGRESS',
+            'stage':  meta.get('stage', 'Working…'),
+        })
+
+    if state == 'SUCCESS':
+        res = result.result or {}
+        return Response({
+            'job_id':     job_id,
+            'state':      'SUCCESS',
+            'pdf_base64': res.get('pdf_base64'),
+            'filename':   res.get('filename', 'Management_Report.pdf'),
+        })
+
+    if state == 'FAILURE':
+        return Response({
+            'job_id': job_id,
+            'state':  'FAILURE',
+            'error':  str(result.result),
+        })
+
+    # PENDING / STARTED / REVOKED
+    return Response({'job_id': job_id, 'state': state})
 
 
 # =============================================================================

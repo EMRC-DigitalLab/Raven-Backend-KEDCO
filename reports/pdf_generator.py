@@ -93,8 +93,6 @@ SECTION_DISPLAY_NAMES = {
 # =============================================================================
 
 BASE_STYLES = """
-@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap');
-
 @page {
     margin: 0;
 }
@@ -110,7 +108,7 @@ BASE_STYLES = """
 }
 
 body {
-    font-family: 'Outfit', 'Helvetica', 'Arial', sans-serif;
+    font-family: -apple-system, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
     background-color: #ffffff;
     color: #002050;
     font-size: 12px;
@@ -4289,7 +4287,7 @@ class PDFGenerator:
         with sync_playwright() as p:
             browser = p.chromium.launch()
             page = browser.new_page()
-            page.set_content(html_content, wait_until='networkidle')
+            page.set_content(html_content, wait_until='domcontentloaded')
             pdf_bytes = page.pdf(
                 format='A4',
                 landscape=(self.orientation == 'landscape'),
