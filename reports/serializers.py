@@ -180,6 +180,9 @@ class ReportGenerateRequestSerializer(serializers.Serializer):
         child=serializers.DictField(),
         required=True
     )
+
+    # Theme customisation (all fields optional — defaults applied in PDFGenerator)
+    theme = serializers.DictField(required=False, default=dict)
     
     def validate_sections(self, value):
         if not value:

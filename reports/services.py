@@ -20,6 +20,22 @@ from technical.utils.energy_utils import (
 
 logger = logging.getLogger(__name__)
 
+# ── Feeder segment / dispatch compliance constants ─────────────────────────
+BAND_SUPPLY_TARGETS = {
+    'A': 20.0,   # hrs/day
+    'B': 16.0,
+    'C': 12.0,
+    'D':  8.0,
+    'E':  8.0,
+}
+
+def _compliance_status(pct_achieved: float) -> str:
+    if pct_achieved >= 105: return 'exceeding'
+    if pct_achieved >= 95:  return 'on_target'
+    if pct_achieved >= 85:  return 'below_target'
+    if pct_achieved >= 75:  return 'poor'
+    return 'critical'
+
 
 # =============================================================================
 # SECTION TYPE DEFINITIONS
@@ -393,6 +409,49 @@ SECTION_DEFINITIONS = {
                 'default': '11kv',
             },
         },
+    },
+    'energy_by_segment_pl': {
+        'display_name': 'Energy by P&L Segment',
+        'description': 'Total energy delivered split by MDI vs Non-MDI (MDNI) with % share',
+        'category': 'technical',
+        'supports_chart': True,
+        'config_options': {},
+    },
+    'segment_voltage_energy': {
+        'display_name': 'Energy by Segment & Voltage',
+        'description': 'Energy breakdown by MDI/Non-MDI × 33kV/11kV voltage level',
+        'category': 'technical',
+        'supports_chart': True,
+        'config_options': {},
+    },
+    'energy_md_nmd_mix': {
+        'display_name': 'MD vs NMD Energy Mix',
+        'description': 'MD (MDI) vs NMD (Non-MDI) % share of energy vs 60/40 target mix',
+        'category': 'technical',
+        'supports_chart': True,
+        'config_options': {},
+    },
+    'segment_compliance_trend': {
+        'display_name': 'Segment Compliance Trend',
+        'description': 'Daily % of feeders on-target-or-better per segment over the reporting period',
+        'category': 'technical',
+        'supports_chart': True,
+        'config_options': {},
+    },
+    # ── Segment / Dispatch Compliance sections ────────────────────────────────
+    'segment_compliance_summary': {
+        'display_name': 'Segment Compliance Summary',
+        'description': 'Compliance overview split by MDI / Non-MDI Band A / Non-MDI Non-Band A against band supply targets',
+        'category': 'technical',
+        'supports_chart': False,
+        'config_options': {},
+    },
+    'feeder_segment_compliance': {
+        'display_name': 'Feeder Compliance by Segment',
+        'description': 'Per-feeder dispatch compliance table (Target vs Actual vs % Achieved) grouped by MDI / Non-MDI Band A / Non-MDI Non-Band A',
+        'category': 'technical',
+        'supports_chart': False,
+        'config_options': {},
     },
     'customer_comparison': {
         'display_name': 'Customer Comparison',
@@ -1421,6 +1480,296 @@ class ReportDataService:
     _FINANCIAL_SECTIONS  = {'financial_overview', 'opex_by_category', 'opex_by_district'}
     _COMPARISON_SECTIONS = {'entity_comparison', 'period_comparison', 'customer_comparison'}
 
+    def get_feeder_segment_compliance(self):
+        """
+        Return feeder performance annotated with:
+        - segment: MDI | Non-MDI Band A | Non-MDI Non-Band A
+        - target_hours: band-based supply target (hrs/day)
+        - gap: actual - target
+        - pct_achieved: (actual / target) * 100
+        - status: exceeding | on_target | below_target | poor | critical
+
+        Segment derivation:
+          MDI           = feeder has at least one CommercialCustomer with customer_type='MDI'
+          Non-MDI Band A = feeder band is A and no MDI customers
+          Non-MDI Non-Band A = everything else
+        """
+        try:
+            from commercial.models import CommercialCustomer
+            mdi_fids = set(
+                str(fid) for fid in
+                CommercialCustomer.objects.filter(
+                    feeder_id__in=self.feeder_ids,
+                    customer_type='MDI',
+                ).values_list('feeder_id', flat=True).distinct()
+            )
+        except Exception:
+            mdi_fids = set()
+
+        feeders_perf = self.get_feeder_performance()
+        SEGMENT_ORDER = {'MDI': 0, 'Non-MDI Band A': 1, 'Non-MDI Non-Band A': 2}
+        result = []
+        for f in feeders_perf:
+            fid  = str(f.get('id', ''))
+            band = str(f.get('band') or 'E').upper().strip('-')
+            band = band if band in BAND_SUPPLY_TARGETS else 'E'
+
+            if fid in mdi_fids:
+                segment = 'MDI'
+            elif band == 'A':
+                segment = 'Non-MDI Band A'
+            else:
+                segment = 'Non-MDI Non-Band A'
+
+            target       = BAND_SUPPLY_TARGETS.get(band, 8.0)
+            actual       = float(f.get('hours_of_supply', 0) or 0)
+            gap          = round(actual - target, 2)
+            pct_achieved = round((actual / target) * 100, 1) if target > 0 else 0
+            status       = _compliance_status(pct_achieved)
+
+            result.append({
+                **f,
+                'segment':      segment,
+                'target_hours': target,
+                'gap':          gap,
+                'pct_achieved': pct_achieved,
+                'status':       status,
+            })
+
+        result.sort(key=lambda x: (SEGMENT_ORDER.get(x['segment'], 3), x.get('name', '')))
+        return result
+
+    def get_segment_compliance_summary(self):
+        """
+        Aggregate feeder compliance by segment.  Returns a list of segment dicts, each with:
+        - segment, total, avg_supply, avg_pct_achieved
+        - counts/pct for each status (exceeding, on_target, below_target, poor, critical)
+        """
+        data     = self.get_feeder_segment_compliance()
+        segments = ['MDI', 'Non-MDI Band A', 'Non-MDI Non-Band A']
+        statuses = ['exceeding', 'on_target', 'below_target', 'poor', 'critical']
+        result   = []
+        for seg in segments:
+            fds   = [f for f in data if f['segment'] == seg]
+            total = len(fds)
+            if total == 0:
+                continue
+            row = {'segment': seg, 'total': total}
+            for st in statuses:
+                cnt      = sum(1 for f in fds if f['status'] == st)
+                row[st]  = {'count': cnt, 'pct': round(cnt / total * 100, 1)}
+            row['avg_supply']       = round(sum(float(f.get('hours_of_supply', 0) or 0) for f in fds) / total, 2)
+            row['avg_pct_achieved'] = round(sum(float(f.get('pct_achieved', 0) or 0) for f in fds) / total, 1)
+            row['total_energy_mwh'] = round(sum(float(f.get('energy_delivered', 0) or 0) for f in fds), 2)
+            result.append(row)
+        return result
+
+
+    def get_energy_by_segment_pl(self):
+        """
+        Total energy delivered split by P&L segment:
+          MDI, Non-MDI (MDNI), and overall totals.
+        Returns a dict with segment breakdown + % share.
+        """
+        from common.models import Feeder as _Feeder
+
+        try:
+            from commercial.models import CommercialCustomer
+            mdi_fids = set(
+                str(fid) for fid in
+                CommercialCustomer.objects.filter(
+                    feeder_id__in=self.feeder_ids, customer_type='MDI'
+                ).values_list('feeder_id', flat=True).distinct()
+            )
+        except Exception:
+            mdi_fids = set()
+
+        feeders_perf = self.get_feeder_performance()
+        total        = sum(float(f.get('energy_delivered', 0) or 0) for f in feeders_perf)
+        mdi_energy   = sum(float(f.get('energy_delivered', 0) or 0)
+                           for f in feeders_perf if str(f.get('id', '')) in mdi_fids)
+        mdni_energy  = total - mdi_energy
+
+        def _pct(val):
+            return round((val / total) * 100, 1) if total > 0 else 0
+
+        return {
+            'total_energy_mwh':  round(total, 2),
+            'mdi_energy_mwh':    round(mdi_energy, 2),
+            'mdni_energy_mwh':   round(mdni_energy, 2),
+            'mdi_pct':           _pct(mdi_energy),
+            'mdni_pct':          _pct(mdni_energy),
+            'segments': [
+                {
+                    'label':      'MDI',
+                    'energy_mwh': round(mdi_energy, 2),
+                    'pct':        _pct(mdi_energy),
+                    'feeders':    sum(1 for f in feeders_perf if str(f.get('id','')) in mdi_fids),
+                },
+                {
+                    'label':      'Non-MDI (MDNI)',
+                    'energy_mwh': round(mdni_energy, 2),
+                    'pct':        _pct(mdni_energy),
+                    'feeders':    sum(1 for f in feeders_perf if str(f.get('id','')) not in mdi_fids),
+                },
+            ],
+        }
+
+    def get_segment_voltage_energy(self):
+        """
+        Energy delivered broken down by Segment × Voltage:
+          MDI 33kV, MDI 11kV, Non-MDI 33kV, Non-MDI 11kV
+        """
+        from common.models import Feeder as _Feeder
+
+        try:
+            from commercial.models import CommercialCustomer
+            mdi_fids = set(
+                str(fid) for fid in
+                CommercialCustomer.objects.filter(
+                    feeder_id__in=self.feeder_ids, customer_type='MDI'
+                ).values_list('feeder_id', flat=True).distinct()
+            )
+        except Exception:
+            mdi_fids = set()
+
+        # Get voltage level per feeder
+        voltage_map = {
+            str(fid): vl
+            for fid, vl in _Feeder.objects.filter(id__in=self.feeder_ids)
+                                          .values_list('id', 'voltage_level')
+        }
+
+        feeders_perf = self.get_feeder_performance()
+
+        buckets = {
+            'MDI 33kV':     0.0,
+            'MDI 11kV':     0.0,
+            'Non-MDI 33kV': 0.0,
+            'Non-MDI 11kV': 0.0,
+        }
+        for f in feeders_perf:
+            fid     = str(f.get('id', ''))
+            energy  = float(f.get('energy_delivered', 0) or 0)
+            voltage = str(voltage_map.get(fid, '11kv')).lower()
+            is_mdi  = fid in mdi_fids
+            seg     = 'MDI' if is_mdi else 'Non-MDI'
+            vkey    = '33kV' if '33' in voltage else '11kV'
+            key     = f'{seg} {vkey}'
+            buckets[key] = buckets.get(key, 0.0) + energy
+
+        total = sum(buckets.values())
+
+        def _pct(v):
+            return round((v / total) * 100, 1) if total > 0 else 0
+
+        rows = [
+            {'label': k, 'energy_mwh': round(v, 2), 'pct': _pct(v)}
+            for k, v in buckets.items()
+        ]
+        return {
+            'total_energy_mwh': round(total, 2),
+            'rows': rows,
+            'mdi_total':  round(buckets['MDI 33kV'] + buckets['MDI 11kV'], 2),
+            'mdni_total': round(buckets['Non-MDI 33kV'] + buckets['Non-MDI 11kV'], 2),
+        }
+
+    def get_energy_md_nmd_mix(self):
+        """
+        MD (MDI) vs NMD (Non-MDI) % share of energy dispatched.
+        Includes target mix (60% MD / 40% NMD) vs actual.
+        """
+        pl_data     = self.get_energy_by_segment_pl()
+        total       = pl_data['total_energy_mwh']
+        md_actual   = pl_data['mdi_pct']
+        nmd_actual  = pl_data['mdni_pct']
+
+        return {
+            'total_energy_mwh': total,
+            'md_target_pct':    60.0,
+            'nmd_target_pct':   40.0,
+            'md_actual_pct':    md_actual,
+            'nmd_actual_pct':   nmd_actual,
+            'md_energy_mwh':    pl_data['mdi_energy_mwh'],
+            'nmd_energy_mwh':   pl_data['mdni_energy_mwh'],
+            'md_gap_pct':       round(md_actual - 60.0, 1),
+        }
+
+    def get_segment_compliance_trend(self):
+        """
+        Daily compliance % for each segment over the report period.
+        For each day: compute avg supply hrs vs target for MDI/Non-MDI Band A/Non-MDI Non-Band A,
+        then compute % of feeders that are 'on target or better' (>= 95%).
+        """
+        from common.models import Feeder as _Feeder
+        from django.db.models import Count
+
+        try:
+            from commercial.models import CommercialCustomer
+            mdi_fids = set(
+                str(fid) for fid in
+                CommercialCustomer.objects.filter(
+                    feeder_id__in=self.feeder_ids, customer_type='MDI'
+                ).values_list('feeder_id', flat=True).distinct()
+            )
+        except Exception:
+            mdi_fids = set()
+
+        # Get band per feeder
+        band_map = {
+            str(fid): (name or 'E').upper()
+            for fid, name in _Feeder.objects.filter(id__in=self.feeder_ids)
+                                            .values_list('id', 'band__name')
+        }
+
+        # Classify feeders into segments once
+        def _seg(fid_str):
+            if fid_str in mdi_fids:
+                return 'MDI'
+            if band_map.get(fid_str, 'E') == 'A':
+                return 'Non-MDI Band A'
+            return 'Non-MDI Non-Band A'
+
+        fid_strs = [str(fid) for fid in self.feeder_ids]
+        seg_by_fid = {fid: _seg(fid) for fid in fid_strs}
+
+        # Group feeder ids by segment
+        segs = {
+            'MDI':              [fid for fid, s in seg_by_fid.items() if s == 'MDI'],
+            'Non-MDI Band A':   [fid for fid, s in seg_by_fid.items() if s == 'Non-MDI Band A'],
+            'Non-MDI Non-Band A': [fid for fid, s in seg_by_fid.items() if s == 'Non-MDI Non-Band A'],
+        }
+
+        # Build daily series
+        import datetime as _dt
+        trend = []
+        current = self.from_date
+        while current <= self.to_date:
+            day_entry = {'date': current.strftime('%Y-%m-%d')}
+            for seg_name, fids in segs.items():
+                if not fids:
+                    day_entry[seg_name] = None
+                    continue
+                # Count hours on (load > 0) per feeder for this day
+                on_target_count = 0
+                for fid in fids:
+                    hrs_on = HourlyLoad.objects.filter(
+                        feeder_id=fid, date=current, load_mw__gt=0
+                    ).count()
+                    # Get band for this feeder
+                    band   = band_map.get(fid, 'E')
+                    target = BAND_SUPPLY_TARGETS.get(band, 8.0)
+                    pct    = (hrs_on / target) * 100 if target > 0 else 0
+                    if pct >= 95:
+                        on_target_count += 1
+                day_entry[seg_name] = round((on_target_count / len(fids)) * 100, 1)
+            trend.append(day_entry)
+            current += _dt.timedelta(days=1)
+
+        return {
+            'trend':    trend,
+            'segments': list(segs.keys()),
+        }
     def get_all_section_data(self, section_type, config=None):
         """Get data for a specific section type"""
         config = config or {}
@@ -1468,8 +1817,14 @@ class ReportDataService:
             ),
             'energy_delivered_chart': self.get_energy_trend,
             'service_band_summary': self.get_service_band_summary,
-            'dso_compliance_overview': self.get_dso_compliance_data,
-            'dso_compliance_table':    self.get_dso_compliance_data,
+            'dso_compliance_overview':      self.get_dso_compliance_data,
+            'dso_compliance_table':          self.get_dso_compliance_data,
+            'segment_compliance_summary':     self.get_segment_compliance_summary,
+            'feeder_segment_compliance':      self.get_feeder_segment_compliance,
+            'energy_by_segment_pl':           self.get_energy_by_segment_pl,
+            'segment_voltage_energy':         self.get_segment_voltage_energy,
+            'energy_md_nmd_mix':              self.get_energy_md_nmd_mix,
+            'segment_compliance_trend':       self.get_segment_compliance_trend,
             'custom_text': lambda: config,
             'gaps_improvements': lambda: config,
         }

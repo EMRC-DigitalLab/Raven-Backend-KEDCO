@@ -374,6 +374,7 @@ def generate_report_pdf(request):
             'orientation': data.get('orientation', 'portrait'),
             'company_name': request.data.get('company_name', 'KANO ELECTRICITY DISTRIBUTION COMPANY'),
             'sections': data.get('sections', []),
+            'theme': data.get('theme', {}),
         }
         
         # Generate PDF
@@ -570,6 +571,7 @@ def generate_report_data(request):
             'report_title': data.get('report_title', 'Performance Report'),
             'report_subtitle': data.get('report_subtitle', ''),
             'orientation': data.get('orientation', 'portrait'),
+            'theme': data.get('theme', {}),
             'company_name': company_name,
             'generated_at': timezone.now().isoformat(),
             'generated_by': user.get_full_name() or user.username,
@@ -614,6 +616,7 @@ def generate_report_html_preview(request):
             'orientation': request.data.get('orientation', 'portrait'),
             'company_name': request.data.get('company_name', 'KANO ELECTRICITY DISTRIBUTION COMPANY'),
             'sections': request.data.get('sections', []),
+            'theme': request.data.get('theme', {}),
         }
         
         pdf_generator = PDFGenerator(report_config, data_service)
@@ -629,6 +632,74 @@ def generate_report_html_preview(request):
             {"error": str(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+
+
+# =============================================================================
+# MANAGEMENT / ADMIN REPORT
+# =============================================================================
+
+@api_view(['POST'])
+def generate_management_report(request):
+    """
+    POST /api/reports/generate/management/
+
+    Generates a narrative management report (executive summary, RAG KPI dashboard,
+    reliability review, feeder performance, state analysis, service-band recovery
+    actions, priority issues, action plan).
+
+    Body:
+    {
+        "report_title":  "May 2026 11kV Management Report",      // optional
+        "report_subtitle": "",                                    // optional
+        "company_name":  "KANO ELECTRICITY DISTRIBUTION COMPANY",// optional
+        "theme":         { "primary_color": "#002050", ... },    // optional
+        "include_ai":    true,                                    // default true
+        "return_base64": false,                                   // default false (returns file download)
+        "filters": {
+            "from_date": "2026-05-01",
+            "to_date":   "2026-05-31",
+            ...
+        }
+    }
+    """
+    from .management_report import ManagementPDFGenerator
+    from .services import ReportDataService
+
+    filters = request.data.get('filters', {})
+    if not filters.get('from_date') or not filters.get('to_date'):
+        return Response(
+            {'error': 'from_date and to_date are required in filters'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        data_service = ReportDataService(filters, user=request.user)
+
+        report_config = {
+            'report_title':    request.data.get('report_title', 'Management Report'),
+            'report_subtitle': request.data.get('report_subtitle', ''),
+            'company_name':    request.data.get('company_name', 'KANO ELECTRICITY DISTRIBUTION COMPANY'),
+            'theme':           request.data.get('theme', {}),
+            'include_ai':      bool(request.data.get('include_ai', True)),
+        }
+
+        generator = ManagementPDFGenerator(report_config, data_service)
+
+        if request.data.get('return_base64', False):
+            pdf_b64  = generator.generate_pdf_base64()
+            filename = report_config['report_title'].replace(' ', '_') + '.pdf'
+            return Response({'pdf_base64': pdf_b64, 'filename': filename})
+
+        pdf_buffer = generator.generate_pdf()
+        filename   = report_config['report_title'].replace(' ', '_') + '.pdf'
+        response   = HttpResponse(pdf_buffer.read(), content_type='application/pdf')
+        response['Content-Disposition'] = f'attachment; filename="{filename}"'
+        return response
+
+    except Exception as exc:
+        logger.error('Management report generation failed: %s', exc)
+        import traceback; traceback.print_exc()
+        return Response({'error': str(exc)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 # =============================================================================

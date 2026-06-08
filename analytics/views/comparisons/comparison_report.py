@@ -236,7 +236,9 @@ def customer_compare_report(request):
     report_config = {
         'report_title':    report_title,
         'report_subtitle': f"{ctype_label} customers · {scope_label}",
-        'company_name':    'KANO ELECTRICITY DISTRIBUTION COMPANY',
+        'company_name':    body.get('company_name', 'KANO ELECTRICITY DISTRIBUTION COMPANY'),
+        'orientation':     body.get('orientation', 'landscape'),
+        'theme':           body.get('theme', {}),
         'sections':        sections,
     }
 
