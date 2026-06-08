@@ -296,7 +296,8 @@ _MGMT_SYSTEM_PROMPT = (
     "for KEDCO (Kano Electricity Distribution Company), a Nigerian electricity "
     "distribution company. You write clear, professional management commentary "
     "grounded in the actual data. Every response must be valid JSON only — "
-    "no markdown fences, no prose outside the JSON object."
+    "no markdown fences, no prose outside the JSON object. "
+    "Do not use em dashes (—) anywhere in your responses; use commas, full stops, or colons instead."
 )
 
 _SONNET_MODEL = 'claude-sonnet-4-6'
@@ -444,7 +445,7 @@ def generate_management_narrative(all_data: dict, period_label: str,
     """
     try:
         prompt = _build_narrative_prompt(all_data, period_label, company_name)
-        return _call_management_claude(prompt, max_tokens=4096)
+        return _call_management_claude(prompt, max_tokens=1500)
     except Exception as exc:
         logger.warning("Management narrative AI call failed: %s", exc)
         return _fallback_narrative()

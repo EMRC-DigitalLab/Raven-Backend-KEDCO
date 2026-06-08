@@ -643,10 +643,7 @@ def generate_management_report(request):
     """
     POST /api/reports/generate/management/
 
-    Queues a management PDF report for background generation and immediately
-    returns a job_id.  Poll GET /api/reports/generate/management/<job_id>/
-    every 3-5 seconds until state == SUCCESS, then use pdf_base64 to trigger
-    a client-side download.
+    Generates a management PDF report and streams it back directly.
 
     Body:
     {
@@ -654,22 +651,17 @@ def generate_management_report(request):
         "report_subtitle": "",                                       // optional
         "company_name":    "KANO ELECTRICITY DISTRIBUTION COMPANY", // optional
         "theme":           { "primary_color": "#002050", ... },     // optional
-        "include_ai":      true,                                     // default true
+        "include_ai":      false,                                    // default false
+        "return_base64":   false,                                    // default false
         "filters": {
             "from_date": "2026-05-01",
             "to_date":   "2026-05-31",
             ...
         }
     }
-
-    Response 202:
-    {
-        "job_id":     "<celery-uuid>",
-        "status_url": "/api/reports/generate/management/<job_id>/",
-        "message":    "Report queued. Poll status_url for progress."
-    }
     """
-    from .tasks import generate_management_report_task
+    from .management_report import ManagementPDFGenerator
+    from .services import ReportDataService
 
     filters = request.data.get('filters', {})
     if not filters.get('from_date') or not filters.get('to_date'):
@@ -678,32 +670,34 @@ def generate_management_report(request):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    report_config = {
-        'report_title':    request.data.get('report_title', 'Management Report'),
-        'report_subtitle': request.data.get('report_subtitle', ''),
-        'company_name':    request.data.get('company_name', 'KANO ELECTRICITY DISTRIBUTION COMPANY'),
-        'theme':           request.data.get('theme', {}),
-        'include_ai':      bool(request.data.get('include_ai', True)),
-    }
+    try:
+        data_service = ReportDataService(filters, user=request.user)
 
-    task = generate_management_report_task.apply_async(
-        kwargs={
-            'report_config': report_config,
-            'filters':       filters,
-            'user_id':       request.user.id,
-        },
-        queue='default',
-    )
+        report_config = {
+            'report_title':    request.data.get('report_title', 'Management Report'),
+            'report_subtitle': request.data.get('report_subtitle', ''),
+            'company_name':    request.data.get('company_name', 'KANO ELECTRICITY DISTRIBUTION COMPANY'),
+            'theme':           request.data.get('theme', {}),
+            'include_ai':      bool(request.data.get('include_ai', True)),
+        }
 
-    status_url = f'/api/reports/generate/management/{task.id}/'
-    return Response(
-        {
-            'job_id':     task.id,
-            'status_url': status_url,
-            'message':    'Report queued. Poll status_url for progress.',
-        },
-        status=status.HTTP_202_ACCEPTED,
-    )
+        generator = ManagementPDFGenerator(report_config, data_service)
+
+        if request.data.get('return_base64', False):
+            pdf_b64  = generator.generate_pdf_base64()
+            filename = report_config['report_title'].replace(' ', '_') + '.pdf'
+            return Response({'pdf_base64': pdf_b64, 'filename': filename})
+
+        pdf_buffer = generator.generate_pdf()
+        filename   = report_config['report_title'].replace(' ', '_') + '.pdf'
+        response   = HttpResponse(pdf_buffer.read(), content_type='application/pdf')
+        response['Content-Disposition'] = f'attachment; filename="{filename}"'
+        return response
+
+    except Exception as exc:
+        logger.error('Management report generation failed: %s', exc)
+        import traceback; traceback.print_exc()
+        return Response({'error': str(exc)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @api_view(['GET'])
