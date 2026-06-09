@@ -4161,8 +4161,12 @@ class PDFGenerator:
         cover_html = ""
         page_number = 1
         if cover_section:
-            data = self.data_service.get_all_section_data('cover_page', cover_section.get('config', {}))
-            cover_html = self.SECTION_RENDERERS['cover_page'](data, self.context)
+            if self.orientation == 'portrait':
+                from reports.management_report import render_mgmt_cover
+                cover_html = render_mgmt_cover(self.context)
+            else:
+                data = self.data_service.get_all_section_data('cover_page', cover_section.get('config', {}))
+                cover_html = self.SECTION_RENDERERS['cover_page'](data, self.context)
             page_number = 2  # TOC is always page 2
 
         toc_page_number = page_number
@@ -4229,12 +4233,17 @@ class PDFGenerator:
         back_html   = render_back_page(self.context)
         sections_html = cover_html + toc_html + content_html + back_html
 
-        orientation_css = PORTRAIT_STYLES if self.orientation == 'portrait' else LANDSCAPE_STYLES
         theme_css = _build_theme_css(
             self.theme['primary_color'],
             self.theme['accent_color'],
             self.theme['text_color'],
         )
+
+        if self.orientation == 'portrait':
+            from reports.management_report import MANAGEMENT_STYLES
+            base_css = MANAGEMENT_STYLES
+        else:
+            base_css = BASE_STYLES + LANDSCAPE_STYLES
 
         html = f"""
         <!DOCTYPE html>
@@ -4244,8 +4253,7 @@ class PDFGenerator:
             <meta name="viewport" content="width=device-width, initial-scale=1.0">
             <title>{self.context['report_title']}</title>
             <style>
-                {BASE_STYLES}
-                {orientation_css}
+                {base_css}
                 {theme_css}
             </style>
         </head>

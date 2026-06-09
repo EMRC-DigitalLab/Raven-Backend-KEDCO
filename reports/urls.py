@@ -29,6 +29,7 @@ urlpatterns = [
     path('generate/data/', views.generate_report_data, name='generate-data'),        # new — JSON for client-side PDF
     path('generate/html-preview/', views.generate_report_html_preview, name='generate-html-preview'),
     path('generate/management/', views.generate_management_report, name='generate-management'),
+    path('generate/management/preview/', views.generate_management_html_preview, name='generate-management-preview'),
     path('generate/management/<str:job_id>/', views.management_report_status, name='management-report-status'),
     
     # History

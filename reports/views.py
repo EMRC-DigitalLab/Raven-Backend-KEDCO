@@ -700,6 +700,39 @@ def generate_management_report(request):
         return Response({'error': str(exc)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
+@api_view(['POST'])
+def generate_management_html_preview(request):
+    """
+    POST /api/reports/generate/management/preview/
+    Returns the raw HTML of the management report for frontend preview.
+    Same body as /generate/management/ — include_ai defaults to false for speed.
+    """
+    from .management_report import ManagementPDFGenerator
+    from .services import ReportDataService
+
+    filters = request.data.get('filters', {})
+    if not filters.get('from_date') or not filters.get('to_date'):
+        return Response(
+            {'error': 'from_date and to_date are required in filters'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        data_service = ReportDataService(filters, user=request.user)
+        report_config = {
+            'report_title':    request.data.get('report_title', 'Management Report'),
+            'report_subtitle': request.data.get('report_subtitle', ''),
+            'company_name':    request.data.get('company_name', 'KANO ELECTRICITY DISTRIBUTION COMPANY'),
+            'theme':           request.data.get('theme', {}),
+            'include_ai':      False,
+        }
+        generator = ManagementPDFGenerator(report_config, data_service)
+        return Response({'html': generator.generate_html()})
+    except Exception as exc:
+        logger.error('Management report preview failed: %s', exc)
+        return Response({'error': str(exc)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
 @api_view(['GET'])
 def management_report_status(request, job_id):
     """
