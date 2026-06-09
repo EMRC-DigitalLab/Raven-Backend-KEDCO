@@ -706,16 +706,25 @@ def render_mgmt_reliability_review(narrative: dict, data: dict,
     intro        = narrative.get("reliability_intro", "")
     implications = narrative.get("interruption_implications", [])
 
+    # Build a lookup from the AI implications list keyed by issue/category name
+    impl_lookup = {}
+    for imp in (implications or []):
+        key = imp.get('issue', '').strip().upper()
+        if key:
+            impl_lookup[key] = imp.get('implication', '') or imp.get('response', '')
+
     # ── Page 1: Interruption breakdown table ──
     rows_html = ""
     for item in (interr_data or []):
+        cat = item.get('type', '—')
+        note = impl_lookup.get(cat.strip().upper(), item.get('management_note', ''))
         rows_html += f"""
         <tr>
-            <td><strong>{item.get('type', '—')}</strong></td>
+            <td><strong>{cat}</strong></td>
             <td style="text-align:right">{item.get('count', 0):,}</td>
             <td style="text-align:right">{item.get('total_hours', 0)} hrs</td>
             <td style="text-align:right">{item.get('avg_duration', 0)} hrs</td>
-            <td style="line-height:1.4;">{item.get('management_note', '')}</td>
+            <td style="line-height:1.4;">{note}</td>
         </tr>"""
 
     intro_html = f'<p class="narrative">{intro}</p>' if intro else ""
@@ -1173,15 +1182,25 @@ class ManagementPDFGenerator:
         except Exception:
             bands = []
 
-        # Previous-period comparison data (if available via filters)
+        # Previous-period comparison — same-length window immediately before current
         previous = {}
         try:
+            import datetime
+            from reports.services import ReportDataService as _RDS
+            period_days = (ds.to_date - ds.from_date).days + 1
+            prev_to     = ds.from_date - datetime.timedelta(days=1)
+            prev_from   = prev_to - datetime.timedelta(days=period_days - 1)
             prev_filters = dict(ds.filters)
-            compare_cfg  = {'comparison_type': 'previous_period'}
-            period_data  = ds.get_period_comparison_data(compare_cfg, user=None)
-            if period_data and isinstance(period_data, dict):
-                prev_m = period_data.get('previous_period', {}).get('metrics', {})
-                previous = prev_m
+            prev_filters['from_date'] = str(prev_from)
+            prev_filters['to_date']   = str(prev_to)
+            prev_ds  = _RDS(prev_filters)
+            prev_tech = prev_ds.get_technical_metrics()
+            previous = {
+                'hours_of_supply':    prev_tech.get('hours_of_supply'),
+                'average_load':       prev_tech.get('average_load'),
+                'energy_delivered':   prev_tech.get('energy_delivered'),
+                'total_interruptions': prev_tech.get('total_interruptions'),
+            }
         except Exception:
             pass
 

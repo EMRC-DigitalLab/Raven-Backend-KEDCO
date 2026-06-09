@@ -4239,11 +4239,7 @@ class PDFGenerator:
             self.theme['text_color'],
         )
 
-        if self.orientation == 'portrait':
-            from reports.management_report import MANAGEMENT_STYLES
-            base_css = MANAGEMENT_STYLES
-        else:
-            base_css = BASE_STYLES + LANDSCAPE_STYLES
+        orientation_css = PORTRAIT_STYLES if self.orientation == 'portrait' else LANDSCAPE_STYLES
 
         html = f"""
         <!DOCTYPE html>
@@ -4253,7 +4249,8 @@ class PDFGenerator:
             <meta name="viewport" content="width=device-width, initial-scale=1.0">
             <title>{self.context['report_title']}</title>
             <style>
-                {base_css}
+                {BASE_STYLES}
+                {orientation_css}
                 {theme_css}
             </style>
         </head>
