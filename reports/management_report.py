@@ -445,7 +445,7 @@ def generate_management_narrative(all_data: dict, period_label: str,
     """
     try:
         prompt = _build_narrative_prompt(all_data, period_label, company_name)
-        return _call_management_claude(prompt, max_tokens=6000)
+        return _call_management_claude(prompt, max_tokens=8000)
     except Exception as exc:
         logger.warning("Management narrative AI call failed: %s", exc)
         return _fallback_narrative()
