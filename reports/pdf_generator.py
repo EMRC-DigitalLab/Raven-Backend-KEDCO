@@ -884,6 +884,28 @@ PORTRAIT_STYLES = """
     padding: 4px 6px !important;
     white-space: normal !important;
 }
+
+/* Metric cards — 2 per row in portrait instead of 3 */
+.metric-card {
+    width: 47% !important;
+    margin: 0 1% 2% 1% !important;
+}
+
+.metric-value {
+    font-size: 22px !important;
+}
+
+/* Reliability KPI cards — 2 per row */
+.reliability-kpi-card {
+    width: 47% !important;
+    margin: 0 1% 2% 1% !important;
+}
+
+/* Infrastructure summary cards — 2 per row */
+.summary-card {
+    width: 47% !important;
+    margin: 0 1% 2% 1% !important;
+}
 """
 
 
