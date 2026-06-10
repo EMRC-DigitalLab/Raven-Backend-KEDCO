@@ -2815,15 +2815,21 @@ def render_commercial_comparison_summary(data, context, page_number):
         <div style="background:#f8fafc;border-radius:10px;padding:14px 16px;
                     border:1px solid rgba(0,32,80,0.08);">
             <div style="font-size:8px;font-weight:700;text-transform:uppercase;
-                        letter-spacing:1px;color:#002050;opacity:0.55;margin-bottom:8px;">
+                        letter-spacing:1px;color:#002050;opacity:0.55;margin-bottom:10px;">
                 {label}
             </div>
-            <div style="font-size:18px;font-weight:800;color:#002050;margin-bottom:4px;">
+            <div style="font-size:8px;font-weight:600;text-transform:uppercase;
+                        letter-spacing:0.8px;color:#64748b;margin-bottom:3px;">Current</div>
+            <div style="font-size:17px;font-weight:800;color:#002050;margin-bottom:10px;">
                 {prefix}{current_val}
             </div>
-            <div style="display:flex;align-items:center;gap:8px;">
-                <span style="font-size:9px;color:#64748b;">prev {prefix}{prev_val}</span>
-                <span style="font-size:9px;font-weight:700;color:{variance_color};">{variance}</span>
+            <div style="border-top:1px solid rgba(0,32,80,0.08);padding-top:8px;">
+                <div style="font-size:8px;font-weight:600;text-transform:uppercase;
+                            letter-spacing:0.8px;color:#64748b;margin-bottom:3px;">Previous</div>
+                <div style="font-size:14px;font-weight:700;color:#475569;margin-bottom:4px;">
+                    {prefix}{prev_val}
+                </div>
+                <div style="font-size:12px;font-weight:700;color:{variance_color};">{variance}</div>
             </div>
         </div>"""
 
