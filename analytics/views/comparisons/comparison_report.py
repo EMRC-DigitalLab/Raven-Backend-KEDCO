@@ -228,10 +228,10 @@ def customer_compare_report(request):
     sections = [
         {'section_type': 'cover_page',                    'config': {}},
         {'section_type': 'commercial_comparison_summary', 'config': {}},
-        {'section_type': 'commercial_comparison_table',   'config': {}},
     ]
     if include_insights and comparison.get('ai_insights') and 'error' not in comparison.get('ai_insights', {}):
         sections.append({'section_type': 'commercial_comparison_insights', 'config': {}})
+    sections.append({'section_type': 'commercial_comparison_table', 'config': {}})
 
     report_config = {
         'report_title':    report_title,
