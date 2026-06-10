@@ -374,6 +374,7 @@ def generate_report_pdf(request):
             'orientation': data.get('orientation', 'portrait'),
             'company_name': request.data.get('company_name', 'KANO ELECTRICITY DISTRIBUTION COMPANY'),
             'sections': data.get('sections', []),
+            'theme': data.get('theme', {}),
         }
         
         # Generate PDF
@@ -570,6 +571,7 @@ def generate_report_data(request):
             'report_title': data.get('report_title', 'Performance Report'),
             'report_subtitle': data.get('report_subtitle', ''),
             'orientation': data.get('orientation', 'portrait'),
+            'theme': data.get('theme', {}),
             'company_name': company_name,
             'generated_at': timezone.now().isoformat(),
             'generated_by': user.get_full_name() or user.username,
@@ -614,6 +616,7 @@ def generate_report_html_preview(request):
             'orientation': request.data.get('orientation', 'portrait'),
             'company_name': request.data.get('company_name', 'KANO ELECTRICITY DISTRIBUTION COMPANY'),
             'sections': request.data.get('sections', []),
+            'theme': request.data.get('theme', {}),
         }
         
         pdf_generator = PDFGenerator(report_config, data_service)
@@ -629,6 +632,167 @@ def generate_report_html_preview(request):
             {"error": str(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+
+
+# =============================================================================
+# MANAGEMENT / ADMIN REPORT
+# =============================================================================
+
+@api_view(['POST'])
+def generate_management_report(request):
+    """
+    POST /api/reports/generate/management/
+
+    Generates a management PDF report and streams it back directly.
+
+    Body:
+    {
+        "report_title":    "May 2026 11kV Management Report",       // optional
+        "report_subtitle": "",                                       // optional
+        "company_name":    "KANO ELECTRICITY DISTRIBUTION COMPANY", // optional
+        "theme":           { "primary_color": "#002050", ... },     // optional
+        "include_ai":      false,                                    // default false
+        "return_base64":   false,                                    // default false
+        "filters": {
+            "from_date": "2026-05-01",
+            "to_date":   "2026-05-31",
+            ...
+        }
+    }
+    """
+    from .management_report import ManagementPDFGenerator
+    from .services import ReportDataService
+
+    filters = request.data.get('filters', {})
+    if not filters.get('from_date') or not filters.get('to_date'):
+        return Response(
+            {'error': 'from_date and to_date are required in filters'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        data_service = ReportDataService(filters, user=request.user)
+
+        report_config = {
+            'report_title':    request.data.get('report_title', 'Management Report'),
+            'report_subtitle': request.data.get('report_subtitle', ''),
+            'company_name':    request.data.get('company_name', 'KANO ELECTRICITY DISTRIBUTION COMPANY'),
+            'theme':           request.data.get('theme', {}),
+            'include_ai':      bool(request.data.get('include_ai', True)),
+        }
+
+        generator = ManagementPDFGenerator(report_config, data_service)
+
+        if request.data.get('return_base64', False):
+            pdf_b64  = generator.generate_pdf_base64()
+            filename = report_config['report_title'].replace(' ', '_') + '.pdf'
+            return Response({'pdf_base64': pdf_b64, 'filename': filename})
+
+        pdf_buffer = generator.generate_pdf()
+        filename   = report_config['report_title'].replace(' ', '_') + '.pdf'
+        response   = HttpResponse(pdf_buffer.read(), content_type='application/pdf')
+        response['Content-Disposition'] = f'attachment; filename="{filename}"'
+        return response
+
+    except Exception as exc:
+        logger.error('Management report generation failed: %s', exc)
+        import traceback; traceback.print_exc()
+        return Response({'error': str(exc)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['POST'])
+def generate_management_html_preview(request):
+    """
+    POST /api/reports/generate/management/preview/
+    Returns the raw HTML of the management report for frontend preview.
+    Same body as /generate/management/ — include_ai defaults to false for speed.
+    """
+    from .management_report import ManagementPDFGenerator
+    from .services import ReportDataService
+
+    filters = request.data.get('filters', {})
+    if not filters.get('from_date') or not filters.get('to_date'):
+        return Response(
+            {'error': 'from_date and to_date are required in filters'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        data_service = ReportDataService(filters, user=request.user)
+        report_config = {
+            'report_title':    request.data.get('report_title', 'Management Report'),
+            'report_subtitle': request.data.get('report_subtitle', ''),
+            'company_name':    request.data.get('company_name', 'KANO ELECTRICITY DISTRIBUTION COMPANY'),
+            'theme':           request.data.get('theme', {}),
+            'include_ai':      False,
+        }
+        generator = ManagementPDFGenerator(report_config, data_service)
+        return Response({'html': generator.generate_html()})
+    except Exception as exc:
+        logger.error('Management report preview failed: %s', exc)
+        return Response({'error': str(exc)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['GET'])
+def management_report_status(request, job_id):
+    """
+    GET /api/reports/generate/management/<job_id>/
+
+    Poll until state == SUCCESS, then decode pdf_base64 and trigger a download.
+
+    Response while running:
+    {
+        "job_id": "...",
+        "state":  "PROGRESS",
+        "stage":  "Rendering PDF"
+    }
+
+    Response on success:
+    {
+        "job_id":     "...",
+        "state":      "SUCCESS",
+        "pdf_base64": "<base64>",
+        "filename":   "May_2026_Management_Report.pdf"
+    }
+
+    Response on failure:
+    {
+        "job_id": "...",
+        "state":  "FAILURE",
+        "error":  "..."
+    }
+    """
+    from celery.result import AsyncResult
+
+    result = AsyncResult(job_id)
+    state  = result.state
+
+    if state == 'PROGRESS':
+        meta = result.info or {}
+        return Response({
+            'job_id': job_id,
+            'state':  'PROGRESS',
+            'stage':  meta.get('stage', 'Working…'),
+        })
+
+    if state == 'SUCCESS':
+        res = result.result or {}
+        return Response({
+            'job_id':     job_id,
+            'state':      'SUCCESS',
+            'pdf_base64': res.get('pdf_base64'),
+            'filename':   res.get('filename', 'Management_Report.pdf'),
+        })
+
+    if state == 'FAILURE':
+        return Response({
+            'job_id': job_id,
+            'state':  'FAILURE',
+            'error':  str(result.result),
+        })
+
+    # PENDING / STARTED / REVOKED
+    return Response({'job_id': job_id, 'state': state})
 
 
 # =============================================================================

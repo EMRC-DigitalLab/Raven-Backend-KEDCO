@@ -1,4 +1,4 @@
-# reports/pdf_generator.py
+﻿# reports/pdf_generator.py
 """
 PDF generation service.
 Primary engine: Playwright (headless Chromium) — produces output identical to
@@ -71,14 +71,20 @@ SECTION_DISPLAY_NAMES = {
     # Commercial Comparison
     'commercial_comparison_summary':  'Comparison Summary',
     'commercial_comparison_table':    'Customer Comparison Detail',
-    'commercial_comparison_insights': 'AI Insights',
+    'commercial_comparison_insights': 'ARIA Insights',
     # Financial
     'financial_overview': 'Financial Overview',
     'opex_by_category':   'OPEX by Category',
     'opex_by_district':   'OPEX by District',
     # DSO Compliance
     'dso_compliance_overview': 'DSO Compliance Overview',
-    'dso_compliance_table':    'DSO Compliance by Station',
+    'dso_compliance_table':         'DSO Compliance by Station',
+    'segment_compliance_summary':   'Compliance by Business Segment',
+    'feeder_segment_compliance':    'Feeder Compliance by Segment',
+    'energy_by_segment_pl':         'Energy by P&L Segment',
+    'segment_voltage_energy':       'Energy by Segment & Voltage',
+    'energy_md_nmd_mix':            'MD vs NMD Energy Mix',
+    'segment_compliance_trend':     'Segment Compliance Trend',
 }
 
 
@@ -87,8 +93,6 @@ SECTION_DISPLAY_NAMES = {
 # =============================================================================
 
 BASE_STYLES = """
-@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap');
-
 @page {
     margin: 0;
 }
@@ -104,7 +108,7 @@ BASE_STYLES = """
 }
 
 body {
-    font-family: 'Outfit', 'Helvetica', 'Arial', sans-serif;
+    font-family: -apple-system, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
     background-color: #ffffff;
     color: #002050;
     font-size: 12px;
@@ -854,6 +858,54 @@ PORTRAIT_STYLES = """
 @page {
     size: A4 portrait;
 }
+
+/* Force every page div (including landscape-forced ones) to portrait dimensions */
+.page,
+.page-landscape {
+    width: 210mm !important;
+    height: 297mm !important;
+    padding: 18px 28px !important;
+}
+
+/* Cover and back pages are also portrait height */
+.cover-page {
+    min-height: 297mm !important;
+    height: 297mm !important;
+}
+
+/* Tighten table cells so wide tables fit in 210mm portrait width */
+.table-container thead th {
+    font-size: 9px !important;
+    padding: 6px 6px !important;
+}
+
+.table-container tbody td {
+    font-size: 9px !important;
+    padding: 4px 6px !important;
+    white-space: normal !important;
+}
+
+/* Metric cards — 2 per row in portrait instead of 3 */
+.metric-card {
+    width: 47% !important;
+    margin: 0 1% 2% 1% !important;
+}
+
+.metric-value {
+    font-size: 22px !important;
+}
+
+/* Reliability KPI cards — 2 per row */
+.reliability-kpi-card {
+    width: 47% !important;
+    margin: 0 1% 2% 1% !important;
+}
+
+/* Infrastructure summary cards — 2 per row */
+.summary-card {
+    width: 47% !important;
+    margin: 0 1% 2% 1% !important;
+}
 """
 
 
@@ -1465,10 +1517,30 @@ def render_service_band_summary(data, context, page_number):
 
 
 def render_state_performance_table(data, context, page_number):
-    """Render state performance table HTML"""
-    rows_html = ""
-    for state in data:
-        rows_html += f"""
+    """Render state performance table — paginated so rows never overflow the page."""
+    header_html = """
+        <colgroup>
+            <col style="width:28%">
+            <col style="width:12%">
+            <col style="width:18%">
+            <col style="width:14%">
+            <col style="width:14%">
+            <col style="width:14%">
+        </colgroup>
+        <thead>
+            <tr>
+                <th>State</th>
+                <th style="text-align:right;">Feeders</th>
+                <th style="text-align:right;">Avg Supply (hrs)</th>
+                <th style="text-align:right;">Availability</th>
+                <th style="text-align:right;">Interruptions</th>
+                <th style="text-align:right;">Peak Load</th>
+            </tr>
+        </thead>"""
+
+    row_strings = []
+    for state in (data or []):
+        row_strings.append(f"""
         <tr>
             <td>{state['state_name']}</td>
             <td style="text-align:right;">{state['feeder_count']:,}</td>
@@ -1476,59 +1548,38 @@ def render_state_performance_table(data, context, page_number):
             <td style="text-align:right;">{float(state['availability_percentage']):,.1f}%</td>
             <td style="text-align:right;">{state['interruptions']:,}</td>
             <td style="text-align:right;">{float(state['peak_load']):,.2f} MW</td>
-        </tr>
-        """
+        </tr>""")
 
-    return f"""
-    <div class="page">
-        <div class="page-content">
-            <div class="header">
-                <div class="company-name">{context.get('company_name', '')} | {context.get('report_scope', '')}</div>
-                <div class="date">{context.get('report_date', '')}</div>
-            </div>
-
-            <h1 class="page-title">State Performance</h1>
-
-            <div class="table-container">
-                <table>
-                    <colgroup>
-                        <col style="width:28%">
-                        <col style="width:12%">
-                        <col style="width:18%">
-                        <col style="width:14%">
-                        <col style="width:14%">
-                        <col style="width:14%">
-                    </colgroup>
-                    <thead>
-                        <tr>
-                            <th>State</th>
-                            <th style="text-align:right;">Feeders</th>
-                            <th style="text-align:right;">Avg Supply (hrs)</th>
-                            <th style="text-align:right;">Availability</th>
-                            <th style="text-align:right;">Interruptions</th>
-                            <th style="text-align:right;">Peak Load</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {rows_html}
-                    </tbody>
-                </table>
-            </div>
-        </div>
-
-        <div class="footer">
-            <img src="{context.get('footer_logo_url', '')}" alt="Powered by EMRC" />
-            <div class="page-number">{page_number}</div>
-        </div>
-    </div>
-    """
+    return _paginate_table(row_strings, header_html, 'State Performance', context, page_number, max_rows=20)
 
 
 def render_district_performance_table(data, context, page_number):
-    """Render district performance table HTML"""
-    rows_html = ""
-    for district in data:
-        rows_html += f"""
+    """Render district performance table — paginated so rows never overflow the page."""
+    header_html = """
+        <colgroup>
+            <col style="width:24%">
+            <col style="width:16%">
+            <col style="width:10%">
+            <col style="width:16%">
+            <col style="width:12%">
+            <col style="width:11%">
+            <col style="width:11%">
+        </colgroup>
+        <thead>
+            <tr>
+                <th>District</th>
+                <th>State</th>
+                <th style="text-align:right;">Feeders</th>
+                <th style="text-align:right;">Avg Supply (hrs)</th>
+                <th style="text-align:right;">Availability</th>
+                <th style="text-align:right;">Interruptions</th>
+                <th style="text-align:right;">Peak Load</th>
+            </tr>
+        </thead>"""
+
+    row_strings = []
+    for district in (data or []):
+        row_strings.append(f"""
         <tr>
             <td>{district['district_name']}</td>
             <td>{district['state_name']}</td>
@@ -1537,54 +1588,9 @@ def render_district_performance_table(data, context, page_number):
             <td style="text-align:right;">{float(district['availability_percentage']):,.1f}%</td>
             <td style="text-align:right;">{district['interruptions']:,}</td>
             <td style="text-align:right;">{float(district['peak_load']):,.2f} MW</td>
-        </tr>
-        """
+        </tr>""")
 
-    return f"""
-    <div class="page">
-        <div class="page-content">
-            <div class="header">
-                <div class="company-name">{context.get('company_name', '')} | {context.get('report_scope', '')}</div>
-                <div class="date">{context.get('report_date', '')}</div>
-            </div>
-
-            <h1 class="page-title">District Performance</h1>
-
-            <div class="table-container">
-                <table>
-                    <colgroup>
-                        <col style="width:24%">
-                        <col style="width:16%">
-                        <col style="width:10%">
-                        <col style="width:16%">
-                        <col style="width:12%">
-                        <col style="width:11%">
-                        <col style="width:11%">
-                    </colgroup>
-                    <thead>
-                        <tr>
-                            <th>District</th>
-                            <th>State</th>
-                            <th style="text-align:right;">Feeders</th>
-                            <th style="text-align:right;">Avg Supply (hrs)</th>
-                            <th style="text-align:right;">Availability</th>
-                            <th style="text-align:right;">Interruptions</th>
-                            <th style="text-align:right;">Peak Load</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {rows_html}
-                    </tbody>
-                </table>
-            </div>
-        </div>
-
-        <div class="footer">
-            <img src="{context.get('footer_logo_url', '')}" alt="Powered by EMRC" />
-            <div class="page-number">{page_number}</div>
-        </div>
-    </div>
-    """
+    return _paginate_table(row_strings, header_html, 'District Performance', context, page_number, max_rows=18)
 
 
 def render_custom_text(data, context, page_number):
@@ -1955,10 +1961,16 @@ def render_hours_of_supply_chart(data, context, page_number):
     values      = [float(d.get('hours') or 0) for d in curr_items]
     prev_values = [float(d.get('hours') or 0) for d in prev_items]
 
-    chart_svg    = _render_svg_line_chart(
-        curr_items, 'hours', 'hrs',
-        prev_data_points=prev_items, curr_label=curr_label, prev_label=prev_label,
-    )
+    chart_type = data.get('_chart_type', 'line') if isinstance(data, dict) else 'line'
+    if chart_type == 'bar':
+        chart_svg = _render_svg_bar_chart(curr_items, 'hours', 'hrs')
+    elif chart_type == 'table_only':
+        chart_svg = ''
+    else:
+        chart_svg = _render_svg_line_chart(
+            curr_items, 'hours', 'hrs',
+            prev_data_points=prev_items, curr_label=curr_label, prev_label=prev_label,
+        )
     summary_html = _trend_summary_row(values, 'hrs', prev_values=prev_values, prev_label=prev_label)
     left_rows, right_rows = _split_trend_rows(curr_items, 'date', 'hours', 'hrs')
 
@@ -1980,9 +1992,7 @@ def render_hours_of_supply_chart(data, context, page_number):
 
             <h1 class="page-title">Hours of Supply Trend</h1>
 
-            <div style="background:#f8fafc;border-radius:12px;padding:12px 14px;margin-bottom:8px;">
-                {chart_svg}
-            </div>
+            {f'<div style="background:#f8fafc;border-radius:12px;padding:12px 14px;margin-bottom:8px;">{chart_svg}</div>' if chart_svg else ''}
 
             {summary_html}
 
@@ -2020,10 +2030,16 @@ def render_load_trend_chart(data, context, page_number):
     values      = [float(d.get('value') or 0) for d in curr_items]
     prev_values = [float(d.get('value') or 0) for d in prev_items]
 
-    chart_svg    = _render_svg_line_chart(
-        curr_items, 'value', 'MW', color='#1a5276',
-        prev_data_points=prev_items, curr_label=curr_label, prev_label=prev_label,
-    )
+    chart_type = data.get('_chart_type', 'line') if isinstance(data, dict) else 'line'
+    if chart_type == 'bar':
+        chart_svg = _render_svg_bar_chart(curr_items, 'value', 'MW')
+    elif chart_type == 'table_only':
+        chart_svg = ''
+    else:
+        chart_svg = _render_svg_line_chart(
+            curr_items, 'value', 'MW', color='#1a5276',
+            prev_data_points=prev_items, curr_label=curr_label, prev_label=prev_label,
+        )
     summary_html = _trend_summary_row(values, 'MW', prev_values=prev_values, prev_label=prev_label)
     left_rows, right_rows = _split_trend_rows(curr_items, 'date', 'value', 'MW')
 
@@ -2045,9 +2061,7 @@ def render_load_trend_chart(data, context, page_number):
 
             <h1 class="page-title">Load Trend</h1>
 
-            <div style="background:#f8fafc;border-radius:12px;padding:12px 14px;margin-bottom:8px;">
-                {chart_svg}
-            </div>
+            {f'<div style="background:#f8fafc;border-radius:12px;padding:12px 14px;margin-bottom:8px;">{chart_svg}</div>' if chart_svg else ''}
 
             {summary_html}
 
@@ -2084,7 +2098,13 @@ def render_energy_delivered_chart(data, context, page_number):
     values      = [float(d.get('value') or 0) for d in curr_items]
     prev_values = [float(d.get('value') or 0) for d in prev_items]
 
-    chart_svg    = _render_svg_bar_chart(curr_items, 'value', 'MWh')
+    chart_type = data.get('_chart_type', 'bar') if isinstance(data, dict) else 'bar'
+    if chart_type == 'line':
+        chart_svg = _render_svg_line_chart(curr_items, 'value', 'MWh')
+    elif chart_type == 'table_only':
+        chart_svg = ''
+    else:
+        chart_svg = _render_svg_bar_chart(curr_items, 'value', 'MWh')
     summary_html = _trend_summary_row(values, 'MWh', prev_values=prev_values, prev_label=prev_label)
     left_rows, right_rows = _split_trend_rows(curr_items, 'date', 'value', 'MWh')
 
@@ -2106,9 +2126,7 @@ def render_energy_delivered_chart(data, context, page_number):
 
             <h1 class="page-title">Energy Delivered Trend</h1>
 
-            <div style="background:#f8fafc;border-radius:12px;padding:12px 14px;margin-bottom:8px;">
-                {chart_svg}
-            </div>
+            {f'<div style="background:#f8fafc;border-radius:12px;padding:12px 14px;margin-bottom:8px;">{chart_svg}</div>' if chart_svg else ''}
 
             {summary_html}
 
@@ -2767,6 +2785,57 @@ def render_commercial_comparison_summary(data, context, page_number):
         for label, count in trend_d.items() if count > 0
     )
 
+    var_color = "#22c55e" if (var_pct or 0) >= 0 else "#ef4444"
+    bv_color  = "#22c55e" if bv >= 0 else "#ef4444"
+
+    trend_colors = {
+        'Major Positive Trend': '#15803d',
+        'Positive Trend':       '#22c55e',
+        'Moderated Trend':      '#f59e0b',
+        'Declined Trend':       '#f97316',
+        'Major Declined Trend': '#ef4444',
+        'No Previous Data':     '#94a3b8',
+        'No Current Data':      '#94a3b8',
+    }
+    trend_badges = "".join(
+        f'<div style="display:flex;align-items:center;justify-content:space-between;'
+        f'padding:7px 12px;border-radius:7px;margin-bottom:5px;'
+        f'background:rgba(0,32,80,0.04);">'
+        f'<div style="display:flex;align-items:center;gap:8px;">'
+        f'<span style="width:8px;height:8px;border-radius:50%;background:{trend_colors.get(label,"#94a3b8")};display:inline-block;flex-shrink:0;"></span>'
+        f'<span style="font-size:10.5px;color:#1e293b;">{label}</span>'
+        f'</div>'
+        f'<span style="font-size:12px;font-weight:700;color:#002050;">{count}</span>'
+        f'</div>'
+        for label, count in trend_d.items() if count > 0
+    )
+
+    def _kpi_card(label, current_val, prev_val, variance, variance_color, prefix=''):
+        return f"""
+        <div style="background:#f8fafc;border-radius:10px;padding:14px 16px;
+                    border:1px solid rgba(0,32,80,0.08);">
+            <div style="font-size:8px;font-weight:700;text-transform:uppercase;
+                        letter-spacing:1px;color:#002050;opacity:0.55;margin-bottom:10px;">
+                {label}
+            </div>
+            <div style="font-size:8px;font-weight:600;text-transform:uppercase;
+                        letter-spacing:0.8px;color:#64748b;margin-bottom:3px;">Current</div>
+            <div style="font-size:17px;font-weight:800;color:#002050;margin-bottom:10px;">
+                {prefix}{current_val}
+            </div>
+            <div style="border-top:1px solid rgba(0,32,80,0.08);padding-top:8px;">
+                <div style="font-size:8px;font-weight:600;text-transform:uppercase;
+                            letter-spacing:0.8px;color:#64748b;margin-bottom:3px;">Previous</div>
+                <div style="font-size:14px;font-weight:700;color:#475569;margin-bottom:4px;">
+                    {prefix}{prev_val}
+                </div>
+                <div style="font-size:12px;font-weight:700;color:{variance_color};">{variance}</div>
+            </div>
+        </div>"""
+
+    kwh_var_str = var_str
+    bv_str = f"&#8358;{abs(bv):,.0f}" + (" surplus" if bv >= 0 else " deficit")
+
     return f"""
     <div class="page">
         <div class="page-content">
@@ -2774,45 +2843,62 @@ def render_commercial_comparison_summary(data, context, page_number):
                 <div class="company-name">{context.get('company_name', '')} | {context.get('report_scope', '')}</div>
                 <div class="date">{context.get('report_date', '')}</div>
             </div>
-            <h1 class="page-title">Customer Consumption Comparison — Summary</h1>
-            <div class="reliability-highlight">
-                <h2>{ctype_label} Customers &mdash; {scope_label}</h2>
-                <p>Current: {cur_per.get('from_date')} to {cur_per.get('to_date')} &nbsp;|&nbsp;
-                   Previous: {prev_per.get('from_date')} to {prev_per.get('to_date')}</p>
+            <h1 class="page-title">Consumption Comparison Summary</h1>
+
+            <!-- Period header -->
+            <div style="background:#002050;border-radius:10px;padding:14px 20px;
+                        margin-bottom:16px;display:flex;align-items:center;gap:16px;">
+                <div style="flex:1;">
+                    <div style="font-size:8px;font-weight:700;letter-spacing:1px;
+                                text-transform:uppercase;color:rgba(255,255,255,0.55);margin-bottom:3px;">
+                        Current Period
+                    </div>
+                    <div style="font-size:12px;font-weight:700;color:#fff;">
+                        {cur_per.get('from_date')} to {cur_per.get('to_date')}
+                    </div>
+                </div>
+                <div style="color:rgba(255,255,255,0.4);font-size:18px;">vs</div>
+                <div style="flex:1;text-align:right;">
+                    <div style="font-size:8px;font-weight:700;letter-spacing:1px;
+                                text-transform:uppercase;color:rgba(255,255,255,0.55);margin-bottom:3px;">
+                        Previous Period
+                    </div>
+                    <div style="font-size:12px;font-weight:700;color:#fff;">
+                        {prev_per.get('from_date')} to {prev_per.get('to_date')}
+                    </div>
+                </div>
+                <div style="margin-left:16px;background:rgba(255,255,255,0.1);
+                            border-radius:8px;padding:8px 14px;text-align:center;">
+                    <div style="font-size:8px;font-weight:700;letter-spacing:1px;
+                                text-transform:uppercase;color:rgba(255,255,255,0.55);margin-bottom:3px;">
+                        {ctype_label} Customers
+                    </div>
+                    <div style="font-size:14px;font-weight:800;color:#fff;">{ret:,}</div>
+                </div>
+                <div style="background:rgba(255,255,255,0.1);border-radius:8px;
+                            padding:8px 14px;text-align:center;">
+                    <div style="font-size:8px;font-weight:700;letter-spacing:1px;
+                                text-transform:uppercase;color:rgba(255,255,255,0.55);margin-bottom:3px;">
+                        Scope
+                    </div>
+                    <div style="font-size:11px;font-weight:700;color:#fff;">{scope_label}</div>
+                </div>
             </div>
-            <div class="reliability-kpi-grid">
-                <div class="reliability-kpi-card">
-                    <div class="reliability-kpi-value">{curr_kwh:,.0f}</div>
-                    <div class="reliability-kpi-label">Current<br/>Consumption (kWh)</div>
-                </div>
-                <div class="reliability-kpi-card">
-                    <div class="reliability-kpi-value">{prev_kwh:,.0f}</div>
-                    <div class="reliability-kpi-label">Previous<br/>Consumption (kWh)</div>
-                </div>
-                <div class="reliability-kpi-card">
-                    <div class="reliability-kpi-value" style="color:{bv_color}">{var_str}</div>
-                    <div class="reliability-kpi-label">Overall<br/>Change</div>
-                </div>
-                <div class="reliability-kpi-card">
-                    <div class="reliability-kpi-value">&#8358;{curr_amt:,.0f}</div>
-                    <div class="reliability-kpi-label">Current<br/>Billed Amount</div>
-                </div>
-                <div class="reliability-kpi-card">
-                    <div class="reliability-kpi-value">&#8358;{prev_amt:,.0f}</div>
-                    <div class="reliability-kpi-label">Previous<br/>Billed Amount</div>
-                </div>
-                <div class="reliability-kpi-card">
-                    <div class="reliability-kpi-value" style="color:{bv_color}">&#8358;{bv:+,.0f}</div>
-                    <div class="reliability-kpi-label">Billing<br/>Variance</div>
+
+            <!-- KPI cards row -->
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:16px;">
+                {_kpi_card('Consumption (kWh)', f'{curr_kwh:,.0f}', f'{prev_kwh:,.0f}', kwh_var_str, var_color)}
+                {_kpi_card('Billed Amount', f'{curr_amt:,.0f}', f'{prev_amt:,.0f}', ("+" if bv >= 0 else "") + f"&#8358;{bv:,.0f}", bv_color, prefix='&#8358;')}
+                <div style="background:#f8fafc;border-radius:10px;padding:14px 16px;
+                            border:1px solid rgba(0,32,80,0.08);">
+                    <div style="font-size:8px;font-weight:700;text-transform:uppercase;
+                                letter-spacing:1px;color:#002050;opacity:0.55;margin-bottom:8px;">
+                        Trend Distribution
+                    </div>
+                    {trend_badges}
                 </div>
             </div>
-            <h2 style="margin:14px 0 6px;font-size:13px;">Trend Distribution ({ret} customers)</h2>
-            <div class="table-container">
-                <table>
-                    <thead><tr><th>Trend</th><th style="text-align:right">Customers</th></tr></thead>
-                    <tbody>{trend_rows}</tbody>
-                </table>
-            </div>
+
         </div>
         <div class="footer">
             <img src="{context.get('footer_logo_url', '')}" alt="Powered by EMRC" />
@@ -2882,8 +2968,19 @@ def render_commercial_comparison_table(data, context, page_number):
 
 
 def render_commercial_comparison_insights(data, context, page_number):
-    """AI insights page for a comparison report."""
+    """ARIA insights page for a comparison report."""
     insights = data.get('ai_insights', {})
+
+    aria_badge = """
+        <div style="display:inline-flex;align-items:center;gap:8px;
+                    background:#002050;color:#fff;border-radius:8px;
+                    padding:6px 14px;margin-bottom:14px;">
+            <span style="font-size:13px;font-weight:800;letter-spacing:1px;">ARIA</span>
+            <span style="font-size:9px;font-weight:400;opacity:0.75;letter-spacing:0.5px;">
+                Automated Raven Intelligence Assistance
+            </span>
+        </div>"""
+
     if not insights or 'error' in insights:
         return f"""
     <div class="page">
@@ -2892,8 +2989,11 @@ def render_commercial_comparison_insights(data, context, page_number):
                 <div class="company-name">{context.get('company_name', '')} | {context.get('report_scope', '')}</div>
                 <div class="date">{context.get('report_date', '')}</div>
             </div>
-            <h1 class="page-title">AI Insights</h1>
-            <p style="margin-top:24px;color:#94a3b8;">AI insights were not available for this report.</p>
+            <h1 class="page-title">ARIA Insights</h1>
+            {aria_badge}
+            <p style="margin-top:16px;color:#94a3b8;font-size:11px;">
+                ARIA insights were not available for this report.
+            </p>
         </div>
         <div class="footer">
             <img src="{context.get('footer_logo_url', '')}" alt="Powered by EMRC" />
@@ -2902,18 +3002,34 @@ def render_commercial_comparison_insights(data, context, page_number):
     </div>
     """
 
-    headline       = insights.get('headline', '')
-    summary        = insights.get('summary', '')
-    notable        = insights.get('notable_trends', [])
-    watch_list     = insights.get('watch_list', [])
+    headline        = insights.get('headline', '')
+    summary         = insights.get('summary', '')
+    notable         = insights.get('notable_trends', [])
+    watch_list      = insights.get('watch_list', [])
     recommendations = insights.get('recommendations', [])
 
-    notable_html = "".join(f'<li style="margin-bottom:6px">{t}</li>' for t in notable)
-    recs_html    = "".join(f'<li style="margin-bottom:6px">{r}</li>' for r in recommendations)
-    watch_html   = "".join(
-        f'<tr><td><strong>{w.get("customer_name","—")}</strong><br/>'
-        f'<span style="color:#64748b;font-size:10px">{w.get("account_no","")}</span></td>'
-        f'<td>{w.get("reason","")}</td></tr>'
+    notable_html = "".join(
+        f'<div style="display:flex;gap:8px;margin-bottom:7px;align-items:flex-start;">'
+        f'<span style="min-width:6px;height:6px;margin-top:4px;border-radius:50%;'
+        f'background:#002050;display:inline-block;flex-shrink:0;"></span>'
+        f'<span style="font-size:10.5px;color:#1e293b;line-height:1.5;">{t}</span></div>'
+        for t in notable
+    )
+
+    recs_html = "".join(
+        f'<div style="display:flex;gap:8px;margin-bottom:7px;align-items:flex-start;">'
+        f'<span style="min-width:6px;height:6px;margin-top:4px;border-radius:50%;'
+        f'background:#1a6b3c;display:inline-block;flex-shrink:0;"></span>'
+        f'<span style="font-size:10.5px;color:#1e293b;line-height:1.5;">{r}</span></div>'
+        for r in recommendations
+    )
+
+    watch_rows = "".join(
+        f'<tr>'
+        f'<td style="width:28%"><strong style="font-size:10px;">{w.get("customer_name","—")}</strong><br/>'
+        f'<span style="color:#64748b;font-size:9px;">{w.get("account_no","")}</span></td>'
+        f'<td style="font-size:10px;line-height:1.4;color:#1e293b;">{w.get("reason","")}</td>'
+        f'</tr>'
         for w in watch_list
     )
 
@@ -2924,27 +3040,61 @@ def render_commercial_comparison_insights(data, context, page_number):
                 <div class="company-name">{context.get('company_name', '')} | {context.get('report_scope', '')}</div>
                 <div class="date">{context.get('report_date', '')}</div>
             </div>
-            <h1 class="page-title">AI Insights</h1>
-            <div class="reliability-highlight">
-                <h2>{headline}</h2>
-                <p>{summary}</p>
-            </div>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:14px">
-                <div>
-                    <h3 style="font-size:12px;font-weight:600;margin-bottom:8px;color:#002050">Notable Trends</h3>
-                    <ul style="padding-left:16px;font-size:11px;color:#334155">{notable_html}</ul>
-                    <h3 style="font-size:12px;font-weight:600;margin:14px 0 8px;color:#002050">Recommendations</h3>
-                    <ul style="padding-left:16px;font-size:11px;color:#334155">{recs_html}</ul>
+
+            <h1 class="page-title">ARIA Insights</h1>
+            {aria_badge}
+
+            <!-- Headline card -->
+            <div style="background:#002050;border-radius:10px;padding:16px 20px;margin-bottom:16px;">
+                <div style="font-size:8px;font-weight:700;letter-spacing:1.5px;
+                            text-transform:uppercase;color:rgba(255,255,255,0.6);margin-bottom:6px;">
+                    Key Finding
                 </div>
+                <div style="font-size:12.5px;font-weight:700;color:#fff;line-height:1.5;">
+                    {headline}
+                </div>
+                <div style="font-size:10px;color:rgba(255,255,255,0.75);margin-top:8px;line-height:1.5;">
+                    {summary}
+                </div>
+            </div>
+
+            <!-- 2-col layout -->
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+
+                <!-- Left: Notable Trends + Recommendations -->
                 <div>
-                    <h3 style="font-size:12px;font-weight:600;margin-bottom:8px;color:#002050">Watch List</h3>
+                    <div style="font-size:9px;font-weight:700;text-transform:uppercase;
+                                letter-spacing:1px;color:#002050;opacity:0.6;margin-bottom:8px;">
+                        Notable Trends
+                    </div>
+                    <div style="margin-bottom:14px;">{notable_html}</div>
+
+                    <div style="font-size:9px;font-weight:700;text-transform:uppercase;
+                                letter-spacing:1px;color:#002050;opacity:0.6;margin-bottom:8px;">
+                        Recommendations
+                    </div>
+                    <div>{recs_html}</div>
+                </div>
+
+                <!-- Right: Watch List -->
+                <div>
+                    <div style="font-size:9px;font-weight:700;text-transform:uppercase;
+                                letter-spacing:1px;color:#002050;opacity:0.6;margin-bottom:8px;">
+                        Watch List
+                    </div>
                     <div class="table-container">
                         <table>
-                            <thead><tr><th>Customer</th><th>Reason</th></tr></thead>
-                            <tbody>{watch_html}</tbody>
+                            <thead>
+                                <tr>
+                                    <th style="width:28%">Customer</th>
+                                    <th>Reason</th>
+                                </tr>
+                            </thead>
+                            <tbody>{watch_rows}</tbody>
                         </table>
                     </div>
                 </div>
+
             </div>
         </div>
         <div class="footer">
@@ -3063,6 +3213,548 @@ def render_opex_by_district(data, context, page_number):
     ]
 
     return _paginate_table(rows, header_html, 'OPEX by District', context, page_number)
+
+
+# =============================================================================
+# SEGMENT / DISPATCH COMPLIANCE SECTION RENDERERS
+# =============================================================================
+
+_STATUS_COLORS = {
+    'exceeding':    ('#e8f5e9', '#2e7d32', 'Exceeding'),
+    'on_target':    ('#e3f2fd', '#1565c0', 'On Target'),
+    'below_target': ('#fff3e0', '#e65100', 'Below Target'),
+    'poor':         ('#fce4ec', '#ad1457', 'Poor'),
+    'critical':     ('#ffebee', '#c62828', 'Critical'),
+}
+
+
+def _status_badge(status: str) -> str:
+    bg, fg, label = _STATUS_COLORS.get(status, ('#f5f5f5', '#555', status.title()))
+    return (
+        f'<span style="display:inline-block;font-size:8px;font-weight:700;'
+        f'padding:2px 7px;border-radius:4px;background:{bg};color:{fg};'
+        f'white-space:nowrap;">{label}</span>'
+    )
+
+
+def render_segment_compliance_summary(data, context, page_number):
+    """
+    One-page compliance breakdown by MDI / Non-MDI Band A / Non-MDI Non-Band A.
+    Shows total feeders, avg supply, avg % achieved, and status distribution bars.
+    """
+    segments = data if isinstance(data, list) else []
+
+    STATUS_ORDER = ['exceeding', 'on_target', 'below_target', 'poor', 'critical']
+
+    cards_html = ''
+    for seg in segments:
+        name       = seg.get('segment', '')
+        total      = seg.get('total', 0)
+        avg_s      = seg.get('avg_supply', 0)
+        avg_pct    = seg.get('avg_pct_achieved', 0)
+        total_nrg  = seg.get('total_energy_mwh', 0)
+
+        status_rows = ''
+        for st in STATUS_ORDER:
+            sd = seg.get(st, {'count': 0, 'pct': 0})
+            bg, fg, lbl = _STATUS_COLORS.get(st, ('#f5f5f5', '#555', st))
+            bar_w = min(sd['pct'], 100)
+            status_rows += f"""
+            <div style="display:flex;align-items:center;margin-bottom:5px;">
+                <div style="width:140px;font-size:9px;font-weight:600;color:{fg};">{lbl}</div>
+                <div style="flex:1;background:#eff0f1;border-radius:4px;height:10px;
+                            margin:0 8px;overflow:hidden;">
+                    <div style="width:{bar_w}%;background:{fg};height:10px;border-radius:4px;"></div>
+                </div>
+                <div style="width:40px;font-size:9.5px;font-weight:700;text-align:right;color:{fg};">
+                    {sd['pct']}%
+                </div>
+                <div style="width:28px;font-size:9px;opacity:0.55;text-align:right;">{sd['count']}</div>
+            </div>"""
+
+        cards_html += f"""
+        <div style="flex:1;background:#f8f9fa;border-radius:12px;padding:16px 18px;
+                    margin-right:10px;border:1px solid rgba(0,32,80,0.1);min-width:0;">
+            <div style="font-size:11px;font-weight:700;color:#002050;margin-bottom:10px;
+                        border-bottom:2px solid #002050;padding-bottom:6px;">{name}</div>
+            <div style="display:flex;margin-bottom:12px;">
+                <div style="flex:1;text-align:center;">
+                    <div style="font-size:8px;font-weight:700;text-transform:uppercase;
+                                opacity:0.5;margin-bottom:3px;">Feeders</div>
+                    <div style="font-size:22px;font-weight:800;color:#002050;">{total}</div>
+                </div>
+                <div style="flex:1;text-align:center;">
+                    <div style="font-size:8px;font-weight:700;text-transform:uppercase;
+                                opacity:0.5;margin-bottom:3px;">Avg Supply</div>
+                    <div style="font-size:22px;font-weight:800;color:#002050;">{avg_s}
+                        <span style="font-size:10px;font-weight:400;opacity:0.6;"> hrs</span>
+                    </div>
+                </div>
+                <div style="flex:1;text-align:center;">
+                    <div style="font-size:8px;font-weight:700;text-transform:uppercase;
+                                opacity:0.5;margin-bottom:3px;">Avg Achieved</div>
+                    <div style="font-size:22px;font-weight:800;color:#002050;">{avg_pct}
+                        <span style="font-size:10px;font-weight:400;opacity:0.6;">%</span>
+                    </div>
+                </div>
+                <div style="flex:1;text-align:center;">
+                    <div style="font-size:8px;font-weight:700;text-transform:uppercase;
+                                opacity:0.5;margin-bottom:3px;">Energy Delivered</div>
+                    <div style="font-size:16px;font-weight:800;color:#002050;">{total_nrg:,.1f}
+                        <span style="font-size:9px;font-weight:400;opacity:0.6;"> MWh</span>
+                    </div>
+                </div>
+            </div>
+            {status_rows}
+        </div>"""
+
+    return f"""
+    <div class="page">
+        <div class="page-content">
+            <div class="header">
+                <div class="company-name">{context.get('company_name', '')} | {context.get('report_scope', '')}</div>
+                <div class="date">{context.get('report_date', '')}</div>
+            </div>
+            <h1 class="page-title">Compliance by Business Segment</h1>
+            <div style="font-size:10px;opacity:0.6;margin-bottom:14px;">
+                Targets: Band A = 20 hrs &nbsp;|&nbsp; Band B = 16 hrs &nbsp;|&nbsp;
+                Band C = 12 hrs &nbsp;|&nbsp; Band D/E = 8 hrs &nbsp;|&nbsp;
+                Segments derived from MDI customer connections
+            </div>
+            <div style="display:flex;overflow:hidden;">
+                {cards_html}
+                <div style="width:0;flex-shrink:0;"></div>
+            </div>
+        </div>
+        <div class="footer">
+            <img src="{context.get('footer_logo_url', '')}" alt="Powered by EMRC" />
+            <div class="page-number">{page_number}</div>
+        </div>
+    </div>"""
+
+
+def render_feeder_segment_compliance(data, context, page_number):
+    """
+    Paginated feeder dispatch compliance table grouped by segment.
+    Columns: Feeder | Segment | Band | Target | Actual | Gap | % Achieved | Status
+    """
+    feeders = data if isinstance(data, list) else []
+
+    header_html = """
+        <colgroup>
+            <col style="width:22%">
+            <col style="width:15%">
+            <col style="width:5%">
+            <col style="width:9%">
+            <col style="width:9%">
+            <col style="width:7%">
+            <col style="width:9%">
+            <col style="width:12%">
+            <col style="width:12%">
+        </colgroup>
+        <thead>
+            <tr>
+                <th>Feeder</th>
+                <th>Segment</th>
+                <th>Band</th>
+                <th style="text-align:right;">Target (hrs)</th>
+                <th style="text-align:right;">Actual (hrs)</th>
+                <th style="text-align:right;">Gap</th>
+                <th style="text-align:right;">% Achieved</th>
+                <th style="text-align:right;">Energy (MWh)</th>
+                <th style="text-align:center;">Status</th>
+            </tr>
+        </thead>"""
+
+    current_segment = None
+    row_strings = []
+    for f in feeders:
+        seg = f.get('segment', '')
+        if seg != current_segment:
+            current_segment = seg
+            row_strings.append(f"""
+        <tr style="background-color:#002050;">
+            <td colspan="9" style="font-weight:700;font-size:10px;letter-spacing:1px;
+                text-transform:uppercase;color:#ffffff;padding:6px 10px;">
+                &#9658; {seg}
+            </td>
+        </tr>""")
+
+        gap     = float(f.get('gap', 0) or 0)
+        pct     = float(f.get('pct_achieved', 0) or 0)
+        target  = float(f.get('target_hours', 0) or 0)
+        actual  = float(f.get('hours_of_supply', 0) or 0)
+        energy  = float(f.get('energy_delivered', 0) or 0)
+        gap_str = f'+{gap:.2f}' if gap >= 0 else f'{gap:.2f}'
+        gap_col = 'color:#2e7d32;font-weight:700' if gap >= 0 else 'color:#c62828;font-weight:700'
+
+        row_strings.append(f"""
+        <tr>
+            <td>{f.get('name', '—')}</td>
+            <td style="font-size:9px;opacity:0.75;">{seg}</td>
+            <td style="text-align:center;">{f.get('band', '—')}</td>
+            <td style="text-align:right;">{target:.1f}</td>
+            <td style="text-align:right;">{actual:.2f}</td>
+            <td style="text-align:right;{gap_col}">{gap_str}</td>
+            <td style="text-align:right;font-weight:700;">{pct:.1f}%</td>
+            <td style="text-align:right;">{energy:,.2f}</td>
+            <td style="text-align:center;">{_status_badge(f.get('status', 'critical'))}</td>
+        </tr>""")
+
+    return _paginate_table(row_strings, header_html, 'Feeder Compliance by Segment',
+                           context, page_number, max_rows=15)
+
+
+
+
+
+def render_energy_by_segment_pl(data, context, page_number):
+    """P&L energy split — MDI vs Non-MDI with GWh amounts and % share."""
+    total    = float(data.get('total_energy_mwh', 0) or 0)
+    segments = data.get('segments', [])
+
+    # Build visual bars for each segment
+    bars_html = ''
+    seg_colors = ['#1565c0', '#2e7d32', '#e65100', '#6a1b9a']
+    for i, seg in enumerate(segments):
+        color   = seg_colors[i % len(seg_colors)]
+        bar_w   = min(seg['pct'], 100)
+        bars_html += f"""
+        <div style="margin-bottom:18px;">
+            <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:5px;">
+                <div style="font-size:12px;font-weight:700;color:#002050;">{seg['label']}</div>
+                <div style="font-size:11px;font-weight:600;color:{color};">{seg['pct']}%</div>
+            </div>
+            <div style="background:#eff0f1;border-radius:6px;height:20px;overflow:hidden;">
+                <div style="width:{bar_w}%;background:{color};height:20px;border-radius:6px;
+                             display:flex;align-items:center;padding-left:8px;">
+                    <span style="font-size:9px;font-weight:700;color:#fff;white-space:nowrap;">
+                        {seg['energy_mwh']:,.2f} MWh
+                    </span>
+                </div>
+            </div>
+            <div style="font-size:9px;opacity:0.55;margin-top:3px;">{seg['feeders']} feeders</div>
+        </div>"""
+
+    # Total KPI strip
+    kpi_strip = f"""
+    <div style="display:flex;background:#f0f4f8;border-radius:12px;padding:14px 18px;
+                margin-bottom:20px;">
+        <div style="flex:1;text-align:center;border-right:1px solid rgba(0,32,80,0.15);">
+            <div style="font-size:8px;font-weight:700;text-transform:uppercase;opacity:0.5;margin-bottom:4px;">
+                Total Energy Delivered</div>
+            <div style="font-size:26px;font-weight:800;color:#002050;">{total:,.2f}
+                <span style="font-size:11px;font-weight:400;opacity:0.6;"> MWh</span>
+            </div>
+        </div>
+        <div style="flex:1;text-align:center;border-right:1px solid rgba(0,32,80,0.15);">
+            <div style="font-size:8px;font-weight:700;text-transform:uppercase;opacity:0.5;margin-bottom:4px;">
+                MDI Energy</div>
+            <div style="font-size:26px;font-weight:800;color:#1565c0;">{data.get('mdi_pct', 0)}%</div>
+        </div>
+        <div style="flex:1;text-align:center;">
+            <div style="font-size:8px;font-weight:700;text-transform:uppercase;opacity:0.5;margin-bottom:4px;">
+                Non-MDI Energy</div>
+            <div style="font-size:26px;font-weight:800;color:#2e7d32;">{data.get('mdni_pct', 0)}%</div>
+        </div>
+    </div>"""
+
+    return f"""
+    <div class="page">
+        <div class="page-content">
+            <div class="header">
+                <div class="company-name">{context.get('company_name', '')} | {context.get('report_scope', '')}</div>
+                <div class="date">{context.get('report_date', '')}</div>
+            </div>
+            <h1 class="page-title">Energy Delivered by P&amp;L Segment</h1>
+            {kpi_strip}
+            <div style="max-width:500px;">
+                {bars_html}
+            </div>
+        </div>
+        <div class="footer">
+            <img src="{context.get('footer_logo_url', '')}" alt="Powered by EMRC" />
+            <div class="page-number">{page_number}</div>
+        </div>
+    </div>"""
+
+
+def render_segment_voltage_energy(data, context, page_number):
+    """Energy by segment × voltage (MDI 33kV / MDI 11kV / Non-MDI 33kV / Non-MDI 11kV)."""
+    rows        = data.get('rows', [])
+    total       = float(data.get('total_energy_mwh', 0) or 0)
+    mdi_total   = float(data.get('mdi_total', 0) or 0)
+    mdni_total  = float(data.get('mdni_total', 0) or 0)
+
+    COLOR_MAP = {
+        'MDI 33kV':     '#1565c0',
+        'MDI 11kV':     '#42a5f5',
+        'Non-MDI 33kV': '#2e7d32',
+        'Non-MDI 11kV': '#81c784',
+    }
+
+    bars_html = ''
+    for row in rows:
+        color = COLOR_MAP.get(row['label'], '#888')
+        bar_w = min(row['pct'], 100)
+        bars_html += f"""
+        <div style="margin-bottom:14px;">
+            <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
+                <div style="font-size:11px;font-weight:700;color:#002050;">{row['label']}</div>
+                <div style="font-size:11px;font-weight:600;color:{color};">
+                    {row['energy_mwh']:,.2f} MWh &nbsp; ({row['pct']}%)
+                </div>
+            </div>
+            <div style="background:#eff0f1;border-radius:5px;height:16px;overflow:hidden;">
+                <div style="width:{bar_w}%;background:{color};height:16px;border-radius:5px;"></div>
+            </div>
+        </div>"""
+
+    summary = f"""
+    <div style="display:flex;gap:0;margin-bottom:20px;">
+        <div style="flex:1;background:#e3f2fd;border-radius:10px;padding:14px 16px;margin-right:10px;">
+            <div style="font-size:9px;font-weight:700;text-transform:uppercase;opacity:0.6;margin-bottom:4px;">MDI Total</div>
+            <div style="font-size:22px;font-weight:800;color:#1565c0;">{mdi_total:,.2f}
+                <span style="font-size:10px;font-weight:400;opacity:0.6;"> MWh</span>
+            </div>
+        </div>
+        <div style="flex:1;background:#e8f5e9;border-radius:10px;padding:14px 16px;margin-right:10px;">
+            <div style="font-size:9px;font-weight:700;text-transform:uppercase;opacity:0.6;margin-bottom:4px;">Non-MDI Total</div>
+            <div style="font-size:22px;font-weight:800;color:#2e7d32;">{mdni_total:,.2f}
+                <span style="font-size:10px;font-weight:400;opacity:0.6;"> MWh</span>
+            </div>
+        </div>
+        <div style="flex:1;background:#f0f4f8;border-radius:10px;padding:14px 16px;">
+            <div style="font-size:9px;font-weight:700;text-transform:uppercase;opacity:0.6;margin-bottom:4px;">Grand Total</div>
+            <div style="font-size:22px;font-weight:800;color:#002050;">{total:,.2f}
+                <span style="font-size:10px;font-weight:400;opacity:0.6;"> MWh</span>
+            </div>
+        </div>
+    </div>"""
+
+    return f"""
+    <div class="page">
+        <div class="page-content">
+            <div class="header">
+                <div class="company-name">{context.get('company_name', '')} | {context.get('report_scope', '')}</div>
+                <div class="date">{context.get('report_date', '')}</div>
+            </div>
+            <h1 class="page-title">Energy by Segment &amp; Voltage Level</h1>
+            {summary}
+            <div style="max-width:520px;">
+                {bars_html}
+            </div>
+        </div>
+        <div class="footer">
+            <img src="{context.get('footer_logo_url', '')}" alt="Powered by EMRC" />
+            <div class="page-number">{page_number}</div>
+        </div>
+    </div>"""
+
+
+def render_energy_md_nmd_mix(data, context, page_number):
+    """MD vs NMD % energy mix — target (60/40) vs actual."""
+    md_target   = float(data.get('md_target_pct', 60) or 60)
+    nmd_target  = float(data.get('nmd_target_pct', 40) or 40)
+    md_actual   = float(data.get('md_actual_pct', 0) or 0)
+    nmd_actual  = float(data.get('nmd_actual_pct', 0) or 0)
+    md_gap      = float(data.get('md_gap_pct', 0) or 0)
+    md_energy   = float(data.get('md_energy_mwh', 0) or 0)
+    nmd_energy  = float(data.get('nmd_energy_mwh', 0) or 0)
+    total       = float(data.get('total_energy_mwh', 0) or 0)
+
+    gap_color = '#2e7d32' if md_gap >= 0 else '#c62828'
+    gap_sign  = '+' if md_gap >= 0 else ''
+
+    def _bar(label, target_pct, actual_pct, color):
+        return f"""
+        <div style="margin-bottom:22px;">
+            <div style="font-size:12px;font-weight:700;color:#002050;margin-bottom:8px;">{label}</div>
+            <div style="margin-bottom:6px;">
+                <div style="display:flex;justify-content:space-between;font-size:9px;opacity:0.6;margin-bottom:3px;">
+                    <span>Target ({target_pct:.0f}%)</span>
+                </div>
+                <div style="background:#eff0f1;border-radius:5px;height:12px;overflow:hidden;">
+                    <div style="width:{min(target_pct,100)}%;background:rgba(0,32,80,0.2);
+                                height:12px;border-radius:5px;"></div>
+                </div>
+            </div>
+            <div>
+                <div style="display:flex;justify-content:space-between;font-size:9px;margin-bottom:3px;">
+                    <span style="font-weight:600;color:{color};">Actual ({actual_pct:.1f}%)</span>
+                    <span style="color:{color};font-weight:700;">{actual_pct:,.2f} MWh</span>
+                </div>
+                <div style="background:#eff0f1;border-radius:5px;height:16px;overflow:hidden;">
+                    <div style="width:{min(actual_pct,100)}%;background:{color};
+                                height:16px;border-radius:5px;"></div>
+                </div>
+            </div>
+        </div>"""
+
+    md_bar  = _bar('MD (MDI)', md_target,  md_actual,  '#1565c0')
+    nmd_bar = _bar('NMD (Non-MDI)', nmd_target, nmd_actual, '#2e7d32')
+
+    return f"""
+    <div class="page">
+        <div class="page-content">
+            <div class="header">
+                <div class="company-name">{context.get('company_name', '')} | {context.get('report_scope', '')}</div>
+                <div class="date">{context.get('report_date', '')}</div>
+            </div>
+            <h1 class="page-title">MD vs NMD Energy Mix</h1>
+            <div style="display:flex;gap:0;margin-bottom:22px;">
+                <div style="flex:1;background:#f0f4f8;border-radius:10px;padding:14px 16px;margin-right:10px;text-align:center;">
+                    <div style="font-size:9px;font-weight:700;text-transform:uppercase;opacity:0.5;margin-bottom:4px;">Total Energy</div>
+                    <div style="font-size:24px;font-weight:800;color:#002050;">{total:,.2f}
+                        <span style="font-size:10px;font-weight:400;opacity:0.6;"> MWh</span>
+                    </div>
+                </div>
+                <div style="flex:1;background:#e3f2fd;border-radius:10px;padding:14px 16px;margin-right:10px;text-align:center;">
+                    <div style="font-size:9px;font-weight:700;text-transform:uppercase;opacity:0.5;margin-bottom:4px;">MD Actual</div>
+                    <div style="font-size:24px;font-weight:800;color:#1565c0;">{md_actual:.1f}%</div>
+                    <div style="font-size:9px;opacity:0.5;">Target: {md_target:.0f}%</div>
+                </div>
+                <div style="flex:1;background:#e8f5e9;border-radius:10px;padding:14px 16px;margin-right:10px;text-align:center;">
+                    <div style="font-size:9px;font-weight:700;text-transform:uppercase;opacity:0.5;margin-bottom:4px;">NMD Actual</div>
+                    <div style="font-size:24px;font-weight:800;color:#2e7d32;">{nmd_actual:.1f}%</div>
+                    <div style="font-size:9px;opacity:0.5;">Target: {nmd_target:.0f}%</div>
+                </div>
+                <div style="flex:1;background:#f0f4f8;border-radius:10px;padding:14px 16px;text-align:center;">
+                    <div style="font-size:9px;font-weight:700;text-transform:uppercase;opacity:0.5;margin-bottom:4px;">MD Gap vs Target</div>
+                    <div style="font-size:24px;font-weight:800;color:{gap_color};">{gap_sign}{md_gap:.1f}%</div>
+                </div>
+            </div>
+            <div style="max-width:500px;">
+                {md_bar}
+                {nmd_bar}
+            </div>
+            <div style="font-size:9px;opacity:0.5;margin-top:12px;">
+                Target mix: MD 60% / NMD 40% &nbsp;|&nbsp; Segments derived from MDI customer connections
+            </div>
+        </div>
+        <div class="footer">
+            <img src="{context.get('footer_logo_url', '')}" alt="Powered by EMRC" />
+            <div class="page-number">{page_number}</div>
+        </div>
+    </div>"""
+
+
+def render_segment_compliance_trend(data, context, page_number):
+    """
+    SVG line chart — daily % of feeders on-target-or-better per segment.
+    """
+    trend    = data.get('trend', [])
+    segments = data.get('segments', [])
+
+    if not trend:
+        content = f"""
+            <div class="header">
+                <div class="company-name">{context.get('company_name', '')} | {context.get('report_scope', '')}</div>
+                <div class="date">{context.get('report_date', '')}</div>
+            </div>
+            <h1 class="page-title">Segment Compliance Trend</h1>
+            <p style="margin-top:24px;opacity:0.5;">No daily data available for this period.</p>"""
+        footer_logo = context.get('footer_logo_url', '')
+        return f'<div class="page"><div class="page-content">{content}</div><div class="footer"><img src="{footer_logo}" alt="Powered by EMRC"/><div class="page-number">{page_number}</div></div></div>'
+
+    SEG_COLORS = {
+        'MDI':                '#1565c0',
+        'Non-MDI Band A':     '#2e7d32',
+        'Non-MDI Non-Band A': '#e65100',
+    }
+
+    W, H = 760, 180
+    ml, mr, mt, mb = 42, 15, 12, 32
+    pw = W - ml - mr
+    ph = H - mt - mb
+    n  = len(trend)
+
+    def xp(i):
+        return ml + (i / (n - 1)) * pw if n > 1 else ml + pw / 2
+
+    def yp(v):
+        return mt + ph - (v / 100) * ph
+
+    # Y gridlines
+    ticks_svg = ''
+    for k in range(6):
+        tv = k * 20
+        ty = yp(tv)
+        ticks_svg += (
+            f'<line x1="{ml}" y1="{ty:.1f}" x2="{W - mr}" y2="{ty:.1f}" '
+            f'stroke="#e4e8ef" stroke-width="1"/>'
+            f'<text x="{ml - 4}" y="{ty:.1f}" text-anchor="end" dominant-baseline="middle" '
+            f'fill="#888" font-size="9" font-family="Arial,sans-serif">{tv}%</text>'
+        )
+
+    # X labels
+    step = max(1, n // 10)
+    xlabels_svg = ''
+    for i in range(0, n, step):
+        label = str(trend[i].get('date', ''))[-5:]
+        xlabels_svg += (
+            f'<text x="{xp(i):.1f}" y="{mt + ph + 14}" text-anchor="middle" '
+            f'fill="#888" font-size="9" font-family="Arial,sans-serif">{label}</text>'
+        )
+
+    # Lines per segment
+    lines_svg = ''
+    legend_svg = ''
+    lx = W - mr + 8
+    for li, seg in enumerate(segments):
+        color  = SEG_COLORS.get(seg, '#888')
+        values = [d.get(seg) for d in trend]
+        valid  = [v for v in values if v is not None]
+        if not valid:
+            continue
+        pts = ' '.join(
+            f"{xp(i):.1f},{yp(v):.1f}"
+            for i, v in enumerate(values) if v is not None
+        )
+        ly = mt + 10 + li * 16
+        lines_svg  += (
+            f'<polyline points="{pts}" fill="none" stroke="{color}" stroke-width="2.2" '
+            f'stroke-linejoin="round" stroke-linecap="round"/>'
+        )
+        legend_svg += (
+            f'<line x1="{lx}" y1="{ly}" x2="{lx + 16}" y2="{ly}" '
+            f'stroke="{color}" stroke-width="2.2"/>'
+            f'<text x="{lx + 20}" y="{ly + 3}" fill="#444" font-size="9" '
+            f'font-family="Arial,sans-serif" font-weight="600">{seg}</text>'
+        )
+
+    svg = (
+        f'<svg viewBox="0 0 {W} {H}" width="100%" style="display:block;overflow:visible;" '
+        f'xmlns="http://www.w3.org/2000/svg">'
+        f'{ticks_svg}'
+        f'<line x1="{ml}" y1="{mt + ph}" x2="{W - mr}" y2="{mt + ph}" stroke="#ccc" stroke-width="1"/>'
+        f'{lines_svg}'
+        f'{xlabels_svg}'
+        f'{legend_svg}'
+        f'</svg>'
+    )
+
+    return f"""
+    <div class="page">
+        <div class="page-content">
+            <div class="header">
+                <div class="company-name">{context.get('company_name', '')} | {context.get('report_scope', '')}</div>
+                <div class="date">{context.get('report_date', '')}</div>
+            </div>
+            <h1 class="page-title">Segment Compliance Trend</h1>
+            <div style="font-size:10px;opacity:0.6;margin-bottom:10px;">
+                % of feeders achieving &ge;95% of band supply target per day, by segment
+            </div>
+            <div style="background:#f8fafc;border-radius:12px;padding:12px 14px;">
+                {svg}
+            </div>
+        </div>
+        <div class="footer">
+            <img src="{context.get('footer_logo_url', '')}" alt="Powered by EMRC" />
+            <div class="page-number">{page_number}</div>
+        </div>
+    </div>"""
+
 
 
 # =============================================================================
@@ -3317,6 +4009,100 @@ def render_back_page(context):
     """
 
 
+
+# =============================================================================
+# THEME HELPERS
+# =============================================================================
+
+def _hex_to_rgb(hex_color):
+    """Convert a hex color string to an (r, g, b) tuple."""
+    hex_color = hex_color.lstrip('#')
+    if len(hex_color) == 3:
+        hex_color = ''.join(c * 2 for c in hex_color)
+    return (int(hex_color[0:2], 16), int(hex_color[2:4], 16), int(hex_color[4:6], 16))
+
+
+def _build_theme_css(primary_color, accent_color, text_color):
+    """Generate CSS overrides that apply the user-selected theme across the report."""
+    try:
+        r, g, b = _hex_to_rgb(primary_color)
+        primary_light  = f"rgba({r}, {g}, {b}, 0.07)"
+        primary_stripe = f"rgba({r}, {g}, {b}, 0.04)"
+    except Exception:
+        primary_light  = "rgba(0, 32, 80, 0.07)"
+        primary_stripe = "rgba(0, 32, 80, 0.04)"
+
+    return f"""
+/* ── Custom Theme ──────────────────────────────────────────────────────── */
+body {{ color: {text_color}; }}
+
+/* Table headers */
+thead {{ background-color: {primary_color} !important; }}
+thead th {{ background-color: {primary_color} !important; color: #ffffff !important; }}
+tbody tr:nth-child(even) {{ background-color: {primary_stripe}; }}
+
+/* Cover / back page */
+.cover-page {{ background-color: {primary_color}; }}
+
+/* Primary text elements */
+.stat-item .value,
+.metric-value,
+.reliability-kpi-value,
+.reliability-value,
+.toc-number,
+.toc-page,
+.page-number,
+.section-card-title,
+.company-name,
+.date,
+.page-title,
+.section-title {{ color: {text_color}; }}
+
+/* Section icons */
+.section-icon {{ background-color: {primary_color}; }}
+
+/* Accent / border elements */
+.footer {{ border-top-color: {accent_color}; }}
+.metric-content {{ border-left-color: {accent_color}; }}
+.reliability-metrics {{ border-left-color: {accent_color}; }}
+.reliability-item:not(:last-child) {{ border-right-color: {accent_color}; }}
+.toc-dots {{ border-bottom-color: {accent_color}; }}
+.cover-accent-rule {{ background-color: {accent_color}; }}
+.cover-footer {{ border-top-color: {accent_color}; }}
+.content-box {{ border-color: {accent_color}; }}
+.summary-section {{ border-right-color: {accent_color}; }}
+
+/* Light-primary backgrounds */
+.metric-card.primary,
+.reliability-kpi-card,
+.reliability-highlight,
+.chart-container {{ background-color: {primary_light}; }}
+
+/* Table of contents */
+.toc-row {{ border-bottom-color: {accent_color}; }}
+"""
+
+
+def _inject_description(html, description, primary_color):
+    """Insert a styled description block immediately after the first page-title heading."""
+    import re as _re
+    if not description:
+        return html
+    desc_box = (
+        f'<div style="font-size:11px;color:{primary_color};opacity:0.8;'
+        f'line-height:1.6;margin-bottom:14px;padding:10px 16px;'
+        f'background:rgba(0,0,0,0.04);border-left:3px solid {primary_color};'
+        f'border-radius:0 8px 8px 0;">{description}</div>'
+    )
+    return _re.sub(
+        r'(<h1 class="page-title">.*?</h1>)',
+        r'' + desc_box,
+        html,
+        count=1,
+        flags=_re.DOTALL,
+    )
+
+
 # =============================================================================
 # MAIN PDF GENERATOR CLASS
 # =============================================================================
@@ -3363,8 +4149,15 @@ class PDFGenerator:
         'opex_by_category':   render_opex_by_category,
         'opex_by_district':   render_opex_by_district,
         # DSO Compliance
-        'dso_compliance_overview': render_dso_compliance_overview,
-        'dso_compliance_table':    render_dso_compliance_table,
+        'dso_compliance_overview':     render_dso_compliance_overview,
+        'dso_compliance_table':         render_dso_compliance_table,
+        # Segment / Dispatch Compliance
+        'segment_compliance_summary':   render_segment_compliance_summary,
+        'feeder_segment_compliance':    render_feeder_segment_compliance,
+        'energy_by_segment_pl':         render_energy_by_segment_pl,
+        'segment_voltage_energy':       render_segment_voltage_energy,
+        'energy_md_nmd_mix':            render_energy_md_nmd_mix,
+        'segment_compliance_trend':     render_segment_compliance_trend,
     }
 
     def __init__(self, report_config, data_service):
@@ -3385,7 +4178,15 @@ class PDFGenerator:
         """
         self.report_config = report_config
         self.data_service = data_service
-        self.orientation = 'landscape'  # Always landscape — full-width tables require it
+        self.orientation = report_config.get('orientation', 'landscape')
+
+        # Theme — extract with defaults so missing keys never cause KeyErrors
+        raw_theme = report_config.get('theme') or {}
+        self.theme = {
+            'primary_color': raw_theme.get('primary_color') or '#002050',
+            'accent_color':  raw_theme.get('accent_color')  or 'rgba(0, 32, 80, 0.2)',
+            'text_color':    raw_theme.get('text_color')    or '#002050',
+        }
 
         # Determine scope
         filters = self.data_service.filters
@@ -3415,6 +4216,10 @@ class PDFGenerator:
             'logo_url': self._get_static_url('reports/images/kedco_logo.png'),
             'logo_gray_url': self._get_static_url('reports/images/kedco_gray_logo.png'),
             'footer_logo_url': self._get_static_url('reports/images/footer_logo.png'),
+            # Theme colors available to all renderers via context
+            'primary_color': self.theme['primary_color'],
+            'accent_color':  self.theme['accent_color'],
+            'text_color':    self.theme['text_color'],
         }
 
     def _format_report_date(self):
@@ -3510,8 +4315,12 @@ class PDFGenerator:
         cover_html = ""
         page_number = 1
         if cover_section:
-            data = self.data_service.get_all_section_data('cover_page', cover_section.get('config', {}))
-            cover_html = self.SECTION_RENDERERS['cover_page'](data, self.context)
+            if self.orientation == 'portrait':
+                from reports.management_report import render_mgmt_cover
+                cover_html = render_mgmt_cover(self.context)
+            else:
+                data = self.data_service.get_all_section_data('cover_page', cover_section.get('config', {}))
+                cover_html = self.SECTION_RENDERERS['cover_page'](data, self.context)
             page_number = 2  # TOC is always page 2
 
         toc_page_number = page_number
@@ -3539,6 +4348,13 @@ class PDFGenerator:
             if section_type == 'infrastructure_overview':
                 self.context['summary_points'] = config.get('summary_points', [])
 
+            # Inject per-section config hints into data so renderers can use them
+            section_description = config.get('section_description', '')
+            chart_type = config.get('chart_type', '')
+            if isinstance(data, dict):
+                if chart_type:
+                    data['_chart_type'] = chart_type
+
             # Record this section's actual starting page for the TOC
             display_name = SECTION_DISPLAY_NAMES.get(section_type, section_type.replace('_', ' ').title())
             toc_entries.append({'title': display_name, 'page': page_number})
@@ -3549,6 +4365,14 @@ class PDFGenerator:
                 result = renderer(data, self.context, page_number, config)
             else:
                 result = renderer(data, self.context, page_number)
+
+            # Inject description block after page title (all section types)
+            if section_description:
+                primary = self.theme['primary_color']
+                if isinstance(result, tuple):
+                    result = (_inject_description(result[0], section_description, primary), result[1])
+                else:
+                    result = _inject_description(result, section_description, primary)
 
             # Renderers may return (html, pages_used) for paginated sections
             if isinstance(result, tuple):
@@ -3563,8 +4387,13 @@ class PDFGenerator:
         back_html   = render_back_page(self.context)
         sections_html = cover_html + toc_html + content_html + back_html
 
-        # Build full HTML — always landscape throughout
-        orientation_css = LANDSCAPE_STYLES
+        theme_css = _build_theme_css(
+            self.theme['primary_color'],
+            self.theme['accent_color'],
+            self.theme['text_color'],
+        )
+
+        orientation_css = PORTRAIT_STYLES if self.orientation == 'portrait' else LANDSCAPE_STYLES
 
         html = f"""
         <!DOCTYPE html>
@@ -3576,6 +4405,7 @@ class PDFGenerator:
             <style>
                 {BASE_STYLES}
                 {orientation_css}
+                {theme_css}
             </style>
         </head>
         <body>
@@ -3616,10 +4446,10 @@ class PDFGenerator:
         with sync_playwright() as p:
             browser = p.chromium.launch()
             page = browser.new_page()
-            page.set_content(html_content, wait_until='networkidle')
+            page.set_content(html_content, wait_until='domcontentloaded')
             pdf_bytes = page.pdf(
                 format='A4',
-                landscape=True,
+                landscape=(self.orientation == 'landscape'),
                 print_background=True,
                 margin={'top': '0', 'bottom': '0', 'left': '0', 'right': '0'},
             )

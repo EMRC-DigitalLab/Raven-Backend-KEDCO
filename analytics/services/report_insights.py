@@ -50,7 +50,8 @@ _SYSTEM_PROMPT = (
     "You are a senior energy analyst for KEDCO (Kano Electricity Distribution Company), "
     "a Nigerian electricity distribution company. You produce concise, data-driven insights "
     "for internal management reports. Every response must be valid JSON only — "
-    "no markdown fences, no prose outside the JSON object."
+    "no markdown fences, no prose outside the JSON object. "
+    "Do not use em dashes (—) anywhere in your responses; use commas, full stops, or colons instead."
 )
 
 # ─── Section-type → human-readable domain label ───────────────────────────────
