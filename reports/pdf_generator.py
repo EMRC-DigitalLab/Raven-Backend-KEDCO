@@ -71,7 +71,7 @@ SECTION_DISPLAY_NAMES = {
     # Commercial Comparison
     'commercial_comparison_summary':  'Comparison Summary',
     'commercial_comparison_table':    'Customer Comparison Detail',
-    'commercial_comparison_insights': 'AI Insights',
+    'commercial_comparison_insights': 'ARIA Insights',
     # Financial
     'financial_overview': 'Financial Overview',
     'opex_by_category':   'OPEX by Category',
@@ -2785,6 +2785,51 @@ def render_commercial_comparison_summary(data, context, page_number):
         for label, count in trend_d.items() if count > 0
     )
 
+    var_color = "#22c55e" if (var_pct or 0) >= 0 else "#ef4444"
+    bv_color  = "#22c55e" if bv >= 0 else "#ef4444"
+
+    trend_colors = {
+        'Major Positive Trend': '#15803d',
+        'Positive Trend':       '#22c55e',
+        'Moderated Trend':      '#f59e0b',
+        'Declined Trend':       '#f97316',
+        'Major Declined Trend': '#ef4444',
+        'No Previous Data':     '#94a3b8',
+        'No Current Data':      '#94a3b8',
+    }
+    trend_badges = "".join(
+        f'<div style="display:flex;align-items:center;justify-content:space-between;'
+        f'padding:7px 12px;border-radius:7px;margin-bottom:5px;'
+        f'background:rgba(0,32,80,0.04);">'
+        f'<div style="display:flex;align-items:center;gap:8px;">'
+        f'<span style="width:8px;height:8px;border-radius:50%;background:{trend_colors.get(label,"#94a3b8")};display:inline-block;flex-shrink:0;"></span>'
+        f'<span style="font-size:10.5px;color:#1e293b;">{label}</span>'
+        f'</div>'
+        f'<span style="font-size:12px;font-weight:700;color:#002050;">{count}</span>'
+        f'</div>'
+        for label, count in trend_d.items() if count > 0
+    )
+
+    def _kpi_card(label, current_val, prev_val, variance, variance_color, prefix=''):
+        return f"""
+        <div style="background:#f8fafc;border-radius:10px;padding:14px 16px;
+                    border:1px solid rgba(0,32,80,0.08);">
+            <div style="font-size:8px;font-weight:700;text-transform:uppercase;
+                        letter-spacing:1px;color:#002050;opacity:0.55;margin-bottom:8px;">
+                {label}
+            </div>
+            <div style="font-size:18px;font-weight:800;color:#002050;margin-bottom:4px;">
+                {prefix}{current_val}
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;">
+                <span style="font-size:9px;color:#64748b;">prev {prefix}{prev_val}</span>
+                <span style="font-size:9px;font-weight:700;color:{variance_color};">{variance}</span>
+            </div>
+        </div>"""
+
+    kwh_var_str = var_str
+    bv_str = f"&#8358;{abs(bv):,.0f}" + (" surplus" if bv >= 0 else " deficit")
+
     return f"""
     <div class="page">
         <div class="page-content">
@@ -2792,45 +2837,62 @@ def render_commercial_comparison_summary(data, context, page_number):
                 <div class="company-name">{context.get('company_name', '')} | {context.get('report_scope', '')}</div>
                 <div class="date">{context.get('report_date', '')}</div>
             </div>
-            <h1 class="page-title">Customer Consumption Comparison — Summary</h1>
-            <div class="reliability-highlight">
-                <h2>{ctype_label} Customers &mdash; {scope_label}</h2>
-                <p>Current: {cur_per.get('from_date')} to {cur_per.get('to_date')} &nbsp;|&nbsp;
-                   Previous: {prev_per.get('from_date')} to {prev_per.get('to_date')}</p>
+            <h1 class="page-title">Consumption Comparison Summary</h1>
+
+            <!-- Period header -->
+            <div style="background:#002050;border-radius:10px;padding:14px 20px;
+                        margin-bottom:16px;display:flex;align-items:center;gap:16px;">
+                <div style="flex:1;">
+                    <div style="font-size:8px;font-weight:700;letter-spacing:1px;
+                                text-transform:uppercase;color:rgba(255,255,255,0.55);margin-bottom:3px;">
+                        Current Period
+                    </div>
+                    <div style="font-size:12px;font-weight:700;color:#fff;">
+                        {cur_per.get('from_date')} to {cur_per.get('to_date')}
+                    </div>
+                </div>
+                <div style="color:rgba(255,255,255,0.4);font-size:18px;">vs</div>
+                <div style="flex:1;text-align:right;">
+                    <div style="font-size:8px;font-weight:700;letter-spacing:1px;
+                                text-transform:uppercase;color:rgba(255,255,255,0.55);margin-bottom:3px;">
+                        Previous Period
+                    </div>
+                    <div style="font-size:12px;font-weight:700;color:#fff;">
+                        {prev_per.get('from_date')} to {prev_per.get('to_date')}
+                    </div>
+                </div>
+                <div style="margin-left:16px;background:rgba(255,255,255,0.1);
+                            border-radius:8px;padding:8px 14px;text-align:center;">
+                    <div style="font-size:8px;font-weight:700;letter-spacing:1px;
+                                text-transform:uppercase;color:rgba(255,255,255,0.55);margin-bottom:3px;">
+                        {ctype_label} Customers
+                    </div>
+                    <div style="font-size:14px;font-weight:800;color:#fff;">{ret:,}</div>
+                </div>
+                <div style="background:rgba(255,255,255,0.1);border-radius:8px;
+                            padding:8px 14px;text-align:center;">
+                    <div style="font-size:8px;font-weight:700;letter-spacing:1px;
+                                text-transform:uppercase;color:rgba(255,255,255,0.55);margin-bottom:3px;">
+                        Scope
+                    </div>
+                    <div style="font-size:11px;font-weight:700;color:#fff;">{scope_label}</div>
+                </div>
             </div>
-            <div class="reliability-kpi-grid">
-                <div class="reliability-kpi-card">
-                    <div class="reliability-kpi-value">{curr_kwh:,.0f}</div>
-                    <div class="reliability-kpi-label">Current<br/>Consumption (kWh)</div>
-                </div>
-                <div class="reliability-kpi-card">
-                    <div class="reliability-kpi-value">{prev_kwh:,.0f}</div>
-                    <div class="reliability-kpi-label">Previous<br/>Consumption (kWh)</div>
-                </div>
-                <div class="reliability-kpi-card">
-                    <div class="reliability-kpi-value" style="color:{bv_color}">{var_str}</div>
-                    <div class="reliability-kpi-label">Overall<br/>Change</div>
-                </div>
-                <div class="reliability-kpi-card">
-                    <div class="reliability-kpi-value">&#8358;{curr_amt:,.0f}</div>
-                    <div class="reliability-kpi-label">Current<br/>Billed Amount</div>
-                </div>
-                <div class="reliability-kpi-card">
-                    <div class="reliability-kpi-value">&#8358;{prev_amt:,.0f}</div>
-                    <div class="reliability-kpi-label">Previous<br/>Billed Amount</div>
-                </div>
-                <div class="reliability-kpi-card">
-                    <div class="reliability-kpi-value" style="color:{bv_color}">&#8358;{bv:+,.0f}</div>
-                    <div class="reliability-kpi-label">Billing<br/>Variance</div>
+
+            <!-- KPI cards row -->
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:16px;">
+                {_kpi_card('Consumption (kWh)', f'{curr_kwh:,.0f}', f'{prev_kwh:,.0f}', kwh_var_str, var_color)}
+                {_kpi_card('Billed Amount', f'{curr_amt:,.0f}', f'{prev_amt:,.0f}', ("+" if bv >= 0 else "") + f"&#8358;{bv:,.0f}", bv_color, prefix='&#8358;')}
+                <div style="background:#f8fafc;border-radius:10px;padding:14px 16px;
+                            border:1px solid rgba(0,32,80,0.08);">
+                    <div style="font-size:8px;font-weight:700;text-transform:uppercase;
+                                letter-spacing:1px;color:#002050;opacity:0.55;margin-bottom:8px;">
+                        Trend Distribution
+                    </div>
+                    {trend_badges}
                 </div>
             </div>
-            <h2 style="margin:14px 0 6px;font-size:13px;">Trend Distribution ({ret} customers)</h2>
-            <div class="table-container">
-                <table>
-                    <thead><tr><th>Trend</th><th style="text-align:right">Customers</th></tr></thead>
-                    <tbody>{trend_rows}</tbody>
-                </table>
-            </div>
+
         </div>
         <div class="footer">
             <img src="{context.get('footer_logo_url', '')}" alt="Powered by EMRC" />
@@ -2900,8 +2962,19 @@ def render_commercial_comparison_table(data, context, page_number):
 
 
 def render_commercial_comparison_insights(data, context, page_number):
-    """AI insights page for a comparison report."""
+    """ARIA insights page for a comparison report."""
     insights = data.get('ai_insights', {})
+
+    aria_badge = """
+        <div style="display:inline-flex;align-items:center;gap:8px;
+                    background:#002050;color:#fff;border-radius:8px;
+                    padding:6px 14px;margin-bottom:14px;">
+            <span style="font-size:13px;font-weight:800;letter-spacing:1px;">ARIA</span>
+            <span style="font-size:9px;font-weight:400;opacity:0.75;letter-spacing:0.5px;">
+                Automated Raven Intelligence Assistance
+            </span>
+        </div>"""
+
     if not insights or 'error' in insights:
         return f"""
     <div class="page">
@@ -2910,8 +2983,11 @@ def render_commercial_comparison_insights(data, context, page_number):
                 <div class="company-name">{context.get('company_name', '')} | {context.get('report_scope', '')}</div>
                 <div class="date">{context.get('report_date', '')}</div>
             </div>
-            <h1 class="page-title">AI Insights</h1>
-            <p style="margin-top:24px;color:#94a3b8;">AI insights were not available for this report.</p>
+            <h1 class="page-title">ARIA Insights</h1>
+            {aria_badge}
+            <p style="margin-top:16px;color:#94a3b8;font-size:11px;">
+                ARIA insights were not available for this report.
+            </p>
         </div>
         <div class="footer">
             <img src="{context.get('footer_logo_url', '')}" alt="Powered by EMRC" />
@@ -2920,18 +2996,34 @@ def render_commercial_comparison_insights(data, context, page_number):
     </div>
     """
 
-    headline       = insights.get('headline', '')
-    summary        = insights.get('summary', '')
-    notable        = insights.get('notable_trends', [])
-    watch_list     = insights.get('watch_list', [])
+    headline        = insights.get('headline', '')
+    summary         = insights.get('summary', '')
+    notable         = insights.get('notable_trends', [])
+    watch_list      = insights.get('watch_list', [])
     recommendations = insights.get('recommendations', [])
 
-    notable_html = "".join(f'<li style="margin-bottom:6px">{t}</li>' for t in notable)
-    recs_html    = "".join(f'<li style="margin-bottom:6px">{r}</li>' for r in recommendations)
-    watch_html   = "".join(
-        f'<tr><td><strong>{w.get("customer_name","—")}</strong><br/>'
-        f'<span style="color:#64748b;font-size:10px">{w.get("account_no","")}</span></td>'
-        f'<td>{w.get("reason","")}</td></tr>'
+    notable_html = "".join(
+        f'<div style="display:flex;gap:8px;margin-bottom:7px;align-items:flex-start;">'
+        f'<span style="min-width:6px;height:6px;margin-top:4px;border-radius:50%;'
+        f'background:#002050;display:inline-block;flex-shrink:0;"></span>'
+        f'<span style="font-size:10.5px;color:#1e293b;line-height:1.5;">{t}</span></div>'
+        for t in notable
+    )
+
+    recs_html = "".join(
+        f'<div style="display:flex;gap:8px;margin-bottom:7px;align-items:flex-start;">'
+        f'<span style="min-width:6px;height:6px;margin-top:4px;border-radius:50%;'
+        f'background:#1a6b3c;display:inline-block;flex-shrink:0;"></span>'
+        f'<span style="font-size:10.5px;color:#1e293b;line-height:1.5;">{r}</span></div>'
+        for r in recommendations
+    )
+
+    watch_rows = "".join(
+        f'<tr>'
+        f'<td style="width:28%"><strong style="font-size:10px;">{w.get("customer_name","—")}</strong><br/>'
+        f'<span style="color:#64748b;font-size:9px;">{w.get("account_no","")}</span></td>'
+        f'<td style="font-size:10px;line-height:1.4;color:#1e293b;">{w.get("reason","")}</td>'
+        f'</tr>'
         for w in watch_list
     )
 
@@ -2942,27 +3034,61 @@ def render_commercial_comparison_insights(data, context, page_number):
                 <div class="company-name">{context.get('company_name', '')} | {context.get('report_scope', '')}</div>
                 <div class="date">{context.get('report_date', '')}</div>
             </div>
-            <h1 class="page-title">AI Insights</h1>
-            <div class="reliability-highlight">
-                <h2>{headline}</h2>
-                <p>{summary}</p>
-            </div>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:14px">
-                <div>
-                    <h3 style="font-size:12px;font-weight:600;margin-bottom:8px;color:#002050">Notable Trends</h3>
-                    <ul style="padding-left:16px;font-size:11px;color:#334155">{notable_html}</ul>
-                    <h3 style="font-size:12px;font-weight:600;margin:14px 0 8px;color:#002050">Recommendations</h3>
-                    <ul style="padding-left:16px;font-size:11px;color:#334155">{recs_html}</ul>
+
+            <h1 class="page-title">ARIA Insights</h1>
+            {aria_badge}
+
+            <!-- Headline card -->
+            <div style="background:#002050;border-radius:10px;padding:16px 20px;margin-bottom:16px;">
+                <div style="font-size:8px;font-weight:700;letter-spacing:1.5px;
+                            text-transform:uppercase;color:rgba(255,255,255,0.6);margin-bottom:6px;">
+                    Key Finding
                 </div>
+                <div style="font-size:12.5px;font-weight:700;color:#fff;line-height:1.5;">
+                    {headline}
+                </div>
+                <div style="font-size:10px;color:rgba(255,255,255,0.75);margin-top:8px;line-height:1.5;">
+                    {summary}
+                </div>
+            </div>
+
+            <!-- 2-col layout -->
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+
+                <!-- Left: Notable Trends + Recommendations -->
                 <div>
-                    <h3 style="font-size:12px;font-weight:600;margin-bottom:8px;color:#002050">Watch List</h3>
+                    <div style="font-size:9px;font-weight:700;text-transform:uppercase;
+                                letter-spacing:1px;color:#002050;opacity:0.6;margin-bottom:8px;">
+                        Notable Trends
+                    </div>
+                    <div style="margin-bottom:14px;">{notable_html}</div>
+
+                    <div style="font-size:9px;font-weight:700;text-transform:uppercase;
+                                letter-spacing:1px;color:#002050;opacity:0.6;margin-bottom:8px;">
+                        Recommendations
+                    </div>
+                    <div>{recs_html}</div>
+                </div>
+
+                <!-- Right: Watch List -->
+                <div>
+                    <div style="font-size:9px;font-weight:700;text-transform:uppercase;
+                                letter-spacing:1px;color:#002050;opacity:0.6;margin-bottom:8px;">
+                        Watch List
+                    </div>
                     <div class="table-container">
                         <table>
-                            <thead><tr><th>Customer</th><th>Reason</th></tr></thead>
-                            <tbody>{watch_html}</tbody>
+                            <thead>
+                                <tr>
+                                    <th style="width:28%">Customer</th>
+                                    <th>Reason</th>
+                                </tr>
+                            </thead>
+                            <tbody>{watch_rows}</tbody>
                         </table>
                     </div>
                 </div>
+
             </div>
         </div>
         <div class="footer">
