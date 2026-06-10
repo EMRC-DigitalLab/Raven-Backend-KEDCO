@@ -2766,13 +2766,14 @@ def render_commercial_comparison_summary(data, context, page_number):
     ctype    = data.get('customer_type', 'all')
     scope    = data.get('scope', {})
 
-    curr_kwh  = totals.get('current_consumption_kwh', 0) or 0
-    prev_kwh  = totals.get('previous_consumption_kwh', 0) or 0
-    var_pct   = totals.get('variance_pct')
-    curr_amt  = totals.get('current_billed_amount', 0) or 0
-    prev_amt  = totals.get('previous_billed_amount', 0) or 0
-    bv        = totals.get('billing_variance', 0) or 0
-    ret       = data.get('customers_returned', 0)
+    curr_kwh       = totals.get('current_consumption_kwh', 0) or 0
+    prev_kwh       = totals.get('previous_consumption_kwh', 0) or 0
+    var_pct        = totals.get('variance_pct')
+    curr_amt       = totals.get('current_billed_amount', 0) or 0
+    prev_amt       = totals.get('previous_billed_amount', 0) or 0
+    bv             = totals.get('billing_variance', 0) or 0
+    ret            = data.get('customers_returned', 0)
+    total_in_scope = data.get('total_customers_in_scope', ret)
 
     var_str   = (f"{var_pct:+.1f}%" if var_pct is not None else "—")
     bv_color  = "#22c55e" if bv >= 0 else "#ef4444"
@@ -2799,37 +2800,37 @@ def render_commercial_comparison_summary(data, context, page_number):
     }
     trend_badges = "".join(
         f'<div style="display:flex;align-items:center;justify-content:space-between;'
-        f'padding:7px 12px;border-radius:7px;margin-bottom:5px;'
+        f'padding:5px 10px;border-radius:6px;margin-bottom:4px;'
         f'background:rgba(0,32,80,0.04);">'
-        f'<div style="display:flex;align-items:center;gap:8px;">'
-        f'<span style="width:8px;height:8px;border-radius:50%;background:{trend_colors.get(label,"#94a3b8")};display:inline-block;flex-shrink:0;"></span>'
-        f'<span style="font-size:10.5px;color:#1e293b;">{label}</span>'
+        f'<div style="display:flex;align-items:center;gap:7px;">'
+        f'<span style="width:7px;height:7px;border-radius:50%;background:{trend_colors.get(label,"#94a3b8")};display:inline-block;flex-shrink:0;"></span>'
+        f'<span style="font-size:10px;color:#1e293b;">{label}</span>'
         f'</div>'
-        f'<span style="font-size:12px;font-weight:700;color:#002050;">{count}</span>'
+        f'<span style="font-size:11px;font-weight:700;color:#002050;">{count}</span>'
         f'</div>'
         for label, count in trend_d.items() if count > 0
     )
 
     def _kpi_card(label, current_val, prev_val, variance, variance_color, prefix=''):
         return f"""
-        <div style="background:#f8fafc;border-radius:10px;padding:14px 16px;
+        <div style="background:#f8fafc;border-radius:8px;padding:10px 14px;
                     border:1px solid rgba(0,32,80,0.08);">
-            <div style="font-size:8px;font-weight:700;text-transform:uppercase;
-                        letter-spacing:1px;color:#002050;opacity:0.55;margin-bottom:10px;">
+            <div style="font-size:7.5px;font-weight:700;text-transform:uppercase;
+                        letter-spacing:1px;color:#002050;opacity:0.55;margin-bottom:7px;">
                 {label}
             </div>
-            <div style="font-size:8px;font-weight:600;text-transform:uppercase;
-                        letter-spacing:0.8px;color:#64748b;margin-bottom:3px;">Current</div>
-            <div style="font-size:17px;font-weight:800;color:#002050;margin-bottom:10px;">
+            <div style="font-size:7.5px;font-weight:600;text-transform:uppercase;
+                        letter-spacing:0.8px;color:#64748b;margin-bottom:2px;">Current</div>
+            <div style="font-size:15px;font-weight:800;color:#002050;margin-bottom:7px;">
                 {prefix}{current_val}
             </div>
-            <div style="border-top:1px solid rgba(0,32,80,0.08);padding-top:8px;">
-                <div style="font-size:8px;font-weight:600;text-transform:uppercase;
-                            letter-spacing:0.8px;color:#64748b;margin-bottom:3px;">Previous</div>
-                <div style="font-size:14px;font-weight:700;color:#475569;margin-bottom:4px;">
+            <div style="border-top:1px solid rgba(0,32,80,0.08);padding-top:6px;">
+                <div style="font-size:7.5px;font-weight:600;text-transform:uppercase;
+                            letter-spacing:0.8px;color:#64748b;margin-bottom:2px;">Previous</div>
+                <div style="font-size:12px;font-weight:700;color:#475569;margin-bottom:3px;">
                     {prefix}{prev_val}
                 </div>
-                <div style="font-size:12px;font-weight:700;color:{variance_color};">{variance}</div>
+                <div style="font-size:11px;font-weight:700;color:{variance_color};">{variance}</div>
             </div>
         </div>"""
 
@@ -2846,53 +2847,53 @@ def render_commercial_comparison_summary(data, context, page_number):
             <h1 class="page-title">Consumption Comparison Summary</h1>
 
             <!-- Period header -->
-            <div style="background:#002050;border-radius:10px;padding:14px 20px;
-                        margin-bottom:16px;display:flex;align-items:center;gap:16px;">
+            <div style="background:#002050;border-radius:8px;padding:10px 16px;
+                        margin-bottom:12px;display:flex;align-items:center;gap:14px;">
                 <div style="flex:1;">
-                    <div style="font-size:8px;font-weight:700;letter-spacing:1px;
-                                text-transform:uppercase;color:rgba(255,255,255,0.55);margin-bottom:3px;">
+                    <div style="font-size:7.5px;font-weight:700;letter-spacing:1px;
+                                text-transform:uppercase;color:rgba(255,255,255,0.55);margin-bottom:2px;">
                         Current Period
                     </div>
-                    <div style="font-size:12px;font-weight:700;color:#fff;">
+                    <div style="font-size:11px;font-weight:700;color:#fff;">
                         {cur_per.get('from_date')} to {cur_per.get('to_date')}
                     </div>
                 </div>
-                <div style="color:rgba(255,255,255,0.4);font-size:18px;">vs</div>
+                <div style="color:rgba(255,255,255,0.4);font-size:16px;font-weight:700;">VS</div>
                 <div style="flex:1;text-align:right;">
-                    <div style="font-size:8px;font-weight:700;letter-spacing:1px;
-                                text-transform:uppercase;color:rgba(255,255,255,0.55);margin-bottom:3px;">
+                    <div style="font-size:7.5px;font-weight:700;letter-spacing:1px;
+                                text-transform:uppercase;color:rgba(255,255,255,0.55);margin-bottom:2px;">
                         Previous Period
                     </div>
-                    <div style="font-size:12px;font-weight:700;color:#fff;">
+                    <div style="font-size:11px;font-weight:700;color:#fff;">
                         {prev_per.get('from_date')} to {prev_per.get('to_date')}
                     </div>
                 </div>
-                <div style="margin-left:16px;background:rgba(255,255,255,0.1);
-                            border-radius:8px;padding:8px 14px;text-align:center;">
-                    <div style="font-size:8px;font-weight:700;letter-spacing:1px;
-                                text-transform:uppercase;color:rgba(255,255,255,0.55);margin-bottom:3px;">
+                <div style="margin-left:12px;background:rgba(255,255,255,0.1);
+                            border-radius:7px;padding:6px 12px;text-align:center;">
+                    <div style="font-size:7.5px;font-weight:700;letter-spacing:1px;
+                                text-transform:uppercase;color:rgba(255,255,255,0.55);margin-bottom:2px;">
                         {ctype_label} Customers
                     </div>
-                    <div style="font-size:14px;font-weight:800;color:#fff;">{ret:,}</div>
+                    <div style="font-size:13px;font-weight:800;color:#fff;">{total_in_scope:,}</div>
                 </div>
-                <div style="background:rgba(255,255,255,0.1);border-radius:8px;
-                            padding:8px 14px;text-align:center;">
-                    <div style="font-size:8px;font-weight:700;letter-spacing:1px;
-                                text-transform:uppercase;color:rgba(255,255,255,0.55);margin-bottom:3px;">
+                <div style="background:rgba(255,255,255,0.1);border-radius:7px;
+                            padding:6px 12px;text-align:center;">
+                    <div style="font-size:7.5px;font-weight:700;letter-spacing:1px;
+                                text-transform:uppercase;color:rgba(255,255,255,0.55);margin-bottom:2px;">
                         Scope
                     </div>
-                    <div style="font-size:11px;font-weight:700;color:#fff;">{scope_label}</div>
+                    <div style="font-size:10px;font-weight:700;color:#fff;">{scope_label}</div>
                 </div>
             </div>
 
             <!-- KPI cards row -->
-            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:16px;">
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:12px;">
                 {_kpi_card('Consumption (kWh)', f'{curr_kwh:,.0f}', f'{prev_kwh:,.0f}', kwh_var_str, var_color)}
                 {_kpi_card('Billed Amount', f'{curr_amt:,.0f}', f'{prev_amt:,.0f}', ("+" if bv >= 0 else "") + f"&#8358;{bv:,.0f}", bv_color, prefix='&#8358;')}
-                <div style="background:#f8fafc;border-radius:10px;padding:14px 16px;
+                <div style="background:#f8fafc;border-radius:8px;padding:10px 14px;
                             border:1px solid rgba(0,32,80,0.08);">
-                    <div style="font-size:8px;font-weight:700;text-transform:uppercase;
-                                letter-spacing:1px;color:#002050;opacity:0.55;margin-bottom:8px;">
+                    <div style="font-size:7.5px;font-weight:700;text-transform:uppercase;
+                                letter-spacing:1px;color:#002050;opacity:0.55;margin-bottom:7px;">
                         Trend Distribution
                     </div>
                     {trend_badges}
@@ -3008,30 +3009,69 @@ def render_commercial_comparison_insights(data, context, page_number):
     watch_list      = insights.get('watch_list', [])
     recommendations = insights.get('recommendations', [])
 
-    notable_html = "".join(
-        f'<div style="display:flex;gap:8px;margin-bottom:7px;align-items:flex-start;">'
-        f'<span style="min-width:6px;height:6px;margin-top:4px;border-radius:50%;'
-        f'background:#002050;display:inline-block;flex-shrink:0;"></span>'
-        f'<span style="font-size:10.5px;color:#1e293b;line-height:1.5;">{t}</span></div>'
-        for t in notable
-    )
+    is_landscape = context.get('orientation', 'landscape') == 'landscape'
 
-    recs_html = "".join(
-        f'<div style="display:flex;gap:8px;margin-bottom:7px;align-items:flex-start;">'
-        f'<span style="min-width:6px;height:6px;margin-top:4px;border-radius:50%;'
-        f'background:#1a6b3c;display:inline-block;flex-shrink:0;"></span>'
-        f'<span style="font-size:10.5px;color:#1e293b;line-height:1.5;">{r}</span></div>'
-        for r in recommendations
-    )
+    def _bullet(text, color):
+        return (
+            f'<div style="display:flex;gap:8px;margin-bottom:7px;align-items:flex-start;">'
+            f'<span style="min-width:6px;height:6px;margin-top:4px;border-radius:50%;'
+            f'background:{color};display:inline-block;flex-shrink:0;"></span>'
+            f'<span style="font-size:10.5px;color:#1e293b;line-height:1.5;">{text}</span></div>'
+        )
+
+    notable_html = "".join(_bullet(t, '#002050') for t in notable)
+    recs_html    = "".join(_bullet(r, '#1a6b3c') for r in recommendations)
 
     watch_rows = "".join(
         f'<tr>'
-        f'<td style="width:28%"><strong style="font-size:10px;">{w.get("customer_name","—")}</strong><br/>'
+        f'<td style="width:30%"><strong style="font-size:10px;">{w.get("customer_name","—")}</strong><br/>'
         f'<span style="color:#64748b;font-size:9px;">{w.get("account_no","")}</span></td>'
         f'<td style="font-size:10px;line-height:1.4;color:#1e293b;">{w.get("reason","")}</td>'
         f'</tr>'
         for w in watch_list
     )
+
+    def _section_label(text):
+        return (
+            f'<div style="font-size:9px;font-weight:700;text-transform:uppercase;'
+            f'letter-spacing:1px;color:#002050;opacity:0.6;margin-bottom:8px;">{text}</div>'
+        )
+
+    watch_block = f"""
+        {_section_label("Watch List")}
+        <div class="table-container">
+            <table>
+                <thead><tr><th style="width:30%">Customer</th><th>Reason</th></tr></thead>
+                <tbody>{watch_rows}</tbody>
+            </table>
+        </div>"""
+
+    if is_landscape:
+        # Landscape: 3 equal columns — Notable Trends | Recommendations | Watch List
+        body_html = f"""
+        <div style="display:grid;grid-template-columns:1fr 1fr 1.4fr;gap:16px;">
+            <div>
+                {_section_label("Notable Trends")}
+                <div>{notable_html}</div>
+            </div>
+            <div>
+                {_section_label("Recommendations")}
+                <div>{recs_html}</div>
+            </div>
+            <div>{watch_block}</div>
+        </div>"""
+    else:
+        # Portrait: 2 columns — (Notable Trends + Recommendations) | Watch List
+        body_html = f"""
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+            <div>
+                {_section_label("Notable Trends")}
+                <div style="margin-bottom:14px;">{notable_html}</div>
+                {_section_label("Recommendations")}
+                <div>{recs_html}</div>
+            </div>
+            <div>{watch_block}</div>
+        </div>"""
 
     return f"""
     <div class="page">
@@ -3058,44 +3098,7 @@ def render_commercial_comparison_insights(data, context, page_number):
                 </div>
             </div>
 
-            <!-- 2-col layout -->
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
-
-                <!-- Left: Notable Trends + Recommendations -->
-                <div>
-                    <div style="font-size:9px;font-weight:700;text-transform:uppercase;
-                                letter-spacing:1px;color:#002050;opacity:0.6;margin-bottom:8px;">
-                        Notable Trends
-                    </div>
-                    <div style="margin-bottom:14px;">{notable_html}</div>
-
-                    <div style="font-size:9px;font-weight:700;text-transform:uppercase;
-                                letter-spacing:1px;color:#002050;opacity:0.6;margin-bottom:8px;">
-                        Recommendations
-                    </div>
-                    <div>{recs_html}</div>
-                </div>
-
-                <!-- Right: Watch List -->
-                <div>
-                    <div style="font-size:9px;font-weight:700;text-transform:uppercase;
-                                letter-spacing:1px;color:#002050;opacity:0.6;margin-bottom:8px;">
-                        Watch List
-                    </div>
-                    <div class="table-container">
-                        <table>
-                            <thead>
-                                <tr>
-                                    <th style="width:28%">Customer</th>
-                                    <th>Reason</th>
-                                </tr>
-                            </thead>
-                            <tbody>{watch_rows}</tbody>
-                        </table>
-                    </div>
-                </div>
-
-            </div>
+            {body_html}
         </div>
         <div class="footer">
             <img src="{context.get('footer_logo_url', '')}" alt="Powered by EMRC" />
@@ -4220,6 +4223,7 @@ class PDFGenerator:
             'primary_color': self.theme['primary_color'],
             'accent_color':  self.theme['accent_color'],
             'text_color':    self.theme['text_color'],
+            'orientation':   self.orientation,
         }
 
     def _format_report_date(self):
