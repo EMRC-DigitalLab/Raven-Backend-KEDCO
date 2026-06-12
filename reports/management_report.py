@@ -510,7 +510,7 @@ def _page(content: str, context: dict, page_number: int,
             {content}
         </div>
         <div class="page-footer">
-            <span class="footer-label">Prepared for management review</span>
+            <span class="footer-label">Written by ARIA &nbsp;·&nbsp; Automated Raven Intelligence Assistance</span>
             <span class="footer-page">{page_number}</span>
         </div>
     </div>"""

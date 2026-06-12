@@ -30,6 +30,8 @@ urlpatterns = [
     path('generate/html-preview/', views.generate_report_html_preview, name='generate-html-preview'),
     path('generate/management/', views.generate_management_report, name='generate-management'),
     path('generate/management/preview/', views.generate_management_html_preview, name='generate-management-preview'),
+    path('generate/management/commercial/', views.generate_commercial_management_report, name='generate-commercial-management'),
+    path('generate/management/commercial/preview/', views.generate_commercial_management_html_preview, name='generate-commercial-management-preview'),
     path('generate/management/<str:job_id>/', views.management_report_status, name='management-report-status'),
     
     # History
