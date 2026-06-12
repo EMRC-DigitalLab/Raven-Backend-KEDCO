@@ -717,6 +717,35 @@ def render_mgmt_kpi_dashboard(narrative: dict, data: dict,
     return _page(content, context, page_number)
 
 
+def _auto_interp(cat: str, count: int, total_hrs: float, avg_dur: float) -> str:
+    """Data-driven fallback interpretation when AI text is unavailable for a category."""
+    c = cat.strip().upper()
+    if 'L/S' in c and 'GS' not in c and '330' not in c:
+        label = "Load shedding"
+    elif 'TCN' in c:
+        label = "TCN-driven outage"
+    elif 'E/F' in c:
+        label = "Equipment fault"
+    elif 'L/F' in c:
+        label = "Line fault"
+    elif 'O/S' in c:
+        label = "Out-of-service event"
+    elif 'PERMIT' in c:
+        label = "Permitted/scheduled outage"
+    elif 'P/M' in c:
+        label = "Planned maintenance"
+    elif 'MTNC' in c:
+        label = "Maintenance outage"
+    elif 'EM/D' in c or 'EMD' in c:
+        label = "Emergency dispatch"
+    else:
+        label = cat
+    sev = "High-frequency" if count > 100 else ("Significant" if count > 15 else "Low-frequency")
+    dur = "long-duration" if avg_dur > 10 else ("moderate-duration" if avg_dur > 5 else "short-duration")
+    return (f"{label}: {sev} {dur} — {count:,} events, {total_hrs:,.1f} total hours, "
+            f"{avg_dur:.1f} hrs avg per event.")
+
+
 def render_mgmt_reliability_review(narrative: dict, data: dict,
                                     context: dict, page_number: int):
     """Returns (html, pages_used)."""
@@ -734,8 +763,14 @@ def render_mgmt_reliability_review(narrative: dict, data: dict,
     # ── Page 1: Interruption breakdown table ──
     rows_html = ""
     for item in (interr_data or []):
-        cat = item.get('type', '—')
-        note = impl_lookup.get(cat.strip().upper(), item.get('management_note', ''))
+        cat   = item.get('type', '—')
+        count = item.get('count', 0)
+        total = float(item.get('total_hours', 0))
+        avg   = float(item.get('avg_duration', 0))
+        # Use AI text if key matched, otherwise auto-generate from data
+        note  = (impl_lookup.get(cat.strip().upper())
+                 or item.get('management_note', '')
+                 or _auto_interp(cat, count, total, avg))
         rows_html += f"""
         <tr>
             <td><strong>{cat}</strong></td>

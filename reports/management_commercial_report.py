@@ -73,15 +73,15 @@ Write like a senior commercial director presenting to the board. Every narrative
 must be substantial — 2 to 4 full sentences minimum. Be specific about numbers.
 Return ONLY a valid JSON object with this exact structure (no trailing commas):
 
-{{
+{
   "headline": "<one bold sentence capturing the single most important commercial finding>",
 
-  "executive_summary": {{
+  "executive_summary": {
     "paragraph_1": "<Overall revenue performance: what changed, by how much, and what it means>",
     "paragraph_2": "<Coverage and revenue at risk: how many customers were unread, what revenue is exposed, urgency>",
     "paragraph_3": "<MDI vs MDNI balance: which segment drives revenue, which needs attention>",
     "management_priority": "<The one thing management must act on this cycle>"
-  }},
+  },
 
   "revenue_narrative": "<2-3 sentences interpreting total revenue, trend direction, and what is driving it>",
   "coverage_narrative": "<2-3 sentences on coverage rate — what the unread gap means in naira terms and operational risk>",
@@ -92,23 +92,23 @@ Return ONLY a valid JSON object with this exact structure (no trailing commas):
   "customer_narrative": "<2-3 sentences on the top customer concentration risk — what share of revenue comes from top N accounts>",
 
   "priority_issues": [
-    {{"issue": "<commercial issue name>", "evidence": "<specific data point — naira amount, %, customer count>", "risk": "<management risk if unaddressed>", "response": "<required management action>"}},
-    {{"issue": "<commercial issue name>", "evidence": "<specific data point>", "risk": "<management risk>", "response": "<required action>"}},
-    {{"issue": "<commercial issue name>", "evidence": "<specific data point>", "risk": "<management risk>", "response": "<required action>"}},
-    {{"issue": "<commercial issue name>", "evidence": "<specific data point>", "risk": "<management risk>", "response": "<required action>"}},
-    {{"issue": "<commercial issue name>", "evidence": "<specific data point>", "risk": "<management risk>", "response": "<required action>"}}
+    {"issue": "<commercial issue name>", "evidence": "<specific data point — naira amount, %, customer count>", "risk": "<management risk if unaddressed>", "response": "<required management action>"},
+    {"issue": "<commercial issue name>", "evidence": "<specific data point>", "risk": "<management risk>", "response": "<required action>"},
+    {"issue": "<commercial issue name>", "evidence": "<specific data point>", "risk": "<management risk>", "response": "<required action>"},
+    {"issue": "<commercial issue name>", "evidence": "<specific data point>", "risk": "<management risk>", "response": "<required action>"},
+    {"issue": "<commercial issue name>", "evidence": "<specific data point>", "risk": "<management risk>", "response": "<required action>"}
   ],
   "action_plan": [
-    {{"area": "<action area>", "action": "<specific recommended commercial action>", "team": "<responsible team or role>", "timeline": "<e.g. Before next report / 2 weeks / Monthly>", "output": "<expected deliverable>"}},
-    {{"area": "<action area>", "action": "<specific action>", "team": "<team>", "timeline": "<timeline>", "output": "<output>"}},
-    {{"area": "<action area>", "action": "<specific action>", "team": "<team>", "timeline": "<timeline>", "output": "<output>"}},
-    {{"area": "<action area>", "action": "<specific action>", "team": "<team>", "timeline": "<timeline>", "output": "<output>"}},
-    {{"area": "<action area>", "action": "<specific action>", "team": "<team>", "timeline": "<timeline>", "output": "<output>"}},
-    {{"area": "<action area>", "action": "<specific action>", "team": "<team>", "timeline": "<timeline>", "output": "<output>"}},
-    {{"area": "<action area>", "action": "<specific action>", "team": "<team>", "timeline": "<timeline>", "output": "<output>"}},
-    {{"area": "<action area>", "action": "<specific action>", "team": "<team>", "timeline": "<timeline>", "output": "<output>"}}
+    {"area": "<action area>", "action": "<specific recommended commercial action>", "team": "<responsible team or role>", "timeline": "<e.g. Before next report / 2 weeks / Monthly>", "output": "<expected deliverable>"},
+    {"area": "<action area>", "action": "<specific action>", "team": "<team>", "timeline": "<timeline>", "output": "<output>"},
+    {"area": "<action area>", "action": "<specific action>", "team": "<team>", "timeline": "<timeline>", "output": "<output>"},
+    {"area": "<action area>", "action": "<specific action>", "team": "<team>", "timeline": "<timeline>", "output": "<output>"},
+    {"area": "<action area>", "action": "<specific action>", "team": "<team>", "timeline": "<timeline>", "output": "<output>"},
+    {"area": "<action area>", "action": "<specific action>", "team": "<team>", "timeline": "<timeline>", "output": "<output>"},
+    {"area": "<action area>", "action": "<specific action>", "team": "<team>", "timeline": "<timeline>", "output": "<output>"},
+    {"area": "<action area>", "action": "<specific action>", "team": "<team>", "timeline": "<timeline>", "output": "<output>"}
   ]
-}}
+}
 
 DATA:
 
@@ -262,9 +262,17 @@ def _mgmt_page(content: str, context: dict, page_number: int) -> str:
 
 def _generate_commercial_narrative(data: dict, period_label: str, company: str) -> dict:
     """Call Claude API to generate commercial management narrative."""
+    import re
+    import anthropic
+    from django.conf import settings
+
+    api_key = getattr(settings, 'ANTHROPIC_API_KEY', '')
+    if not api_key:
+        logger.error("ANTHROPIC_API_KEY is not configured — commercial narrative unavailable.")
+        return _fallback_narrative()
+
     try:
-        import anthropic
-        client = anthropic.Anthropic()
+        client = anthropic.Anthropic(api_key=api_key)
 
         overview    = data.get('overview', {})
         prev_ov     = data.get('prev_overview', {})
@@ -275,57 +283,60 @@ def _generate_commercial_narrative(data: dict, period_label: str, company: str) 
         mdi_custs  = [c for c in customers if c.get('customer_type') == 'MDI']
         mdni_custs = [c for c in customers if c.get('customer_type') == 'MDNI']
 
-        top_mdi  = [f"{c['customer_name']} ({_fmt_naira(c.get('current_billed_amount',0))})"
-                    for c in sorted(mdi_custs, key=lambda x: -(x.get('current_billed_amount') or 0))[:5]]
-        top_mdni = [f"{c['customer_name']} ({_fmt_naira(c.get('current_billed_amount',0))})"
+        top_mdi  = [f"{c['customer_name']} ({_fmt_naira(c.get('current_billed_amount', 0))})"
+                    for c in sorted(mdi_custs,  key=lambda x: -(x.get('current_billed_amount') or 0))[:5]]
+        top_mdni = [f"{c['customer_name']} ({_fmt_naira(c.get('current_billed_amount', 0))})"
                     for c in sorted(mdni_custs, key=lambda x: -(x.get('current_billed_amount') or 0))[:5]]
 
-        gainers   = [c for c in customers if (c.get('variance_pct') or 0) > 0]
-        decliners = [c for c in customers if (c.get('variance_pct') or 0) < 0]
-        gainers   = sorted(gainers,   key=lambda x: -(x.get('variance_pct') or 0))[:5]
-        decliners = sorted(decliners, key=lambda x:  (x.get('variance_pct') or 0))[:5]
+        gainers   = sorted([c for c in customers if (c.get('variance_pct') or 0) > 0],
+                           key=lambda x: -(x.get('variance_pct') or 0))[:5]
+        decliners = sorted([c for c in customers if (c.get('variance_pct') or 0) < 0],
+                           key=lambda x:  (x.get('variance_pct') or 0))[:5]
 
         district_table = "\n".join(
-            f"  {d['district']}: {_fmt_kwh(d['total_billed_kwh'])} / {_fmt_naira(d['total_billed_amount'])}"
+            f"  {d.get('district','')}: {_fmt_kwh(d.get('total_billed_kwh', 0))} / {_fmt_naira(d.get('total_billed_amount', 0))}"
             for d in districts
         ) or "  No district data"
 
-        curr_rev  = overview.get('total_billed_amount', 0)
-        prev_rev  = prev_ov.get('total_billed_amount', 0)
+        curr_rev = overview.get('total_billed_amount', 0)
+        prev_rev = prev_ov.get('total_billed_amount', 0)
 
         mdi_cov_n  = len([c for c in mdi_custs  if (c.get('current_billed_amount') or 0) > 0])
         mdni_cov_n = len([c for c in mdni_custs if (c.get('current_billed_amount') or 0) > 0])
-        mdi_total  = overview.get('mdi_count', 1)  or 1
+        mdi_total  = overview.get('mdi_count',  1) or 1
         mdni_total = overview.get('mdni_count', 1) or 1
 
-        prompt = _COMMERCIAL_USER_PROMPT_TEMPLATE.format(
-            company        = company,
-            period         = period_label,
-            curr_revenue   = _fmt_naira(curr_rev),
-            prev_revenue   = _fmt_naira(prev_rev) if prev_rev else "N/A",
-            revenue_change = _pct_change(curr_rev, prev_rev) if prev_rev else "N/A",
-            mdi_revenue    = _fmt_naira(overview.get('mdi_revenue', 0)),
-            mdni_revenue   = _fmt_naira(overview.get('mdni_revenue', 0)),
-            total_kwh      = _fmt_kwh(overview.get('total_billed_kwh', 0)),
-            arpu           = _fmt_naira(overview.get('arpu', 0)),
-            atc_loss       = f"{overview.get('atc_loss', 0):.1f}%" if overview.get('atc_loss') else "N/A",
-            total_customers= overview.get('total_customers', 0),
-            customers_read = overview.get('customers_read', 0),
-            coverage_rate  = f"{overview.get('coverage_rate', 0):.1f}%",
-            customers_unread = overview.get('customers_unread', 0),
-            revenue_at_risk  = _fmt_naira(overview.get('estimated_revenue', 0)),
-            mdi_count      = overview.get('mdi_count', 0),
-            mdi_coverage   = f"{mdi_cov_n}/{mdi_total} ({mdi_cov_n/mdi_total*100:.0f}%)",
-            mdni_count     = overview.get('mdni_count', 0),
-            mdni_coverage  = f"{mdni_cov_n}/{mdni_total} ({mdni_cov_n/mdni_total*100:.0f}%)",
-            top_mdi        = "; ".join(top_mdi) or "No MDI data",
-            top_mdni       = "; ".join(top_mdni) or "No MDNI data",
-            district_table = district_table,
-            gainers        = "; ".join(f"{c['customer_name']} (+{c['variance_pct']:.1f}%)"
-                                       for c in gainers) or "None",
-            decliners      = "; ".join(f"{c['customer_name']} ({c['variance_pct']:.1f}%)"
-                                       for c in decliners) or "None",
-        )
+        # Build prompt using manual substitution to avoid .format() crashing on
+        # any { or } characters that may appear in district/customer names.
+        replacements = {
+            '{company}':          company,
+            '{period}':           period_label,
+            '{curr_revenue}':     _fmt_naira(curr_rev),
+            '{prev_revenue}':     _fmt_naira(prev_rev) if prev_rev else "N/A",
+            '{revenue_change}':   _pct_change(curr_rev, prev_rev) if prev_rev else "N/A",
+            '{mdi_revenue}':      _fmt_naira(overview.get('mdi_revenue', 0)),
+            '{mdni_revenue}':     _fmt_naira(overview.get('mdni_revenue', 0)),
+            '{total_kwh}':        _fmt_kwh(overview.get('total_billed_kwh', 0)),
+            '{arpu}':             _fmt_naira(overview.get('arpu', 0)),
+            '{atc_loss}':         f"{overview.get('atc_loss', 0):.1f}%" if overview.get('atc_loss') else "N/A",
+            '{total_customers}':  str(overview.get('total_customers', 0)),
+            '{customers_read}':   str(overview.get('customers_read', 0)),
+            '{coverage_rate}':    f"{overview.get('coverage_rate', 0):.1f}%",
+            '{customers_unread}': str(overview.get('customers_unread', 0)),
+            '{revenue_at_risk}':  _fmt_naira(overview.get('estimated_revenue', 0)),
+            '{mdi_count}':        str(overview.get('mdi_count', 0)),
+            '{mdi_coverage}':     f"{mdi_cov_n}/{mdi_total} ({mdi_cov_n/mdi_total*100:.0f}%)",
+            '{mdni_count}':       str(overview.get('mdni_count', 0)),
+            '{mdni_coverage}':    f"{mdni_cov_n}/{mdni_total} ({mdni_cov_n/mdni_total*100:.0f}%)",
+            '{top_mdi}':          "; ".join(top_mdi)  or "No MDI data",
+            '{top_mdni}':         "; ".join(top_mdni) or "No MDNI data",
+            '{district_table}':   district_table,
+            '{gainers}':          "; ".join(f"{c['customer_name']} (+{c['variance_pct']:.1f}%)" for c in gainers)   or "None",
+            '{decliners}':        "; ".join(f"{c['customer_name']} ({c['variance_pct']:.1f}%)"  for c in decliners) or "None",
+        }
+        prompt = _COMMERCIAL_USER_PROMPT_TEMPLATE
+        for placeholder, value in replacements.items():
+            prompt = prompt.replace(placeholder, str(value))
 
         response = client.messages.create(
             model      = "claude-sonnet-4-6",
@@ -334,13 +345,25 @@ def _generate_commercial_narrative(data: dict, period_label: str, company: str) 
             messages   = [{"role": "user", "content": prompt}],
         )
         raw = response.content[0].text.strip()
-        return json.loads(raw)
+
+        # Strip markdown fences if present
+        if raw.startswith("```"):
+            lines = raw.splitlines()
+            raw = "\n".join(l for l in lines if not l.strip().startswith("```")).strip()
+
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            match = re.search(r"\{.*\}", raw, re.DOTALL)
+            if match:
+                return json.loads(match.group())
+            raise
 
     except json.JSONDecodeError as exc:
-        logger.warning("Commercial AI JSON parse failed: %s", exc)
+        logger.error("Commercial AI JSON parse failed: %s", exc)
         return _fallback_narrative()
     except Exception as exc:
-        logger.warning("Commercial AI narrative failed: %s", exc)
+        logger.error("Commercial AI narrative failed: %s", exc, exc_info=True)
         return _fallback_narrative()
 
 
@@ -591,9 +614,9 @@ def render_commercial_mdi_mdni_split(narrative: dict, data: dict, context: dict,
     mdi_arpu  = (mdi_rev  / mdi_count)  if mdi_count  else 0
     mdni_arpu = (mdni_rev / mdni_count) if mdni_count else 0
 
-    mdi_note  = narrative.get('kpi_highlights', {}).get('mdi', '')
-    mdni_note = narrative.get('kpi_highlights', {}).get('mdni', '')
-    cov_note  = narrative.get('kpi_highlights', {}).get('coverage', '')
+    mdi_note  = narrative.get('mdi_narrative', '')
+    mdni_note = narrative.get('mdni_narrative', '')
+    cov_note  = narrative.get('coverage_narrative', '')
 
     def _seg_card(label, count, kwh, revenue, arpu, share, note, color):
         return f"""
@@ -650,6 +673,7 @@ def render_commercial_mdi_mdni_split(narrative: dict, data: dict, context: dict,
 
     content = f"""
         <h1 class="section-title">3. MDI vs MDNI Revenue Analysis</h1>
+        {_aria_badge()}
         {bar_html}
         <div style="display:flex;gap:12px;">
             {_seg_card('MDI — Maximum Demand Industrial', mdi_count, mdi_kwh, mdi_rev, mdi_arpu, mdi_share, mdi_note, '#002050')}
@@ -697,7 +721,7 @@ def render_commercial_revenue_by_district(narrative: dict, data: dict, context: 
 
     content = f"""
         <h1 class="section-title">4. Revenue by District &amp; Feeder</h1>
-
+        {_aria_badge()}
         {"<p class='narrative'>" + dist_narr + "</p>" if dist_narr else ""}
 
         <div class="subsection-title">Revenue by Business District</div>
@@ -765,6 +789,7 @@ def render_commercial_top_customers(narrative: dict, data: dict, context: dict, 
             return r
 
         body = "<p style='color:#94a3b8;font-size:11px;margin-top:20px;'>No data available.</p>" if not custs else f"""
+            {_aria_badge()}
             {"<p class='narrative'>" + show_narr + "</p>" if show_narr else ""}
             <table class="mgmt-table">
                 <thead>
@@ -779,8 +804,8 @@ def render_commercial_top_customers(narrative: dict, data: dict, context: dict, 
 
         return _mgmt_page(f'<h1 class="section-title">{section_num}. {title}</h1>{body}', context, page), 1
 
-    mdi_html,  mdi_pages  = _customer_table(mdi_sorted,  "Top MDI Customers by Revenue",  5, page_num, cust_narr)
-    mdni_html, mdni_pages = _customer_table(mdni_sorted, "Top MDNI Customers by Revenue", 6, page_num + mdi_pages)
+    mdi_html,  mdi_pages  = _customer_table(mdi_sorted,  "Top MDI Customers by Revenue",  5, page_num,            cust_narr)
+    mdni_html, mdni_pages = _customer_table(mdni_sorted, "Top MDNI Customers by Revenue", 6, page_num + mdi_pages, cust_narr)
 
     return mdi_html + mdni_html, mdi_pages + mdni_pages
 
@@ -820,6 +845,7 @@ def render_commercial_notable_movements(narrative: dict, data: dict, context: di
 
     content = f"""
         <h1 class="section-title">7. Notable Revenue Movements</h1>
+        {_aria_badge()}
         {"<p class='narrative'>" + mov_narr + "</p>" if mov_narr else ""}
 
         <div class="two-col">
