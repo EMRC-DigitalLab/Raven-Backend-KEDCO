@@ -68,47 +68,56 @@ _COMMERCIAL_SYSTEM_PROMPT = (
 )
 
 _COMMERCIAL_USER_PROMPT_TEMPLATE = """
-Analyse the following commercial performance data for {company} and produce a
-management-grade commercial report narrative. Return ONLY a valid JSON object
-with this exact structure (fill every field; no trailing commas):
+You are writing the ARIA commercial management report for {company} covering {period}.
+Write like a senior commercial director presenting to the board. Every narrative field
+must be substantial — 2 to 4 full sentences minimum. Be specific about numbers.
+Return ONLY a valid JSON object with this exact structure (no trailing commas):
 
 {{
-  "headline": "<one-sentence top finding — no em dash>",
-  "executive_summary": "<2-3 paragraph commercial performance overview>",
-  "kpi_highlights": {{
-    "revenue":   "<interpretation of total revenue vs previous period>",
-    "coverage":  "<interpretation of billing coverage rate and revenue at risk>",
-    "mdi":       "<MDI segment assessment — top contributors, risks>",
-    "mdni":      "<MDNI segment assessment — trend, concerns>"
+  "headline": "<one bold sentence capturing the single most important commercial finding>",
+
+  "executive_summary": {{
+    "paragraph_1": "<Overall revenue performance: what changed, by how much, and what it means>",
+    "paragraph_2": "<Coverage and revenue at risk: how many customers were unread, what revenue is exposed, urgency>",
+    "paragraph_3": "<MDI vs MDNI balance: which segment drives revenue, which needs attention>",
+    "management_priority": "<The one thing management must act on this cycle>"
   }},
-  "key_risks": [
-    {{"risk": "<short risk title>", "impact": "High|Medium|Low",
-      "description": "<one sentence>"}},
-    {{"risk": "<short risk title>", "impact": "High|Medium|Low",
-      "description": "<one sentence>"}}
+
+  "revenue_narrative": "<2-3 sentences interpreting total revenue, trend direction, and what is driving it>",
+  "coverage_narrative": "<2-3 sentences on coverage rate — what the unread gap means in naira terms and operational risk>",
+  "mdi_narrative": "<Full paragraph on MDI segment: revenue contribution, top accounts, trend, any concerns>",
+  "mdni_narrative": "<Full paragraph on MDNI segment: revenue contribution, trend, any concerns or opportunities>",
+  "district_narrative": "<2-3 sentences on which districts are leading, which are lagging, and why it matters>",
+  "movements_narrative": "<2-3 sentences explaining the biggest revenue gainers and decliners and what management should note>",
+  "customer_narrative": "<2-3 sentences on the top customer concentration risk — what share of revenue comes from top N accounts>",
+
+  "priority_issues": [
+    {{"issue": "<commercial issue name>", "evidence": "<specific data point — naira amount, %, customer count>", "risk": "<management risk if unaddressed>", "response": "<required management action>"}},
+    {{"issue": "<commercial issue name>", "evidence": "<specific data point>", "risk": "<management risk>", "response": "<required action>"}},
+    {{"issue": "<commercial issue name>", "evidence": "<specific data point>", "risk": "<management risk>", "response": "<required action>"}},
+    {{"issue": "<commercial issue name>", "evidence": "<specific data point>", "risk": "<management risk>", "response": "<required action>"}},
+    {{"issue": "<commercial issue name>", "evidence": "<specific data point>", "risk": "<management risk>", "response": "<required action>"}}
   ],
-  "recommendations": [
-    {{"title": "<short action title>", "action": "<specific action>",
-      "priority": "High|Medium|Low", "owner": "<team or role>"}},
-    {{"title": "<short action title>", "action": "<specific action>",
-      "priority": "High|Medium|Low", "owner": "<team or role>"}},
-    {{"title": "<short action title>", "action": "<specific action>",
-      "priority": "High|Medium|Low", "owner": "<team or role>"}}
-  ],
-  "priority_accounts": [
-    {{"account_name": "<customer name>", "reason": "<why flagged>",
-      "recommended_action": "<action>"}},
-    {{"account_name": "<customer name>", "reason": "<why flagged>",
-      "recommended_action": "<action>"}}
+  "action_plan": [
+    {{"area": "<action area>", "action": "<specific recommended commercial action>", "team": "<responsible team or role>", "timeline": "<e.g. Before next report / 2 weeks / Monthly>", "output": "<expected deliverable>"}},
+    {{"area": "<action area>", "action": "<specific action>", "team": "<team>", "timeline": "<timeline>", "output": "<output>"}},
+    {{"area": "<action area>", "action": "<specific action>", "team": "<team>", "timeline": "<timeline>", "output": "<output>"}},
+    {{"area": "<action area>", "action": "<specific action>", "team": "<team>", "timeline": "<timeline>", "output": "<output>"}},
+    {{"area": "<action area>", "action": "<specific action>", "team": "<team>", "timeline": "<timeline>", "output": "<output>"}},
+    {{"area": "<action area>", "action": "<specific action>", "team": "<team>", "timeline": "<timeline>", "output": "<output>"}},
+    {{"area": "<action area>", "action": "<specific action>", "team": "<team>", "timeline": "<timeline>", "output": "<output>"}},
+    {{"area": "<action area>", "action": "<specific action>", "team": "<team>", "timeline": "<timeline>", "output": "<output>"}}
   ]
 }}
 
+DATA:
+
 PERIOD: {period}
 
-REVENUE KPIs:
+REVENUE:
   Total Billed Revenue (current): {curr_revenue}
   Total Billed Revenue (previous): {prev_revenue}
-  Revenue change: {revenue_change}
+  Change: {revenue_change}
   MDI Revenue: {mdi_revenue}
   MDNI Revenue: {mdni_revenue}
   Total kWh Billed: {total_kwh}
@@ -117,29 +126,29 @@ REVENUE KPIs:
 
 COVERAGE:
   Total Customers: {total_customers}
-  Customers Billed this Period: {customers_read}
+  Customers Billed: {customers_read}
   Coverage Rate: {coverage_rate}
-  Customers Unread (missed): {customers_unread}
-  Estimated Revenue at Risk: {revenue_at_risk}
+  Unread Customers: {customers_unread}
+  Revenue at Risk: {revenue_at_risk}
 
-MDI SEGMENT:
+MDI:
   Count: {mdi_count}
   Revenue: {mdi_revenue}
   Coverage: {mdi_coverage}
-  Top 5 customers by revenue: {top_mdi}
+  Top 5: {top_mdi}
 
-MDNI SEGMENT:
+MDNI:
   Count: {mdni_count}
   Revenue: {mdni_revenue}
   Coverage: {mdni_coverage}
-  Top 5 customers by revenue: {top_mdni}
+  Top 5: {top_mdni}
 
-TOP REVENUE DISTRICTS:
+TOP DISTRICTS:
 {district_table}
 
-NOTABLE MOVEMENTS VS PREVIOUS PERIOD:
-  Biggest Gainers: {gainers}
-  Biggest Decliners: {decliners}
+MOVEMENTS:
+  Gainers: {gainers}
+  Decliners: {decliners}
 """
 
 
@@ -226,6 +235,24 @@ def _aria_badge() -> str:
         <span style="font-size:8.5px;font-weight:400;opacity:0.75;letter-spacing:0.5px;">
             Automated Raven Intelligence Assistance
         </span>
+    </div>"""
+
+
+def _mgmt_page(content: str, context: dict, page_number: int) -> str:
+    """Standard portrait page shell — header, content, footer."""
+    return f"""
+    <div class="page">
+        <div class="page-content">
+            <div class="page-header">
+                <span class="header-company">{context.get('company_name', '')}</span>
+                <span class="header-subtitle">Commercial Management Report &nbsp;|&nbsp; {context.get('report_date', '')}</span>
+            </div>
+            {content}
+        </div>
+        <div class="page-footer">
+            <span class="footer-label">Written by ARIA &nbsp;·&nbsp; Automated Raven Intelligence Assistance</span>
+            <span class="footer-page">{page_number}</span>
+        </div>
     </div>"""
 
 
@@ -318,22 +345,24 @@ def _generate_commercial_narrative(data: dict, period_label: str, company: str) 
 
 
 def _fallback_narrative() -> dict:
+    msg = "ARIA narrative unavailable for this period. Key metrics are displayed in the sections below."
     return {
-        "headline": "Commercial performance data is available for the selected period.",
-        "executive_summary": (
-            "The commercial performance report for this period has been compiled from "
-            "available billing and meter reading data. ARIA narrative is unavailable; "
-            "key metrics are displayed in the sections below."
-        ),
-        "kpi_highlights": {
-            "revenue":  "Revenue figures are shown in the KPI Dashboard.",
-            "coverage": "Coverage data is shown in the KPI Dashboard.",
-            "mdi":      "MDI segment data is shown in the Customer Analysis section.",
-            "mdni":     "MDNI segment data is shown in the Customer Analysis section.",
+        "headline": "Commercial performance data compiled for the selected period.",
+        "executive_summary": {
+            "paragraph_1": msg,
+            "paragraph_2": "",
+            "paragraph_3": "",
+            "management_priority": "",
         },
-        "key_risks":       [],
-        "recommendations": [],
-        "priority_accounts": [],
+        "revenue_narrative":   "",
+        "coverage_narrative":  "",
+        "mdi_narrative":       "",
+        "mdni_narrative":      "",
+        "district_narrative":  "",
+        "movements_narrative": "",
+        "customer_narrative":  "",
+        "priority_issues": [],
+        "action_plan":     [],
     }
 
 
@@ -374,6 +403,77 @@ def render_commercial_cover(context: dict) -> str:
             </div>
         </div>
     </div>"""
+
+
+def render_commercial_executive_summary(narrative: dict, data: dict, context: dict, page_num: int) -> str:
+    """Full narrative executive summary page — the first thing management reads."""
+    es       = narrative.get('executive_summary', {})
+    headline = narrative.get('headline', '')
+    p1       = es.get('paragraph_1', '')
+    p2       = es.get('paragraph_2', '')
+    p3       = es.get('paragraph_3', '')
+    priority = es.get('management_priority', '')
+
+    ov       = data.get('overview', {})
+    prev_ov  = data.get('prev_overview', {})
+
+    curr_rev = ov.get('total_billed_amount', 0)
+    prev_rev = prev_ov.get('total_billed_amount', 0)
+    mdi_rev  = ov.get('mdi_revenue', 0)
+    mdni_rev = ov.get('mdni_revenue', 0)
+    cov      = ov.get('coverage_rate', 0)
+    at_risk  = ov.get('estimated_revenue', 0)
+
+    kpi_strip = f"""
+    <div style="display:flex;gap:0;margin-bottom:18px;border:1px solid rgba(0,32,80,0.12);
+                border-radius:10px;overflow:hidden;">
+        <div style="flex:1;padding:11px 14px;text-align:center;border-right:1px solid rgba(0,32,80,0.1);">
+            <div style="font-size:7.5px;font-weight:700;text-transform:uppercase;opacity:0.55;margin-bottom:4px;">Total Revenue</div>
+            <div style="font-size:18px;font-weight:800;color:#002050;">{_fmt_naira(curr_rev)}</div>
+            <div style="font-size:8px;color:#64748b;margin-top:2px;">{_movement_html(curr_rev, prev_rev) if prev_rev else ''}</div>
+        </div>
+        <div style="flex:1;padding:11px 14px;text-align:center;border-right:1px solid rgba(0,32,80,0.1);">
+            <div style="font-size:7.5px;font-weight:700;text-transform:uppercase;opacity:0.55;margin-bottom:4px;">MDI Revenue</div>
+            <div style="font-size:18px;font-weight:800;color:#002050;">{_fmt_naira(mdi_rev)}</div>
+        </div>
+        <div style="flex:1;padding:11px 14px;text-align:center;border-right:1px solid rgba(0,32,80,0.1);">
+            <div style="font-size:7.5px;font-weight:700;text-transform:uppercase;opacity:0.55;margin-bottom:4px;">MDNI Revenue</div>
+            <div style="font-size:18px;font-weight:800;color:#002050;">{_fmt_naira(mdni_rev)}</div>
+        </div>
+        <div style="flex:1;padding:11px 14px;text-align:center;">
+            <div style="font-size:7.5px;font-weight:700;text-transform:uppercase;opacity:0.55;margin-bottom:4px;">Coverage Rate</div>
+            <div style="font-size:18px;font-weight:800;color:{'#22c55e' if cov >= 80 else '#f59e0b' if cov >= 60 else '#ef4444'};">{cov:.1f}%</div>
+            <div style="font-size:8px;color:#ef4444;margin-top:2px;">₦{at_risk/1e6:.1f}M at risk</div>
+        </div>
+    </div>"""
+
+    headline_html = f"""
+    <div style="background:#002050;border-radius:10px;padding:14px 18px;margin-bottom:16px;">
+        <div style="font-size:7.5px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;
+                    color:rgba(255,255,255,0.55);margin-bottom:5px;">Key Finding</div>
+        <div style="font-size:13px;font-weight:700;color:#fff;line-height:1.5;">{headline}</div>
+    </div>""" if headline else ""
+
+    paras = "".join(
+        f'<p class="narrative">{p}</p>'
+        for p in [p1, p2, p3] if p
+    )
+
+    priority_html = f"""
+    <div class="callout">
+        <div class="callout-title">Management Priority for Next Reporting Cycle</div>
+        <div class="callout-text">{priority}</div>
+    </div>""" if priority else ""
+
+    content = f"""
+        <h1 class="section-title">1. Executive Commercial Summary</h1>
+        {_aria_badge()}
+        {kpi_strip}
+        {headline_html}
+        {paras}
+        {priority_html}"""
+
+    return _mgmt_page(content, context, page_num)
 
 
 def render_commercial_kpi_dashboard(narrative: dict, data: dict, context: dict, page_num: int) -> str:
@@ -421,56 +521,51 @@ def render_commercial_kpi_dashboard(narrative: dict, data: dict, context: dict, 
     atc_str  = f"{atc_loss:.1f}%" if atc_loss is not None else "N/A"
     cov_color = '#22c55e' if cov_rate >= 80 else ('#f59e0b' if cov_rate >= 60 else '#ef4444')
 
-    narrative_text = narrative.get('kpi_highlights', {}).get('revenue', '')
+    rev_narrative = narrative.get('revenue_narrative', '')
+    cov_narrative = narrative.get('coverage_narrative', '')
 
-    return f"""
-    <div class="page">
-        <div class="page-content">
-            {_page_header(context)}
-            <div class="section-title">Revenue KPI Dashboard</div>
+    narrative_blocks = ""
+    if rev_narrative or cov_narrative:
+        narrative_blocks = f"""
+        {_aria_badge()}
+        {"<p class='narrative'>" + rev_narrative + "</p>" if rev_narrative else ""}
+        {"<div class='callout'><div class='callout-title'>Coverage Risk</div><div class='callout-text'>" + cov_narrative + "</div></div>" if cov_narrative else ""}"""
 
-            <!-- Row 1 -->
-            <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;margin-bottom:8px;">
-                {_card('Total Billed Revenue', _fmt_naira(curr_rev), _fmt_naira(prev_rev) if prev_rev else 'N/A', rev_mv, highlight=True)}
-                {_card('MDI Revenue', _fmt_naira(mdi_rev), _fmt_naira(prev_mdi) if prev_mdi else 'N/A', mdi_mv)}
-                {_card('MDNI Revenue', _fmt_naira(mdni_rev), _fmt_naira(prev_mdni) if prev_mdni else 'N/A', mdni_mv)}
-                {_card('Coverage Rate', f'{cov_rate:.1f}%', f"{prev_ov.get('coverage_rate',0):.1f}%" if prev_ov else 'N/A', _movement_html(cov_rate, prev_ov.get('coverage_rate',0)))}
+    content = f"""
+        <h1 class="section-title">2. Revenue KPI Dashboard</h1>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;margin-bottom:8px;">
+            {_card('Total Billed Revenue', _fmt_naira(curr_rev), _fmt_naira(prev_rev) if prev_rev else 'N/A', rev_mv, highlight=True)}
+            {_card('MDI Revenue', _fmt_naira(mdi_rev), _fmt_naira(prev_mdi) if prev_mdi else 'N/A', mdi_mv)}
+            {_card('MDNI Revenue', _fmt_naira(mdni_rev), _fmt_naira(prev_mdni) if prev_mdni else 'N/A', mdni_mv)}
+            {_card('Coverage Rate', f'{cov_rate:.1f}%', f"{prev_ov.get('coverage_rate',0):.1f}%" if prev_ov else 'N/A', _movement_html(cov_rate, prev_ov.get('coverage_rate',0)))}
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;margin-bottom:14px;">
+            {_card('Total kWh Billed', _fmt_kwh(curr_kwh), _fmt_kwh(prev_kwh) if prev_kwh else 'N/A', kwh_mv)}
+            {_card('ARPU', _fmt_naira(arpu), '—', '<span class="kpi-movement-neu">—</span>')}
+            {_card('Revenue at Risk', _fmt_naira(at_risk), f"{ov.get('customers_unread',0)} unread", '<span class="kpi-movement-neu">—</span>')}
+            {_card('ATC Loss', atc_str, '—', '<span class="kpi-movement-neu">—</span>')}
+        </div>
+
+        <div style="margin-bottom:12px;">
+            <div style="font-size:9px;font-weight:700;text-transform:uppercase;
+                        letter-spacing:0.8px;opacity:0.6;margin-bottom:5px;">
+                Billing Coverage — {ov.get('customers_read',0):,} of {ov.get('total_customers',0):,} customers billed
             </div>
-
-            <!-- Row 2 -->
-            <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;margin-bottom:14px;">
-                {_card('Total kWh Billed', _fmt_kwh(curr_kwh), _fmt_kwh(prev_kwh) if prev_kwh else 'N/A', kwh_mv)}
-                {_card('ARPU', _fmt_naira(arpu), '—', '<span class="kpi-movement-neu">—</span>')}
-                {_card('Revenue at Risk', _fmt_naira(at_risk), f"{ov.get('customers_unread',0)} unread", '<span class="kpi-movement-neu">—</span>')}
-                {_card('ATC Loss', atc_str, '—', '<span class="kpi-movement-neu">—</span>')}
+            <div style="background:#e2e8f0;border-radius:4px;height:10px;overflow:hidden;">
+                <div style="background:{cov_color};height:100%;width:{min(cov_rate,100):.1f}%;border-radius:4px;"></div>
             </div>
-
-            <!-- ARIA assessment -->
-            {_aria_badge() if narrative_text else ''}
-            {"<div class='callout'><div class='callout-title'>Revenue Assessment</div>" +
-             "<div class='callout-text'>" + narrative_text + "</div></div>"
-             if narrative_text else ""}
-
-            <!-- Coverage bar -->
-            <div style="margin-top:10px;">
-                <div style="font-size:9px;font-weight:700;text-transform:uppercase;
-                            letter-spacing:0.8px;opacity:0.6;margin-bottom:5px;">
-                    Billing Coverage — {ov.get('customers_read',0):,} of {ov.get('total_customers',0):,} customers billed
-                </div>
-                <div style="background:#e2e8f0;border-radius:4px;height:10px;overflow:hidden;">
-                    <div style="background:{cov_color};height:100%;width:{min(cov_rate,100):.1f}%;
-                                border-radius:4px;"></div>
-                </div>
-                <div style="display:flex;justify-content:space-between;margin-top:4px;">
-                    <span style="font-size:8px;color:{cov_color};font-weight:700;">{cov_rate:.1f}% billed</span>
-                    <span style="font-size:8px;color:#ef4444;font-weight:700;">
-                        {ov.get('customers_unread',0):,} unread · Revenue at Risk {_fmt_naira(at_risk)}
-                    </span>
-                </div>
+            <div style="display:flex;justify-content:space-between;margin-top:4px;">
+                <span style="font-size:8px;color:{cov_color};font-weight:700;">{cov_rate:.1f}% billed</span>
+                <span style="font-size:8px;color:#ef4444;font-weight:700;">
+                    {ov.get('customers_unread',0):,} unread · Revenue at Risk {_fmt_naira(at_risk)}
+                </span>
             </div>
         </div>
-        {_page_footer(context, page_num)}
-    </div>"""
+
+        {narrative_blocks}"""
+
+    return _mgmt_page(content, context, page_num)
 
 
 def render_commercial_mdi_mdni_split(narrative: dict, data: dict, context: dict, page_num: int) -> str:
@@ -553,30 +648,23 @@ def render_commercial_mdi_mdni_split(narrative: dict, data: dict, context: dict,
         </div>
     </div>"""
 
-    return f"""
-    <div class="page">
-        <div class="page-content">
-            {_page_header(context)}
-            <div class="section-title">MDI vs MDNI Revenue Analysis</div>
-
-            {bar_html}
-
-            <div style="display:flex;gap:12px;">
-                {_seg_card('MDI — Maximum Demand Industrial', mdi_count, mdi_kwh, mdi_rev, mdi_arpu, mdi_share, mdi_note, '#002050')}
-                {_seg_card('MDNI — Maximum Demand Non-Industrial', mdni_count, mdni_kwh, mdni_rev, mdni_arpu, mdni_share, mdni_note, '#0ea5e9')}
-            </div>
-
-            {"<div class='callout' style='margin-top:12px;'><div class='callout-title'>Coverage Assessment</div><div class='callout-text'>" + cov_note + "</div></div>" if cov_note else ""}
+    content = f"""
+        <h1 class="section-title">3. MDI vs MDNI Revenue Analysis</h1>
+        {bar_html}
+        <div style="display:flex;gap:12px;">
+            {_seg_card('MDI — Maximum Demand Industrial', mdi_count, mdi_kwh, mdi_rev, mdi_arpu, mdi_share, mdi_note, '#002050')}
+            {_seg_card('MDNI — Maximum Demand Non-Industrial', mdni_count, mdni_kwh, mdni_rev, mdni_arpu, mdni_share, mdni_note, '#0ea5e9')}
         </div>
-        {_page_footer(context, page_num)}
-    </div>"""
+        {"<div class='callout' style='margin-top:12px;'><div class='callout-title'>Coverage Assessment</div><div class='callout-text'>" + cov_note + "</div></div>" if cov_note else ""}"""
+    return _mgmt_page(content, context, page_num)
 
 
-def render_commercial_revenue_by_district(data: dict, context: dict, page_num: int) -> str:
+def render_commercial_revenue_by_district(narrative: dict, data: dict, context: dict, page_num: int) -> str:
     districts = data.get('districts', [])
     feeders   = data.get('feeders', [])[:12]
     ov        = data.get('overview', {})
     total_rev = ov.get('total_billed_amount', 1) or 1
+    dist_narr = narrative.get('district_narrative', '')
 
     dist_rows = ""
     for i, d in enumerate(districts[:10], 1):
@@ -607,47 +695,45 @@ def render_commercial_revenue_by_district(data: dict, context: dict, page_num: i
             <td style="text-align:right;font-weight:700;">{_fmt_naira(f.get('total_billed_amount', 0))}</td>
         </tr>"""
 
-    return f"""
-    <div class="page">
-        <div class="page-content">
-            {_page_header(context)}
-            <div class="section-title">Revenue by District &amp; Feeder</div>
+    content = f"""
+        <h1 class="section-title">4. Revenue by District &amp; Feeder</h1>
 
-            <div class="subsection-title">Revenue by Business District</div>
-            <table class="mgmt-table" style="margin-bottom:16px;">
-                <thead>
-                    <tr>
-                        <th style="width:30px;">#</th>
-                        <th>District</th>
-                        <th style="text-align:right;">kWh Billed</th>
-                        <th style="text-align:right;">Revenue</th>
-                        <th style="text-align:right;">% Share</th>
-                        <th style="width:100px;">Contribution</th>
-                    </tr>
-                </thead>
-                <tbody>{dist_rows if dist_rows else "<tr><td colspan='6' style='text-align:center;color:#94a3b8;'>No district data</td></tr>"}</tbody>
-            </table>
+        {"<p class='narrative'>" + dist_narr + "</p>" if dist_narr else ""}
 
-            <div class="subsection-title">Top Feeders by Revenue</div>
-            <table class="mgmt-table">
-                <thead>
-                    <tr>
-                        <th style="width:30px;">#</th>
-                        <th>Feeder</th>
-                        <th style="text-align:right;">kWh Billed</th>
-                        <th style="text-align:right;">Revenue</th>
-                    </tr>
-                </thead>
-                <tbody>{feeder_rows if feeder_rows else "<tr><td colspan='4' style='text-align:center;color:#94a3b8;'>No feeder data</td></tr>"}</tbody>
-            </table>
-        </div>
-        {_page_footer(context, page_num)}
-    </div>"""
+        <div class="subsection-title">Revenue by Business District</div>
+        <table class="mgmt-table" style="margin-bottom:16px;">
+            <thead>
+                <tr>
+                    <th style="width:30px;">#</th>
+                    <th>District</th>
+                    <th style="text-align:right;">kWh Billed</th>
+                    <th style="text-align:right;">Revenue</th>
+                    <th style="text-align:right;">% Share</th>
+                    <th style="width:100px;">Contribution</th>
+                </tr>
+            </thead>
+            <tbody>{dist_rows if dist_rows else "<tr><td colspan='6' style='text-align:center;color:#94a3b8;'>No district data</td></tr>"}</tbody>
+        </table>
+
+        <div class="subsection-title">Top Feeders by Revenue</div>
+        <table class="mgmt-table">
+            <thead>
+                <tr>
+                    <th style="width:30px;">#</th>
+                    <th>Feeder</th>
+                    <th style="text-align:right;">kWh Billed</th>
+                    <th style="text-align:right;">Revenue</th>
+                </tr>
+            </thead>
+            <tbody>{feeder_rows if feeder_rows else "<tr><td colspan='4' style='text-align:center;color:#94a3b8;'>No feeder data</td></tr>"}</tbody>
+        </table>"""
+    return _mgmt_page(content, context, page_num)
 
 
-def render_commercial_top_customers(data: dict, context: dict, page_num: int) -> tuple[str, int]:
-    comparison = data.get('comparison', {})
-    all_custs  = comparison.get('customers', [])
+def render_commercial_top_customers(narrative: dict, data: dict, context: dict, page_num: int) -> tuple[str, int]:
+    comparison    = data.get('comparison', {})
+    all_custs     = comparison.get('customers', [])
+    cust_narr     = narrative.get('customer_narrative', '')
 
     mdi_custs  = [c for c in all_custs if c.get('customer_type') == 'MDI']
     mdni_custs = [c for c in all_custs if c.get('customer_type') == 'MDNI']
@@ -655,69 +741,52 @@ def render_commercial_top_customers(data: dict, context: dict, page_num: int) ->
     mdi_sorted  = sorted(mdi_custs,  key=lambda x: -(x.get('current_billed_amount') or 0))[:15]
     mdni_sorted = sorted(mdni_custs, key=lambda x: -(x.get('current_billed_amount') or 0))[:15]
 
-    def _customer_table(custs, title, page):
-        if not custs:
-            return f"""
-            <div class="page">
-                <div class="page-content">
-                    {_page_header(context)}
-                    <div class="section-title">{title}</div>
-                    <p style="color:#94a3b8;font-size:11px;margin-top:20px;">No {title} data available.</p>
-                </div>
-                {_page_footer(context, page)}
-            </div>""", 1
+    def _customer_table(custs, title, section_num, page, show_narr=''):
+        def _rows():
+            r = ""
+            for i, c in enumerate(custs, 1):
+                curr_amt = c.get('current_billed_amount', 0) or 0
+                curr_kwh = c.get('current_consumption_kwh', 0) or 0
+                vp       = c.get('variance_pct')
+                trend    = c.get('trend', 'No Previous Data')
+                vp_str   = f"{vp:+.1f}%" if vp is not None else "N/A"
+                vp_color = '#22c55e' if (vp or 0) >= 0 else '#ef4444'
+                r += f"""
+                <tr>
+                    <td style="font-weight:700;color:#002050;">{i}</td>
+                    <td><strong style="font-size:9.5px;">{c.get('customer_name','—')}</strong><br/>
+                        <span style="font-size:8px;color:#64748b;">{c.get('account_no','—')}</span></td>
+                    <td style="font-size:8.5px;">{c.get('feeder','—')}</td>
+                    <td style="text-align:right;font-size:9px;">{curr_kwh:,.1f}</td>
+                    <td style="text-align:right;font-weight:700;">{_fmt_naira(curr_amt)}</td>
+                    <td style="text-align:right;color:{vp_color};font-weight:700;">{vp_str}</td>
+                    <td>{_trend_badge(trend)}</td>
+                </tr>"""
+            return r
 
-        rows = ""
-        for i, c in enumerate(custs, 1):
-            curr_amt = c.get('current_billed_amount', 0) or 0
-            curr_kwh = c.get('current_consumption_kwh', 0) or 0
-            vp       = c.get('variance_pct')
-            trend    = c.get('trend', 'No Previous Data')
-            vp_str   = f"{vp:+.1f}%" if vp is not None else "N/A"
-            vp_color = '#22c55e' if (vp or 0) >= 0 else '#ef4444'
-            rows += f"""
-            <tr>
-                <td style="font-weight:700;color:#002050;">{i}</td>
-                <td><strong style="font-size:9.5px;">{c.get('customer_name','—')}</strong><br/>
-                    <span style="font-size:8px;color:#64748b;">{c.get('account_no','—')}</span></td>
-                <td style="font-size:8.5px;">{c.get('feeder','—')}</td>
-                <td style="text-align:right;font-size:9px;">{curr_kwh:,.1f}</td>
-                <td style="text-align:right;font-weight:700;">{_fmt_naira(curr_amt)}</td>
-                <td style="text-align:right;color:{vp_color};font-weight:700;">{vp_str}</td>
-                <td>{_trend_badge(trend)}</td>
-            </tr>"""
+        body = "<p style='color:#94a3b8;font-size:11px;margin-top:20px;'>No data available.</p>" if not custs else f"""
+            {"<p class='narrative'>" + show_narr + "</p>" if show_narr else ""}
+            <table class="mgmt-table">
+                <thead>
+                    <tr>
+                        <th style="width:30px;">#</th><th>Customer</th><th>Feeder</th>
+                        <th style="text-align:right;">kWh</th><th style="text-align:right;">Revenue</th>
+                        <th style="text-align:right;">vs Prev</th><th>Trend</th>
+                    </tr>
+                </thead>
+                <tbody>{_rows()}</tbody>
+            </table>"""
 
-        pages_html = f"""
-        <div class="page">
-            <div class="page-content">
-                {_page_header(context)}
-                <div class="section-title">{title}</div>
-                <table class="mgmt-table">
-                    <thead>
-                        <tr>
-                            <th style="width:30px;">#</th>
-                            <th>Customer</th>
-                            <th>Feeder</th>
-                            <th style="text-align:right;">kWh</th>
-                            <th style="text-align:right;">Revenue</th>
-                            <th style="text-align:right;">vs Prev</th>
-                            <th>Trend</th>
-                        </tr>
-                    </thead>
-                    <tbody>{rows}</tbody>
-                </table>
-            </div>
-            {_page_footer(context, page)}
-        </div>"""
-        return pages_html, 1
+        return _mgmt_page(f'<h1 class="section-title">{section_num}. {title}</h1>{body}', context, page), 1
 
-    mdi_html,  mdi_pages  = _customer_table(mdi_sorted,  "Top MDI Customers — by Billing Revenue",  page_num)
-    mdni_html, mdni_pages = _customer_table(mdni_sorted, "Top MDNI Customers — by Billing Revenue", page_num + mdi_pages)
+    mdi_html,  mdi_pages  = _customer_table(mdi_sorted,  "Top MDI Customers by Revenue",  5, page_num, cust_narr)
+    mdni_html, mdni_pages = _customer_table(mdni_sorted, "Top MDNI Customers by Revenue", 6, page_num + mdi_pages)
 
     return mdi_html + mdni_html, mdi_pages + mdni_pages
 
 
-def render_commercial_notable_movements(data: dict, context: dict, page_num: int) -> str:
+def render_commercial_notable_movements(narrative: dict, data: dict, context: dict, page_num: int) -> str:
+    mov_narr   = narrative.get('movements_narrative', '')
     comparison = data.get('comparison', {})
     customers  = comparison.get('customers', [])
 
@@ -749,144 +818,121 @@ def render_commercial_notable_movements(data: dict, context: dict, page_num: int
             </tr>"""
         return rows
 
-    return f"""
-    <div class="page">
-        <div class="page-content">
-            {_page_header(context)}
-            <div class="section-title">Notable Revenue Movements</div>
+    content = f"""
+        <h1 class="section-title">7. Notable Revenue Movements</h1>
+        {"<p class='narrative'>" + mov_narr + "</p>" if mov_narr else ""}
 
-            <div class="two-col">
-                <div class="two-col-half">
-                    <div class="subsection-title" style="color:#2e7d32;">
-                        Top Gainers vs Previous Period
-                    </div>
-                    <table class="mgmt-table">
-                        <thead>
-                            <tr>
-                                <th>Customer</th>
-                                <th style="text-align:right;">Prev</th>
-                                <th style="text-align:right;">Current</th>
-                                <th style="text-align:right;">Change</th>
-                                <th>Trend</th>
-                            </tr>
-                        </thead>
-                        <tbody>{_mov_rows(gainers, True)}</tbody>
-                    </table>
-                </div>
-
-                <div class="two-col-half">
-                    <div class="subsection-title" style="color:#c62828;">
-                        Top Decliners vs Previous Period
-                    </div>
-                    <table class="mgmt-table">
-                        <thead>
-                            <tr>
-                                <th>Customer</th>
-                                <th style="text-align:right;">Prev</th>
-                                <th style="text-align:right;">Current</th>
-                                <th style="text-align:right;">Change</th>
-                                <th>Trend</th>
-                            </tr>
-                        </thead>
-                        <tbody>{_mov_rows(decliners, False)}</tbody>
-                    </table>
-                </div>
+        <div class="two-col">
+            <div class="two-col-half">
+                <div class="subsection-title" style="color:#2e7d32;">Top Gainers vs Previous Period</div>
+                <table class="mgmt-table">
+                    <thead>
+                        <tr>
+                            <th>Customer</th>
+                            <th style="text-align:right;">Prev</th>
+                            <th style="text-align:right;">Current</th>
+                            <th style="text-align:right;">Change</th>
+                            <th>Trend</th>
+                        </tr>
+                    </thead>
+                    <tbody>{_mov_rows(gainers, True)}</tbody>
+                </table>
             </div>
-        </div>
-        {_page_footer(context, page_num)}
-    </div>"""
-
-
-def render_commercial_aria_insights(narrative: dict, _data: dict, context: dict, page_num: int) -> tuple[str, int]:
-    summary          = narrative.get('executive_summary', '')
-    headline         = narrative.get('headline', '')
-    risks            = narrative.get('key_risks', [])
-    recommendations  = narrative.get('recommendations', [])
-    priority_accts   = narrative.get('priority_accounts', [])
-
-    # Page 1: Executive summary + headline + risks
-    risk_rows = ""
-    for r in risks:
-        impact = r.get('impact', 'Medium')
-        ic = {'High': ('#fde8e8', '#c62828'), 'Medium': ('#fff3e0', '#e65100'),
-              'Low': ('#e8f5e9', '#2e7d32')}.get(impact, ('#f0f0f0', '#666'))
-        risk_rows += f"""
-        <tr>
-            <td><strong style="font-size:9.5px;">{r.get('risk','')}</strong></td>
-            <td><span style="background:{ic[0]};color:{ic[1]};font-size:8px;font-weight:700;
-                             padding:2px 7px;border-radius:4px;">{impact}</span></td>
-            <td style="font-size:9px;color:#475569;">{r.get('description','')}</td>
-        </tr>"""
-
-    page1 = f"""
-    <div class="page">
-        <div class="page-content">
-            {_page_header(context)}
-            <div class="section-title">ARIA — Commercial Insights</div>
-            {_aria_badge()}
-
-            <div style="background:#002050;border-radius:10px;padding:14px 18px;margin-bottom:14px;">
-                <div style="font-size:7.5px;font-weight:700;letter-spacing:1.5px;
-                            text-transform:uppercase;color:rgba(255,255,255,0.55);margin-bottom:5px;">
-                    Key Finding
-                </div>
-                <div style="font-size:12px;font-weight:700;color:#fff;line-height:1.5;">
-                    {headline}
-                </div>
+            <div class="two-col-half">
+                <div class="subsection-title" style="color:#c62828;">Top Decliners vs Previous Period</div>
+                <table class="mgmt-table">
+                    <thead>
+                        <tr>
+                            <th>Customer</th>
+                            <th style="text-align:right;">Prev</th>
+                            <th style="text-align:right;">Current</th>
+                            <th style="text-align:right;">Change</th>
+                            <th>Trend</th>
+                        </tr>
+                    </thead>
+                    <tbody>{_mov_rows(decliners, False)}</tbody>
+                </table>
             </div>
+        </div>"""
+    return _mgmt_page(content, context, page_num)
 
-            <div style="font-size:10.5px;line-height:1.65;color:#1e293b;margin-bottom:14px;">
-                {summary.replace(chr(10), '<br/>')}
-            </div>
 
-            {('<div class="subsection-title">Key Commercial Risks</div><table class="mgmt-table"><thead><tr><th>Risk</th><th>Impact</th><th>Description</th></tr></thead><tbody>' + risk_rows + '</tbody></table>') if risk_rows else ''}
-        </div>
-        {_page_footer(context, page_num)}
-    </div>"""
+def render_commercial_priority_issues(narrative: dict, context: dict, page_num: int) -> tuple[str, int]:
+    """Mirrors render_mgmt_priority_issues — 7 issues per page."""
+    issues = narrative.get('priority_issues', [])
+    chunks = [issues[i:i + 7] for i in range(0, max(len(issues), 1), 7)]
+    html   = ""
 
-    pages_used = 1
+    for idx, chunk in enumerate(chunks):
+        pnum   = page_num + idx
+        suffix = " (continued)" if idx > 0 else ""
+        rows   = ""
+        for iss in chunk:
+            rows += f"""
+            <tr>
+                <td style="line-height:1.4;"><strong>{iss.get('issue', '—')}</strong></td>
+                <td style="line-height:1.4;">{iss.get('evidence', '')}</td>
+                <td style="line-height:1.4;">{iss.get('risk', '')}</td>
+                <td style="line-height:1.4;">{iss.get('response', '')}</td>
+            </tr>"""
 
-    # Page 2: Recommendations + Priority Accounts (if any content)
-    if not recommendations and not priority_accts:
-        return page1, pages_used
+        content = f"""
+            <h1 class="section-title">8. Priority Commercial Issues{suffix}</h1>
+            <table class="mgmt-table">
+                <thead>
+                    <tr>
+                        <th style="width:20%">Priority Issue</th>
+                        <th style="width:22%">Evidence from Report</th>
+                        <th style="width:25%">Management Risk</th>
+                        <th style="width:33%">Required Response</th>
+                    </tr>
+                </thead>
+                <tbody>{rows}</tbody>
+            </table>"""
 
-    rec_rows = ""
-    for rec in recommendations:
-        pri = rec.get('priority', 'Medium')
-        pc  = {'High': '#c62828', 'Medium': '#e65100', 'Low': '#2e7d32'}.get(pri, '#666')
-        rec_rows += f"""
-        <tr>
-            <td><strong style="font-size:9.5px;">{rec.get('title','')}</strong></td>
-            <td style="font-size:9px;color:#475569;">{rec.get('action','')}</td>
-            <td><span style="color:{pc};font-weight:700;font-size:8.5px;">{pri}</span></td>
-            <td style="font-size:8.5px;color:#64748b;">{rec.get('owner','—')}</td>
-        </tr>"""
+        html += _mgmt_page(content, context, pnum)
 
-    acct_rows = ""
-    for a in priority_accts:
-        acct_rows += f"""
-        <tr>
-            <td><strong style="font-size:9.5px;">{a.get('account_name','—')}</strong></td>
-            <td style="font-size:9px;color:#475569;">{a.get('reason','')}</td>
-            <td style="font-size:9px;color:#002050;font-weight:600;">{a.get('recommended_action','')}</td>
-        </tr>"""
+    return html, len(chunks)
 
-    page2 = f"""
-    <div class="page">
-        <div class="page-content">
-            {_page_header(context)}
-            <div class="section-title">ARIA — Recommendations &amp; Priority Accounts</div>
-            {_aria_badge()}
 
-            {('<div class="subsection-title">Recommended Actions</div><table class="mgmt-table"><thead><tr><th>Action</th><th>Detail</th><th>Priority</th><th>Owner</th></tr></thead><tbody>' + rec_rows + '</tbody></table>') if rec_rows else ''}
+def render_commercial_action_plan(narrative: dict, context: dict, page_num: int) -> tuple[str, int]:
+    """Mirrors render_mgmt_action_plan — 8 actions per page."""
+    actions = narrative.get('action_plan', [])
+    chunks  = [actions[i:i + 8] for i in range(0, max(len(actions), 1), 8)]
+    html    = ""
 
-            {('<div class="subsection-title" style="margin-top:14px;">Priority Accounts — Immediate Attention Required</div><table class="mgmt-table"><thead><tr><th>Account</th><th>Reason Flagged</th><th>Recommended Action</th></tr></thead><tbody>' + acct_rows + '</tbody></table>') if acct_rows else ''}
-        </div>
-        {_page_footer(context, page_num + 1)}
-    </div>"""
+    for idx, chunk in enumerate(chunks):
+        pnum   = page_num + idx
+        suffix = " (continued)" if idx > 0 else ""
+        rows   = ""
+        for act in chunk:
+            rows += f"""
+            <tr>
+                <td style="line-height:1.4;"><strong>{act.get('area', '—')}</strong></td>
+                <td style="line-height:1.4;">{act.get('action', '')}</td>
+                <td style="line-height:1.4;">{act.get('team', '')}</td>
+                <td style="text-align:center;">{act.get('timeline', '')}</td>
+                <td style="line-height:1.4;">{act.get('output', '')}</td>
+            </tr>"""
 
-    pages_used += 1
-    return page1 + page2, pages_used
+        content = f"""
+            <h1 class="section-title">9. Recommended Commercial Action Plan{suffix}</h1>
+            <table class="mgmt-table">
+                <thead>
+                    <tr>
+                        <th style="width:16%">Action Area</th>
+                        <th style="width:28%">Recommended Action</th>
+                        <th style="width:18%">Responsible Team</th>
+                        <th style="text-align:center;width:13%">Timeline</th>
+                        <th style="width:25%">Expected Output</th>
+                    </tr>
+                </thead>
+                <tbody>{rows}</tbody>
+            </table>"""
+
+        html += _mgmt_page(content, context, pnum)
+
+    return html, len(chunks)
 
 
 def render_commercial_back_page(context: dict) -> str:
@@ -1081,26 +1127,32 @@ class CommercialManagementPDFGenerator:
         html_parts = [render_commercial_cover(self.context)]
         page = 2
 
+        html_parts.append(render_commercial_executive_summary(narrative, all_data, self.context, page))
+        page += 1
+
         html_parts.append(render_commercial_kpi_dashboard(narrative, all_data, self.context, page))
         page += 1
 
         html_parts.append(render_commercial_mdi_mdni_split(narrative, all_data, self.context, page))
         page += 1
 
-        html_parts.append(render_commercial_revenue_by_district(all_data, self.context, page))
+        html_parts.append(render_commercial_revenue_by_district(narrative, all_data, self.context, page))
         page += 1
 
-        top_html, top_pages = render_commercial_top_customers(all_data, self.context, page)
+        top_html, top_pages = render_commercial_top_customers(narrative, all_data, self.context, page)
         html_parts.append(top_html)
         page += top_pages
 
-        html_parts.append(render_commercial_notable_movements(all_data, self.context, page))
+        html_parts.append(render_commercial_notable_movements(narrative, all_data, self.context, page))
         page += 1
 
-        if self.include_ai:
-            aria_html, aria_pages = render_commercial_aria_insights(narrative, all_data, self.context, page)
-            html_parts.append(aria_html)
-            page += aria_pages
+        issues_html, issues_pages = render_commercial_priority_issues(narrative, self.context, page)
+        html_parts.append(issues_html)
+        page += issues_pages
+
+        action_html, action_pages = render_commercial_action_plan(narrative, self.context, page)
+        html_parts.append(action_html)
+        page += action_pages
 
         html_parts.append(render_commercial_back_page(self.context))
 
