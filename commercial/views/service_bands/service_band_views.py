@@ -57,10 +57,11 @@ def _band_metrics(band, customers_qs, readings_qs, date_range):
     total_mdni   = c_qs.filter(customer_type='MDNI').count()
     bypass_count = c_qs.filter(is_bypass=True).count()
 
-    billing   = calc_billing(r_qs, period_days=date_range['days'])
-    daily_kwh = calc_daily_estimate(billing, date_range)
-    coverage  = calc_coverage(c_qs, r_qs)
-    estimated = calc_estimated_billing(c_qs, coverage['read_ids'], date_range)
+    billing     = calc_billing(r_qs, period_days=date_range['days'])
+    billing_raw = calc_billing(r_qs)  # raw totals for energy gap (no period scaling)
+    daily_kwh   = calc_daily_estimate(billing, date_range)
+    coverage    = calc_coverage(c_qs, r_qs)
+    estimated   = calc_estimated_billing(c_qs, coverage['read_ids'], date_range)
 
     mdi_billing  = calc_billing(r_qs.filter(reading_type='MDI'),  period_days=date_range['days'])
     mdni_billing = calc_billing(r_qs.filter(reading_type='MDNI'), period_days=date_range['days'])
@@ -130,12 +131,12 @@ def _band_metrics(band, customers_qs, readings_qs, date_range):
             'energy_delivered_vs_billed': metric(
                 {
                     'delivered_kwh':        delivered_kwh_period,
-                    'actual_billed_kwh':    float(billing['total_billed_kwh']),
-                    'projected_billed_kwh': float(billing['total_billed_kwh'] + estimated['estimated_kwh']),
-                    'gap_kwh':              round(delivered_kwh_period - float(billing['total_billed_kwh']), 2),
+                    'actual_billed_kwh':    float(billing_raw['total_billed_kwh']),
+                    'projected_billed_kwh': float(billing_raw['total_billed_kwh'] + estimated['estimated_kwh']),
+                    'gap_kwh':              round(delivered_kwh_period - float(billing_raw['total_billed_kwh']), 2),
                 },
                 unit='kWh', mode=delivered['mode'],
-                explanation=f'Energy delivered vs billed for Band {band.name}. Gap = delivered minus actual billed.',
+                explanation=f'Energy delivered vs billed for Band {band.name}. Gap = delivered minus actual billed (raw, unscaled).',
             ),
         },
         'revenue': {
@@ -178,7 +179,8 @@ def all_bands(request):
     # ── One query builds feeder→band map; all bulk fns use it ────────────────
     f2d = feeder_dim_map(customers_qs, 'feeder__band_id')
 
-    billing_data   = bulk_billing(readings_qs, f2d, period_days=date_range['days'])
+    billing_data     = bulk_billing(readings_qs, f2d, period_days=date_range['days'])
+    billing_raw_data = bulk_billing(readings_qs, f2d)  # raw for energy gap
     type_billing   = bulk_billing_by_type(readings_qs, f2d)
     ctype_counts   = bulk_customer_types(customers_qs, f2d)
     coverage_data  = bulk_coverage(customers_qs, readings_qs, f2d)
@@ -191,9 +193,10 @@ def all_bands(request):
     days    = date_range['days']
     results = []
     for band in bands:
-        bid  = band.id
-        b    = billing_data.get(bid, empty_billing())
-        e    = estimated_data.get(bid, empty_estimated())
+        bid   = band.id
+        b     = billing_data.get(bid, empty_billing())
+        b_raw = billing_raw_data.get(bid, empty_billing())
+        e     = estimated_data.get(bid, empty_estimated())
         cov  = coverage_data.get(bid, empty_coverage())
         ct   = ctype_counts.get(bid, {'MDI': 0, 'MDNI': 0})
         mgrs = managers_data.get(bid, {'mdi': 0, 'mdni': 0})
@@ -229,10 +232,10 @@ def all_bands(request):
                 'daily_energy_delivered_mwh': metric(float(daily_mwh), unit='MWh/day', mode=ed['mode'], explanation='Average daily energy delivered — total_mwh / days. Source: meter or system fallback.'),
                 'energy_delivered_kwh': metric(delivered_kwh, unit='kWh', mode=ed['mode'], explanation='Total energy delivered for the period from technical module.'),
                 'energy_delivered_vs_billed': metric(
-                    {'delivered_kwh': delivered_kwh, 'actual_billed_kwh': float(b['total_billed_kwh']),
-                     'projected_billed_kwh': float(b['total_billed_kwh'] + e['estimated_kwh']),
-                     'gap_kwh': round(delivered_kwh - float(b['total_billed_kwh']), 2)},
-                    unit='kWh', mode=ed['mode'], explanation=f'Energy delivered vs billed for Band {band.name}. Gap = delivered minus actual billed.',
+                    {'delivered_kwh': delivered_kwh, 'actual_billed_kwh': float(b_raw['total_billed_kwh']),
+                     'projected_billed_kwh': float(b_raw['total_billed_kwh'] + e['estimated_kwh']),
+                     'gap_kwh': round(delivered_kwh - float(b_raw['total_billed_kwh']), 2)},
+                    unit='kWh', mode=ed['mode'], explanation=f'Energy delivered vs billed for Band {band.name}. Gap = delivered minus actual billed (raw, unscaled).',
                 ),
             },
             'revenue': {

@@ -527,7 +527,176 @@ Returns the list of previously generated reports for the current user.
 
 ---
 
-## 15. Error Responses
+## 15. Management Reports
+
+Management reports are high-quality portrait PDFs with full AI-written narrative (ARIA — Automated Raven Intelligence Assistance). There are two types: **Technical** and **Commercial**. The frontend shows a toggle; each button calls its own endpoint.
+
+---
+
+### Toggle behaviour
+
+```
+[ Technical ]  [ Commercial ]
+      ↓               ↓
+  /management/   /management/commercial/
+```
+
+Both endpoints return the same response shape.
+
+---
+
+### 15.1 Technical Management Report
+
+`POST /api/reports/generate/management/`
+
+**Request body**
+```json
+{
+  "report_title":  "May 2026 11kV Management Report",
+  "company_name":  "KANO ELECTRICITY DISTRIBUTION COMPANY",
+  "include_ai":    true,
+  "return_base64": true,
+  "filters": {
+    "from_date": "2026-05-01",
+    "to_date":   "2026-05-31"
+  }
+}
+```
+
+| Field | Required | Default | Notes |
+|---|---|---|---|
+| `filters.from_date` | Yes | — | ISO date |
+| `filters.to_date` | Yes | — | ISO date |
+| `report_title` | No | Auto-generated | Shown on cover page |
+| `company_name` | No | `"KANO ELECTRICITY DISTRIBUTION COMPANY"` | |
+| `include_ai` | No | `true` | Set `false` for a faster data-only report |
+| `return_base64` | No | `true` | Always send `true` — binary download not supported via JSON |
+
+**Response**
+```json
+{
+  "pdf_base64": "<base64-encoded PDF string>",
+  "filename":   "May_2026_11kV_Management_Report.pdf"
+}
+```
+
+**Report sections (always in this order)**
+1. Cover page
+2. Executive Management Summary — KPI strip + 4 ARIA paragraphs + management priority
+3. Headline KPI Dashboard — RAG status + ARIA interpretation per KPI
+4. Reliability & Interruption Review — interruption table + implications
+5. Feeder Performance Review — top feeders + weak feeders
+6. State Performance Review — state table + ARIA conclusion
+7. Service Band Performance Review — band table + recovery actions
+8. Priority Management Issues — issue / evidence / risk / required response
+9. Recommended Action Plan — area / action / team / timeline / output
+10. Back page
+
+---
+
+### 15.2 Commercial Management Report
+
+`POST /api/reports/generate/management/commercial/`
+
+**Request body**
+```json
+{
+  "report_title":  "May 2026 Commercial Management Report",
+  "company_name":  "KANO ELECTRICITY DISTRIBUTION COMPANY",
+  "include_ai":    true,
+  "return_base64": true,
+  "filters": {
+    "from_date":   "2026-05-01",
+    "to_date":     "2026-05-31",
+    "customer_type": "all"
+  }
+}
+```
+
+| Field | Required | Default | Notes |
+|---|---|---|---|
+| `filters.from_date` | Yes | — | ISO date |
+| `filters.to_date` | Yes | — | ISO date |
+| `filters.customer_type` | No | `"all"` | `"MDI"`, `"MDNI"`, or `"all"` |
+| `filters.district_id` | No | — | UUID — scope to one district |
+| `report_title` | No | Auto-generated | |
+| `include_ai` | No | `true` | |
+| `return_base64` | No | `true` | Always send `true` |
+
+**Response** — same shape as technical:
+```json
+{
+  "pdf_base64": "<base64-encoded PDF string>",
+  "filename":   "May_2026_Commercial_Management_Report.pdf"
+}
+```
+
+**Report sections (always in this order)**
+1. Cover page
+2. Executive Summary — revenue headline + KPI strip + ARIA paragraphs + management priority
+3. KPI Dashboard — MDI/MDNI revenue, coverage rate, AT&C loss — RAG status + ARIA interpretation
+4. MDI & MDNI Revenue Split — segment breakdown + ARIA narrative
+5. Revenue by District — district + feeder tables + ARIA commentary
+6. Top Customers — MDI top 15 + MDNI top 15 + ARIA narrative
+7. Notable Movements — biggest gainers/decliners + ARIA commentary
+8. Priority Commercial Issues — issue / evidence / management risk / required response
+9. Recommended Commercial Action Plan — area / action / team / timeline / output
+10. Back page
+
+Every section includes substantial ARIA-written narrative. The footer on every page reads:
+> *Written by ARIA · Automated Raven Intelligence Assistance*
+
+---
+
+### 15.3 HTML Preview (fast, no AI)
+
+Use these to render a live preview in an `<iframe>` before generating the full PDF.
+
+**Technical preview**
+`POST /api/reports/generate/management/preview/`
+
+**Commercial preview**
+`POST /api/reports/generate/management/commercial/preview/`
+
+Same request body as the full PDF endpoints. Response:
+```json
+{ "html": "<html>...</html>" }
+```
+
+These skip the AI call (`include_ai` is always `false`) so they return quickly.
+
+---
+
+### 15.4 How to decode and open the PDF
+
+```javascript
+// 1. Call the endpoint
+const res = await fetch('/api/reports/generate/management/commercial/', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+  body: JSON.stringify({
+    include_ai: true,
+    return_base64: true,
+    filters: { from_date: '2026-05-01', to_date: '2026-05-31' }
+  })
+});
+const { pdf_base64, filename } = await res.json();
+
+// 2. Trigger download
+const bytes  = atob(pdf_base64);
+const array  = new Uint8Array(bytes.length).map((_, i) => bytes.charCodeAt(i));
+const blob   = new Blob([array], { type: 'application/pdf' });
+const url    = URL.createObjectURL(blob);
+const a      = document.createElement('a');
+a.href       = url;
+a.download   = filename;
+a.click();
+URL.revokeObjectURL(url);
+```
+
+---
+
+## 16. Error Responses
 
 All endpoints return standard error shapes:
 

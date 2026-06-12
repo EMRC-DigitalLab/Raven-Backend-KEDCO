@@ -796,6 +796,100 @@ def management_report_status(request, job_id):
 
 
 # =============================================================================
+# COMMERCIAL MANAGEMENT REPORT
+# =============================================================================
+
+@api_view(['POST'])
+def generate_commercial_management_report(request):
+    """
+    POST /api/reports/generate/management/commercial/
+
+    Generates a commercial management PDF (MDI + MDNI revenue, coverage,
+    top customers, notable movements, ARIA insights).
+
+    Body:
+    {
+        "report_title":  "May 2026 Commercial Management Report",
+        "company_name":  "KANO ELECTRICITY DISTRIBUTION COMPANY",
+        "theme":         {},
+        "include_ai":    true,
+        "return_base64": false,
+        "filters": { "from_date": "2026-05-01", "to_date": "2026-05-31" }
+    }
+    """
+    from .commercial_service import CommercialReportDataService
+    from .management_commercial_report import CommercialManagementPDFGenerator
+
+    filters = request.data.get('filters', {})
+    if not filters.get('from_date') or not filters.get('to_date'):
+        return Response(
+            {'error': 'from_date and to_date are required in filters'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        data_service = CommercialReportDataService(filters)
+
+        report_config = {
+            'report_title':    request.data.get('report_title', 'Commercial Management Report'),
+            'report_subtitle': request.data.get('report_subtitle', ''),
+            'company_name':    request.data.get('company_name', 'KANO ELECTRICITY DISTRIBUTION COMPANY'),
+            'theme':           request.data.get('theme', {}),
+            'include_ai':      bool(request.data.get('include_ai', True)),
+        }
+
+        generator = CommercialManagementPDFGenerator(report_config, data_service, user=request.user)
+
+        if request.data.get('return_base64', False):
+            pdf_b64  = generator.generate_pdf_base64()
+            filename = report_config['report_title'].replace(' ', '_') + '.pdf'
+            return Response({'pdf_base64': pdf_b64, 'filename': filename})
+
+        pdf_buffer = generator.generate_pdf()
+        filename   = report_config['report_title'].replace(' ', '_') + '.pdf'
+        response   = HttpResponse(pdf_buffer.read(), content_type='application/pdf')
+        response['Content-Disposition'] = f'attachment; filename="{filename}"'
+        return response
+
+    except Exception as exc:
+        logger.error('Commercial management report failed: %s', exc)
+        import traceback; traceback.print_exc()
+        return Response({'error': str(exc)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['POST'])
+def generate_commercial_management_html_preview(request):
+    """
+    POST /api/reports/generate/management/commercial/preview/
+    Returns raw HTML for frontend preview. include_ai defaults to false for speed.
+    """
+    from .commercial_service import CommercialReportDataService
+    from .management_commercial_report import CommercialManagementPDFGenerator
+
+    filters = request.data.get('filters', {})
+    if not filters.get('from_date') or not filters.get('to_date'):
+        return Response(
+            {'error': 'from_date and to_date are required in filters'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        data_service  = CommercialReportDataService(filters)
+        report_config = {
+            'report_title':    request.data.get('report_title', 'Commercial Management Report'),
+            'report_subtitle': request.data.get('report_subtitle', ''),
+            'company_name':    request.data.get('company_name', 'KANO ELECTRICITY DISTRIBUTION COMPANY'),
+            'theme':           request.data.get('theme', {}),
+            'include_ai':      False,
+        }
+        generator = CommercialManagementPDFGenerator(report_config, data_service, user=request.user)
+        return Response({'html': generator.generate_html()})
+    except Exception as exc:
+        logger.error('Commercial management preview failed: %s', exc)
+        return Response({'error': str(exc)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+# =============================================================================
 # GENERATED REPORTS HISTORY
 # =============================================================================
 

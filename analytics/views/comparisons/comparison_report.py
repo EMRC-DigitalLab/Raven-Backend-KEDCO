@@ -145,15 +145,9 @@ def customer_compare_report(request):
 
     # ── Options ────────────────────────────────────────────────────────────────
     customer_ids = body.get('customer_ids') or None
-    select_all   = bool(body.get('select_all', False))
     sort_by      = body.get('sort_by', 'current_consumption')
     if sort_by not in VALID_SORT_BY:
         sort_by = 'current_consumption'
-
-    try:
-        top_n = min(int(body.get('top_n', 200)), 500)   # reports default to 200
-    except (TypeError, ValueError):
-        top_n = 200
 
     try:
         positive_threshold = float(body.get('positive_threshold', 10.0))
@@ -162,6 +156,11 @@ def customer_compare_report(request):
         positive_threshold, declined_threshold = 10.0, -30.0
 
     include_insights = bool(body.get('include_insights', True))
+
+    # Reports always include every customer in scope — top_n is a dashboard
+    # feature, not a report feature. Passing select_all=True bypasses the cap.
+    # customer_ids takes precedence if a specific picker selection was sent.
+    report_select_all = True if not customer_ids else False
 
     # ── Run comparison ─────────────────────────────────────────────────────────
     try:
@@ -175,8 +174,8 @@ def customer_compare_report(request):
             scope_type         = scope_type,
             scope_id           = scope_id,
             customer_ids       = customer_ids,
-            select_all         = select_all,
-            top_n              = top_n,
+            select_all         = report_select_all,
+            top_n              = 50,
             sort_by            = sort_by,
             positive_threshold = positive_threshold,
             declined_threshold = declined_threshold,

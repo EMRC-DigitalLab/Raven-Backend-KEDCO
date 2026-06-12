@@ -105,7 +105,8 @@ def commercial_overview(request):
     bypass_count = customers_qs.filter(is_bypass=True).count()
 
     # ── Billing (actual from real readings) ───────────────────────────────────
-    billing = calc_billing(readings_qs, period_days=date_range['days'])
+    billing     = calc_billing(readings_qs, period_days=date_range['days'])
+    billing_raw = calc_billing(readings_qs)  # raw totals for energy gap (no period scaling)
 
     # ── Daily consumption estimate from actual readings ────────────────────────
     daily_billed_kwh = calc_daily_estimate(billing, date_range)
@@ -401,13 +402,13 @@ def commercial_overview(request):
             'energy_delivered_vs_billed': metric(
                 {
                     'delivered_kwh':        delivered_kwh_period,
-                    'actual_billed_kwh':    float(billing['total_billed_kwh']),
-                    'projected_billed_kwh': float(billing['total_billed_kwh'] + estimated['estimated_kwh']),
-                    'gap_kwh':              round(delivered_kwh_period - float(billing['total_billed_kwh']), 2),
+                    'actual_billed_kwh':    float(billing_raw['total_billed_kwh']),
+                    'projected_billed_kwh': float(billing_raw['total_billed_kwh'] + estimated['estimated_kwh']),
+                    'gap_kwh':              round(delivered_kwh_period - float(billing_raw['total_billed_kwh']), 2),
                 },
                 unit='kWh',
                 mode=delivered['mode'],
-                explanation='Energy delivered vs energy billed. Gap = delivered minus actual billed. Projected includes estimates for unread customers.',
+                explanation='Energy delivered vs energy billed. Gap = delivered minus actual billed (raw, unscaled). Projected includes estimates for unread customers.',
             ),
         },
 

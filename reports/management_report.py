@@ -373,12 +373,30 @@ def _build_narrative_prompt(all_data: dict, period_label: str,
         "service_band_summary": bands,
     }
 
+    # Build interruption_implications template rows using exact category codes from the data
+    # so the AI returns keys that the renderer can match.
+    interr_cats = [item.get('type', '') for item in (interr[:15] or []) if item.get('type')]
+    if interr_cats:
+        impl_rows = ",\n    ".join(
+            '{"issue":"' + cat + '",'
+            '"implication":"<management note on ' + cat + ' interruptions — reference the count and hours>",'
+            '"response":"<required management action>"}'
+            for cat in interr_cats
+        )
+    else:
+        impl_rows = '{"issue":"Unknown","implication":"No interruption data.","response":"Verify data capture."}'
+
     return f"""
 You are preparing a formal management report for {company_name} covering {period_label}.
 
 Below is the performance data. Write a management narrative and return a single JSON object
 with the exact structure specified. Keep all text concise, professional and grounded in
 the actual numbers. Use specific figures from the data wherever possible.
+
+CRITICAL RULE: In the interruption_implications array, the "issue" field MUST be copied
+character-for-character from the category names already pre-filled in the template below.
+Do NOT rename, translate, or rewrite them. This is required for the report renderer to
+match AI text to the correct table row.
 
 DATA:
 {json.dumps(data_summary, indent=2, default=str)}
@@ -404,7 +422,7 @@ Return ONLY this JSON structure — no markdown, no text outside the object:
   }},
   "reliability_intro": "<Opening paragraph for the reliability section>",
   "interruption_implications": [
-    {{"issue":"<name>","implication":"<what this means operationally>","response":"<required management action>"}}
+    {impl_rows}
   ],
   "feeder_strong_commentary": "<Paragraph interpreting strong feeder performance and what management should learn>",
   "feeder_weak_commentary_1": "<Paragraph explaining the two categories of weak feeders>",
@@ -510,7 +528,7 @@ def _page(content: str, context: dict, page_number: int,
             {content}
         </div>
         <div class="page-footer">
-            <span class="footer-label">Prepared for management review</span>
+            <span class="footer-label">Written by ARIA &nbsp;·&nbsp; Automated Raven Intelligence Assistance</span>
             <span class="footer-page">{page_number}</span>
         </div>
     </div>"""
@@ -699,6 +717,35 @@ def render_mgmt_kpi_dashboard(narrative: dict, data: dict,
     return _page(content, context, page_number)
 
 
+def _auto_interp(cat: str, count: int, total_hrs: float, avg_dur: float) -> str:
+    """Data-driven fallback interpretation when AI text is unavailable for a category."""
+    c = cat.strip().upper()
+    if 'L/S' in c and 'GS' not in c and '330' not in c:
+        label = "Load shedding"
+    elif 'TCN' in c:
+        label = "TCN-driven outage"
+    elif 'E/F' in c:
+        label = "Equipment fault"
+    elif 'L/F' in c:
+        label = "Line fault"
+    elif 'O/S' in c:
+        label = "Out-of-service event"
+    elif 'PERMIT' in c:
+        label = "Permitted/scheduled outage"
+    elif 'P/M' in c:
+        label = "Planned maintenance"
+    elif 'MTNC' in c:
+        label = "Maintenance outage"
+    elif 'EM/D' in c or 'EMD' in c:
+        label = "Emergency dispatch"
+    else:
+        label = cat
+    sev = "High-frequency" if count > 100 else ("Significant" if count > 15 else "Low-frequency")
+    dur = "long-duration" if avg_dur > 10 else ("moderate-duration" if avg_dur > 5 else "short-duration")
+    return (f"{label}: {sev} {dur} — {count:,} events, {total_hrs:,.1f} total hours, "
+            f"{avg_dur:.1f} hrs avg per event.")
+
+
 def render_mgmt_reliability_review(narrative: dict, data: dict,
                                     context: dict, page_number: int):
     """Returns (html, pages_used)."""
@@ -716,8 +763,14 @@ def render_mgmt_reliability_review(narrative: dict, data: dict,
     # ── Page 1: Interruption breakdown table ──
     rows_html = ""
     for item in (interr_data or []):
-        cat = item.get('type', '—')
-        note = impl_lookup.get(cat.strip().upper(), item.get('management_note', ''))
+        cat   = item.get('type', '—')
+        count = item.get('count', 0)
+        total = float(item.get('total_hours', 0))
+        avg   = float(item.get('avg_duration', 0))
+        # Use AI text if key matched, otherwise auto-generate from data
+        note  = (impl_lookup.get(cat.strip().upper())
+                 or item.get('management_note', '')
+                 or _auto_interp(cat, count, total, avg))
         rows_html += f"""
         <tr>
             <td><strong>{cat}</strong></td>
