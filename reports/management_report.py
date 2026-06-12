@@ -373,12 +373,30 @@ def _build_narrative_prompt(all_data: dict, period_label: str,
         "service_band_summary": bands,
     }
 
+    # Build interruption_implications template rows using exact category codes from the data
+    # so the AI returns keys that the renderer can match.
+    interr_cats = [item.get('type', '') for item in (interr[:15] or []) if item.get('type')]
+    if interr_cats:
+        impl_rows = ",\n    ".join(
+            '{"issue":"' + cat + '",'
+            '"implication":"<management note on ' + cat + ' interruptions — reference the count and hours>",'
+            '"response":"<required management action>"}'
+            for cat in interr_cats
+        )
+    else:
+        impl_rows = '{"issue":"Unknown","implication":"No interruption data.","response":"Verify data capture."}'
+
     return f"""
 You are preparing a formal management report for {company_name} covering {period_label}.
 
 Below is the performance data. Write a management narrative and return a single JSON object
 with the exact structure specified. Keep all text concise, professional and grounded in
 the actual numbers. Use specific figures from the data wherever possible.
+
+CRITICAL RULE: In the interruption_implications array, the "issue" field MUST be copied
+character-for-character from the category names already pre-filled in the template below.
+Do NOT rename, translate, or rewrite them. This is required for the report renderer to
+match AI text to the correct table row.
 
 DATA:
 {json.dumps(data_summary, indent=2, default=str)}
@@ -404,7 +422,7 @@ Return ONLY this JSON structure — no markdown, no text outside the object:
   }},
   "reliability_intro": "<Opening paragraph for the reliability section>",
   "interruption_implications": [
-    {{"issue":"<name>","implication":"<what this means operationally>","response":"<required management action>"}}
+    {impl_rows}
   ],
   "feeder_strong_commentary": "<Paragraph interpreting strong feeder performance and what management should learn>",
   "feeder_weak_commentary_1": "<Paragraph explaining the two categories of weak feeders>",

@@ -66,13 +66,22 @@ class CommercialReportDataService:
     # SECTION DATA METHODS
     # =========================================================================
 
-    def section_commercial_overview(self):
+    def section_commercial_overview(self, normalize=False):
+        # normalize=False: management reports show actual billed totals for the
+        # period, not period-normalised projections.
+        # Build an unfiltered reading_qs (all reading types) so MDI and MDNI
+        # splits are always present regardless of any customer_type filter.
+        from commercial.analytics_utils import get_reading_queryset
+        full_reading_qs = get_reading_queryset(
+            self.customer_qs, self.from_date, self.to_date
+        )
         return get_commercial_overview(
             self.customer_qs,
-            self.reading_qs,
+            full_reading_qs,
             self.feeder_ids,
             self.from_date,
             self.to_date,
+            normalize=normalize,
         )
 
     def section_revenue_by_district(self):

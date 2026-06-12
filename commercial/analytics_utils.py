@@ -428,7 +428,8 @@ def get_reading_queryset(customer_qs, from_date, to_date, reading_type=None):
 # Each accepts already-scoped querysets — callers build the scope first.
 # =============================================================================
 
-def get_commercial_overview(customer_qs, reading_qs, feeder_ids, from_date, to_date):
+def get_commercial_overview(customer_qs, reading_qs, feeder_ids, from_date, to_date,
+                            normalize=True):
     """
     Full commercial overview — delegates to existing calc_* helpers.
 
@@ -438,6 +439,9 @@ def get_commercial_overview(customer_qs, reading_qs, feeder_ids, from_date, to_d
         feeder_ids  : list of feeder UUIDs (for energy delivered lookup)
         from_date   : date
         to_date     : date
+        normalize   : if True (default/dashboard), normalise each reading to the
+                      selected period length.  Pass False for management reports
+                      that must show actual billed totals, not normalised projections.
 
     Returns: dict with all key commercial KPIs
     """
@@ -447,7 +451,9 @@ def get_commercial_overview(customer_qs, reading_qs, feeder_ids, from_date, to_d
         'days':       (to_date - from_date).days + 1,
     }
 
-    billing   = calc_billing(reading_qs, period_days=date_range['days'])
+    period_days_arg = date_range['days'] if normalize else None
+
+    billing   = calc_billing(reading_qs, period_days=period_days_arg)
     coverage  = calc_coverage(customer_qs, reading_qs)
     estimated = calc_estimated_billing(customer_qs, coverage['read_ids'], date_range)
     energy_del = calc_energy_delivered(feeder_ids, date_range)
@@ -455,9 +461,12 @@ def get_commercial_overview(customer_qs, reading_qs, feeder_ids, from_date, to_d
     efficiency, atc_loss = calc_atc_loss(billing['total_billed_kwh'], energy_del['total_mwh'])
     arpu = calc_arpu(billing['total_billed_amount'], coverage['read'])
 
-    # MDI / MDNI split
-    mdi_billing  = calc_billing(reading_qs.filter(reading_type='MDI'), period_days=date_range['days'])
-    mdni_billing = calc_billing(reading_qs.filter(reading_type='MDNI'), period_days=date_range['days'])
+    # MDI / MDNI split — always query directly from customer_qs regardless of
+    # how reading_qs was originally scoped, so both types are always present.
+    mdi_qs       = reading_qs.filter(reading_type='MDI')
+    mdni_qs      = reading_qs.filter(reading_type='MDNI')
+    mdi_billing  = calc_billing(mdi_qs,  period_days=period_days_arg)
+    mdni_billing = calc_billing(mdni_qs, period_days=period_days_arg)
 
     return {
         'total_customers':      coverage['total'],
