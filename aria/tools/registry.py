@@ -108,6 +108,32 @@ TOOL_SCHEMAS = {
             'required': ['start_date', 'end_date'],
         },
     },
+    'query_band_compliance': {
+        'name': 'query_band_compliance',
+        'description': (
+            'Check Band A/B/C/D/E feeder compliance for a specific date. '
+            'Returns which feeders met their minimum hours-of-supply threshold '
+            '(A≥20hrs, B≥16hrs, C≥12hrs, D≥8hrs) and which ones failed. '
+            'When daily HOS data is missing, automatically falls back to interruption records '
+            'to infer likely supply hours. '
+            'Use this for "are Band A feeders compliant?", "which Band B feeders failed yesterday?", etc. '
+            'date defaults to yesterday if omitted.'
+        ),
+        'input_schema': {
+            'type': 'object',
+            'properties': {
+                'band': {
+                    'type': 'string',
+                    'description': 'Service band to check: A, B, C, D, or E',
+                },
+                'date': {
+                    'type': 'string',
+                    'description': 'Date in YYYY-MM-DD format (defaults to yesterday)',
+                },
+            },
+            'required': ['band'],
+        },
+    },
     'query_feeder_records': {
         'name': 'query_feeder_records',
         'description': (
@@ -302,7 +328,7 @@ TOOL_SCHEMAS = {
 
 _MODULE_TOOLS = {
     'commercial':     ['query_commercial', 'query_top_commercial_feeders'],
-    'technical':      ['query_technical', 'query_feeder_ranking', 'query_feeder_records', 'query_hourly_load'],
+    'technical':      ['query_technical', 'query_feeder_ranking', 'query_feeder_records', 'query_hourly_load', 'query_band_compliance'],
     'financial':      ['query_financial'],
     'hr':             ['query_hr', 'query_executive_kpis'],
     'energy_account': ['query_energy_account'],
@@ -324,6 +350,7 @@ def _get_function(name: str):
         'query_feeder_ranking':         technical.query_feeder_ranking,
         'query_feeder_records':         technical.query_feeder_records,
         'query_hourly_load':            technical.query_hourly_load,
+        'query_band_compliance':        technical.query_band_compliance,
         'query_financial':              financial.query_financial,
         'query_hr':                     hr.query_hr,
         'query_executive_kpis':         hr.query_executive_kpis,

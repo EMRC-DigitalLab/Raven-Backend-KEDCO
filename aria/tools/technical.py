@@ -141,6 +141,94 @@ def query_feeder_ranking(start_date: str, end_date: str, metric: str = 'hours_of
     }
 
 
+_BAND_THRESHOLDS = {'A': 20, 'B': 16, 'C': 12, 'D': 8, 'E': 0}
+
+
+def query_band_compliance(band: str, date: str = None) -> dict:
+    """Check which feeders in a given service band met their minimum hours-of-supply threshold for a date."""
+    from common.models import Band, Feeder
+    from technical.models import DailyHoursOfSupply, FeederInterruption
+
+    band_upper = band.strip().upper()
+    threshold = _BAND_THRESHOLDS.get(band_upper)
+    if threshold is None:
+        return {'error': f'Unknown band "{band}". Valid bands: A, B, C, D, E.'}
+
+    band_obj = Band.objects.filter(name__iexact=band_upper).first()
+    if not band_obj:
+        return {'error': f'Band {band_upper} not found in the database.'}
+
+    target = _parse(date) if date else (timezone.localdate() - timedelta(days=1))
+
+    feeders = list(Feeder.objects.filter(band=band_obj, is_onboarded=True).select_related('business_district'))
+    if not feeders:
+        return {'band': band_upper, 'date': str(target), 'message': f'No onboarded feeders found in Band {band_upper}.'}
+
+    feeder_ids = [f.id for f in feeders]
+    hos_map = {
+        r['feeder_id']: float(r['hours_supplied'])
+        for r in DailyHoursOfSupply.objects.filter(feeder_id__in=feeder_ids, date=target).values('feeder_id', 'hours_supplied')
+    }
+
+    # Interruption hours per feeder (for inference when HOS missing)
+    interruption_hours_map: dict = {}
+    if len(hos_map) < len(feeders):
+        for r in (
+            FeederInterruption.objects.filter(feeder_id__in=feeder_ids, occurred_at__date=target)
+            .values('feeder_id', 'occurred_at', 'restored_at')
+        ):
+            fid = r['feeder_id']
+            occurred = r['occurred_at']
+            restored = r['restored_at']
+            if occurred and restored:
+                hrs = (restored - occurred).total_seconds() / 3600
+            elif occurred:
+                hrs = (timezone.now() - occurred).total_seconds() / 3600
+            else:
+                hrs = 0
+            interruption_hours_map[fid] = interruption_hours_map.get(fid, 0) + hrs
+
+    compliant = []
+    non_compliant = []
+    no_data = []
+
+    for f in feeders:
+        entry = {
+            'feeder': f.name,
+            'district': f.business_district.name if f.business_district else None,
+        }
+        if f.id in hos_map:
+            hrs = hos_map[f.id]
+            entry['hours_of_supply'] = hrs
+            entry['shortfall_hrs'] = max(0, round(threshold - hrs, 2))
+            if hrs >= threshold:
+                compliant.append(entry)
+            else:
+                non_compliant.append(entry)
+        else:
+            intr_hrs = interruption_hours_map.get(f.id, 0)
+            entry['hours_of_supply'] = None
+            entry['inferred_interruption_hours'] = round(intr_hrs, 2)
+            if intr_hrs > 0:
+                inferred_supply = max(0, 24 - intr_hrs)
+                entry['inferred_supply_hrs'] = round(inferred_supply, 2)
+                entry['inferred_compliant'] = inferred_supply >= threshold
+            no_data.append(entry)
+
+    return {
+        'band': band_upper,
+        'date': str(target),
+        'threshold_hrs': threshold,
+        'total_feeders': len(feeders),
+        'compliant_count': len(compliant),
+        'non_compliant_count': len(non_compliant),
+        'no_hos_data_count': len(no_data),
+        'compliant_feeders': compliant,
+        'non_compliant_feeders': non_compliant,
+        'feeders_with_no_hos_data': no_data,
+    }
+
+
 def query_feeder_records(feeder: str) -> dict:
     """Return all-time highest and lowest recorded values for a feeder: hours of supply, energy delivered, and peak load."""
     from common.models import Feeder
