@@ -30,6 +30,11 @@ _TOOL_LABELS = {
     'query_top_commercial_feeders': 'Ranking feeders by billing',
     'query_technical':              'Checking technical data',
     'query_feeder_ranking':         'Ranking feeders',
+    'query_band_compliance':        'Checking band compliance',
+    'query_feeder_records':         'Pulling all-time feeder records',
+    'query_hourly_load':            'Checking hourly load',
+    'query_system_load':            'Aggregating system load',
+    'query_period_comparison':      'Comparing periods',
     'query_financial':              'Checking financial data',
     'query_hr':                     'Checking HR data',
     'query_executive_kpis':         'Checking executive KPIs',
@@ -103,6 +108,12 @@ class ARIAConsumer(AsyncWebsocketConsumer):
                     await self.send(text_data=json.dumps({
                         'type': 'token',
                         'text': event['text'],
+                    }))
+
+                elif event_type == 'chart_data':
+                    await self.send(text_data=json.dumps({
+                        'type':  'chart_data',
+                        'chart': event['chart'],
                     }))
 
                 elif event_type == 'done':

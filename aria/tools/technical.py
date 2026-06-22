@@ -8,8 +8,36 @@ def _parse(d: str):
     return datetime.strptime(d, '%Y-%m-%d').date()
 
 
-def _feeder_filter(feeder: str = None, district: str = None, state: str = None) -> dict:
-    from common.models import BusinessDistrict, Feeder, State
+def _fault_label(code: str) -> str:
+    """Return the full human-readable name for a fault type code, e.g. 'E/F' → 'Earth Fault'."""
+    from technical.models import FeederInterruption
+    _map = dict(FeederInterruption.INTERRUPTION_TYPES)
+    return _map.get(code, code)
+
+
+def _named_breakdown(breakdown_by_type: dict, limit: int = 5) -> dict:
+    """Convert a fault code breakdown dict to use full names, sorted by count, top N."""
+    sorted_items = sorted(breakdown_by_type.items(), key=lambda x: x[1]['count'], reverse=True)[:limit]
+    return {
+        _fault_label(code): stats
+        for code, stats in sorted_items
+    }
+
+
+def _normalise_voltage(v: str) -> str | None:
+    """Normalise '11kv', '11KV', '11', '33kv', '33' etc. to '11kv' or '33kv'."""
+    if not v:
+        return None
+    v = v.strip().lower().replace(' ', '')
+    if v in ('11kv', '11'):
+        return '11kv'
+    if v in ('33kv', '33'):
+        return '33kv'
+    return None
+
+
+def _feeder_filter(feeder: str = None, district: str = None, state: str = None, voltage_level: str = None, band: str = None) -> dict:
+    from common.models import Band, BusinessDistrict, Feeder, State
 
     f: dict = {}
     if feeder:
@@ -25,56 +53,115 @@ def _feeder_filter(feeder: str = None, district: str = None, state: str = None) 
         if obj:
             districts = BusinessDistrict.objects.filter(state=obj)
             f['feeder__business_district__in'] = districts
+    vl = _normalise_voltage(voltage_level)
+    if vl:
+        f['feeder__voltage_level'] = vl
+    if band and 'feeder' not in f:
+        band_obj = Band.objects.filter(name__iexact=band.strip().upper()).first()
+        if band_obj:
+            f['feeder__band'] = band_obj
     return f
 
 
-def query_technical(start_date: str, end_date: str, feeder: str = None, district: str = None, state: str = None) -> dict:
+def _hos_from_hourly_load(base: dict, start, end) -> dict:
+    """Compute hours of supply from DSO-submitted HourlyLoad entries (submission_type='dso', load_mw > 0).
+    All aggregation done in the database — no Python arithmetic."""
+    from technical.models import HourlyLoad
+
+    per_feeder_day = (
+        HourlyLoad.objects
+        .filter(**base, date__gte=start, date__lte=end, load_mw__gt=0)
+        .values('feeder_id', 'date')
+        .annotate(supply_hours=Count('hour', distinct=True))
+    )
+
+    if not per_feeder_day.exists():
+        return {
+            'avg_daily_hours': None,
+            'records_count': 0,
+            'source': 'hourly_load',
+            'note': 'No hourly load readings found in this period',
+        }
+
+    agg = per_feeder_day.aggregate(
+        avg_daily_hours=Avg('supply_hours'),
+        feeder_day_count=Count('feeder_id'),
+    )
+
+    return {
+        'avg_daily_hours': round(float(agg['avg_daily_hours'] or 0), 2),
+        'records_count': agg['feeder_day_count'],
+        'source': 'hourly_load',
+        'note': 'Hours derived from hourly load readings (load_mw > 0 per hour)',
+    }
+
+
+def query_technical(start_date: str, end_date: str, feeder: str = None, district: str = None, state: str = None, voltage_level: str = None, band: str = None) -> dict:
     """Return technical metrics: hours of supply, energy delivered, interruptions."""
     from technical.models import (
         DailyHoursOfSupply,
+        EnergyDelivered,
         FeederEnergyDaily,
         FeederInterruption,
         calculate_interruption_metrics,
     )
 
     start, end = _parse(start_date), _parse(end_date)
-    base = _feeder_filter(feeder, district, state)
+    base = _feeder_filter(feeder, district, state, voltage_level, band)
 
-    # Hours of supply
-    hos = DailyHoursOfSupply.objects.filter(
-        **{**base, 'date__gte': start, 'date__lte': end}
-    ).aggregate(avg_hrs=Avg('hours_supplied'), total_records=Count('id'))
+    # ── Hours of supply: DailyHoursOfSupply first, fall back to HourlyLoad ──
+    hos_qs = DailyHoursOfSupply.objects.filter(**{**base, 'date__gte': start, 'date__lte': end})
+    if hos_qs.exists():
+        hos_agg = hos_qs.aggregate(avg_hrs=Avg('hours_supplied'), total_records=Count('id'))
+        hos_result = {
+            'avg_daily_hours': round(float(hos_agg['avg_hrs'] or 0), 2),
+            'records_count': hos_agg['total_records'],
+            'source': 'daily_hos_table',
+        }
+    else:
+        hos_result = _hos_from_hourly_load(base, start, end)
 
-    # Energy delivered
-    energy = FeederEnergyDaily.objects.filter(
-        **{**base, 'date__gte': start, 'date__lte': end}
-    ).aggregate(total_mwh=Sum('energy_mwh'), days_with_data=Count('id'))
+    # ── Energy delivered: FeederEnergyDaily first, fall back to EnergyDelivered ──
+    energy_qs = FeederEnergyDaily.objects.filter(**{**base, 'date__gte': start, 'date__lte': end})
+    if energy_qs.exists():
+        energy_agg = energy_qs.aggregate(total_mwh=Sum('energy_mwh'), days_with_data=Count('id'))
+        total_mwh = float(energy_agg['total_mwh'] or 0)
+        energy_result = {
+            'total_mwh': round(total_mwh, 2),
+            'total_gwh': round(total_mwh / 1000, 3),
+            'days_with_data': energy_agg['days_with_data'],
+            'source': 'feeder_energy_daily',
+        }
+    else:
+        # Fall back to EnergyDelivered (calculated from meter readings)
+        ed_qs = EnergyDelivered.objects.filter(**{**base, 'date__gte': start, 'date__lte': end})
+        ed_agg = ed_qs.aggregate(total_mwh=Sum('energy_mwh'), days=Count('id'))
+        total_mwh = float(ed_agg['total_mwh'] or 0)
+        energy_result = {
+            'total_mwh': round(total_mwh, 2),
+            'total_gwh': round(total_mwh / 1000, 3),
+            'days_with_data': ed_agg['days'],
+            'source': 'energy_delivered_table' if ed_agg['days'] else 'no_data',
+        }
 
-    # Interruptions
+    # ── Interruptions ──
     interruptions_qs = FeederInterruption.objects.filter(
-        **{k.replace('feeder', 'feeder', 1): v for k, v in base.items()},
+        **base,
         occurred_at__date__gte=start,
         occurred_at__date__lte=end,
     )
     metrics = calculate_interruption_metrics(interruptions_qs)
 
-    # Feeder count in scope
+    # ── Feeder count ──
     from common.models import Feeder
     feeder_count = Feeder.objects.filter(**base).count() if base else Feeder.objects.filter(is_onboarded=True).count()
 
     return {
         'period': {'start': start_date, 'end': end_date},
-        'scope': {'feeder': feeder, 'district': district, 'state': state},
+        'scope': {'feeder': feeder, 'district': district, 'state': state, 'voltage_level': voltage_level, 'band': band},
         'feeders_in_scope': feeder_count,
-        'hours_of_supply': {
-            'avg_daily_hours': round(float(hos['avg_hrs'] or 0), 2),
-            'records_count': hos['total_records'],
-        },
-        'energy_delivered': {
-            'total_mwh': round(float(energy['total_mwh'] or 0), 2),
-            'total_gwh': round(float(energy['total_mwh'] or 0) / 1000, 3),
-            'days_with_data': energy['days_with_data'],
-        },
+        'hours_of_supply': hos_result,
+        'energy_delivered': energy_result,
         'interruptions': {
             'total': metrics['total_interruptions'],
             'load_shedding_count': metrics['load_shedding_count'],
@@ -83,30 +170,17 @@ def query_technical(start_date: str, end_date: str, feeder: str = None, district
             'disco_fault_hours': metrics['fault_hours'],
             'avg_turnaround_hours': metrics['avg_turnaround_time'],
             'unresolved': metrics['unresolved_count'],
-            'top_fault_types': dict(list(
-                sorted(metrics['breakdown_by_type'].items(), key=lambda x: x[1]['count'], reverse=True)[:5]
-            )),
+            'top_fault_types': _named_breakdown(metrics['breakdown_by_type']),
         },
     }
 
 
-def query_feeder_ranking(start_date: str, end_date: str, metric: str = 'hours_of_supply', limit: int = 10, district: str = None, state: str = None) -> dict:
+def query_feeder_ranking(start_date: str, end_date: str, metric: str = 'hours_of_supply', limit: int = 10, district: str = None, state: str = None, voltage_level: str = None, band: str = None) -> dict:
     """Rank feeders by hours_of_supply or energy_delivered. metric: 'hours_of_supply' | 'energy_delivered'."""
     from technical.models import DailyHoursOfSupply, FeederEnergyDaily
-    from common.models import BusinessDistrict, Feeder, State
 
     start, end = _parse(start_date), _parse(end_date)
-
-    base: dict = {}
-    if district:
-        obj = BusinessDistrict.objects.filter(Q(slug=district) | Q(name__icontains=district)).first()
-        if obj:
-            base['feeder__business_district'] = obj
-    if state and not base:
-        obj = State.objects.filter(Q(slug=state) | Q(name__icontains=state)).first()
-        if obj:
-            districts = BusinessDistrict.objects.filter(state=obj)
-            base['feeder__business_district__in'] = districts
+    base = _feeder_filter(district=district, state=state, voltage_level=voltage_level, band=band)
 
     if metric == 'energy_delivered':
         rows = (
@@ -147,7 +221,7 @@ _BAND_THRESHOLDS = {'A': 20, 'B': 16, 'C': 12, 'D': 8, 'E': 0}
 def query_band_compliance(band: str, date: str = None) -> dict:
     """Check which feeders in a given service band met their minimum hours-of-supply threshold for a date."""
     from common.models import Band, Feeder
-    from technical.models import DailyHoursOfSupply, FeederInterruption
+    from technical.models import DailyHoursOfSupply
 
     band_upper = band.strip().upper()
     threshold = _BAND_THRESHOLDS.get(band_upper)
@@ -165,28 +239,24 @@ def query_band_compliance(band: str, date: str = None) -> dict:
         return {'band': band_upper, 'date': str(target), 'message': f'No onboarded feeders found in Band {band_upper}.'}
 
     feeder_ids = [f.id for f in feeders]
+
+    # Primary: DailyHoursOfSupply
     hos_map = {
         r['feeder_id']: float(r['hours_supplied'])
         for r in DailyHoursOfSupply.objects.filter(feeder_id__in=feeder_ids, date=target).values('feeder_id', 'hours_supplied')
     }
 
-    # Interruption hours per feeder (for inference when HOS missing)
-    interruption_hours_map: dict = {}
-    if len(hos_map) < len(feeders):
+    # Fallback: derive from HourlyLoad (real MW readings — hours where load_mw > 0)
+    missing_ids = [f.id for f in feeders if f.id not in hos_map]
+    hourly_hos_map: dict = {}
+    if missing_ids:
+        from technical.models import HourlyLoad
         for r in (
-            FeederInterruption.objects.filter(feeder_id__in=feeder_ids, occurred_at__date=target)
-            .values('feeder_id', 'occurred_at', 'restored_at')
+            HourlyLoad.objects.filter(feeder_id__in=missing_ids, date=target, load_mw__gt=0)
+            .values('feeder_id')
+            .annotate(supply_hours=Count('hour'))
         ):
-            fid = r['feeder_id']
-            occurred = r['occurred_at']
-            restored = r['restored_at']
-            if occurred and restored:
-                hrs = (restored - occurred).total_seconds() / 3600
-            elif occurred:
-                hrs = (timezone.now() - occurred).total_seconds() / 3600
-            else:
-                hrs = 0
-            interruption_hours_map[fid] = interruption_hours_map.get(fid, 0) + hrs
+            hourly_hos_map[r['feeder_id']] = r['supply_hours']
 
     compliant = []
     non_compliant = []
@@ -200,19 +270,24 @@ def query_band_compliance(band: str, date: str = None) -> dict:
         if f.id in hos_map:
             hrs = hos_map[f.id]
             entry['hours_of_supply'] = hrs
+            entry['data_source'] = 'daily_hos_table'
+            entry['shortfall_hrs'] = max(0, round(threshold - hrs, 2))
+            if hrs >= threshold:
+                compliant.append(entry)
+            else:
+                non_compliant.append(entry)
+        elif f.id in hourly_hos_map:
+            hrs = float(hourly_hos_map[f.id])
+            entry['hours_of_supply'] = hrs
+            entry['data_source'] = 'hourly_load_readings'
             entry['shortfall_hrs'] = max(0, round(threshold - hrs, 2))
             if hrs >= threshold:
                 compliant.append(entry)
             else:
                 non_compliant.append(entry)
         else:
-            intr_hrs = interruption_hours_map.get(f.id, 0)
             entry['hours_of_supply'] = None
-            entry['inferred_interruption_hours'] = round(intr_hrs, 2)
-            if intr_hrs > 0:
-                inferred_supply = max(0, 24 - intr_hrs)
-                entry['inferred_supply_hrs'] = round(inferred_supply, 2)
-                entry['inferred_compliant'] = inferred_supply >= threshold
+            entry['data_source'] = 'no_data'
             no_data.append(entry)
 
     return {
@@ -361,4 +436,125 @@ def query_hourly_load(feeder: str, date: str = None, last_hours: int = None) -> 
             }
             for r in readings
         ],
+    }
+
+
+def query_system_load(start_date: str, end_date: str, voltage_level: str = None, district: str = None, state: str = None, band: str = None) -> dict:
+    """Return total and average load (MW) aggregated across all feeders for a period, with optional voltage/district/band scoping."""
+    from technical.models import HourlyLoad
+
+    start, end = _parse(start_date), _parse(end_date)
+    base = _feeder_filter(district=district, state=state, voltage_level=voltage_level, band=band)
+
+    # Remap feeder__ keys to direct feeder__ for HourlyLoad
+    hl_filter = {k: v for k, v in base.items()}
+    hl_qs = HourlyLoad.objects.filter(
+        **hl_filter,
+        date__gte=start,
+        date__lte=end,
+    )
+
+    agg = hl_qs.aggregate(
+        total_mwh=Sum('load_mw'),
+        peak_mw=Max('load_mw'),
+        avg_mw=Avg('load_mw'),
+        reading_count=Count('id'),
+    )
+
+    # Breakdown by voltage level
+    breakdown_by_voltage = {}
+    for vl in ('11kv', '33kv'):
+        vl_agg = hl_qs.filter(feeder__voltage_level=vl).aggregate(
+            total=Sum('load_mw'), peak=Max('load_mw'), avg=Avg('load_mw'), count=Count('id')
+        )
+        if vl_agg['count']:
+            breakdown_by_voltage[vl] = {
+                'total_mw_sum': round(float(vl_agg['total'] or 0), 2),
+                'peak_mw': round(float(vl_agg['peak'] or 0), 2),
+                'avg_mw': round(float(vl_agg['avg'] or 0), 2),
+                'readings': vl_agg['count'],
+            }
+
+    # Daily totals for trend view
+    daily_rows = (
+        hl_qs
+        .values('date')
+        .annotate(daily_sum_mw=Sum('load_mw'), daily_peak_mw=Max('load_mw'), daily_avg_mw=Avg('load_mw'))
+        .order_by('date')
+    )
+
+    return {
+        'period': {'start': start_date, 'end': end_date},
+        'scope': {'voltage_level': voltage_level, 'district': district, 'state': state, 'band': band},
+        'summary': {
+            'total_mw_sum': round(float(agg['total_mwh'] or 0), 2),
+            'peak_mw': round(float(agg['peak_mw'] or 0), 2),
+            'avg_mw': round(float(agg['avg_mw'] or 0), 2),
+            'hourly_readings_count': agg['reading_count'],
+        },
+        'by_voltage_level': breakdown_by_voltage,
+        'daily_trend': [
+            {
+                'date': str(r['date']),
+                'total_mw': round(float(r['daily_sum_mw'] or 0), 2),
+                'peak_mw': round(float(r['daily_peak_mw'] or 0), 2),
+                'avg_mw': round(float(r['daily_avg_mw'] or 0), 2),
+            }
+            for r in daily_rows
+        ],
+    }
+
+
+def query_period_comparison(period1_start: str, period1_end: str, period2_start: str, period2_end: str,
+                             feeder: str = None, district: str = None, state: str = None,
+                             voltage_level: str = None, band: str = None) -> dict:
+    """Compare technical metrics (HOS, energy, load, interruptions) between two date periods."""
+    from technical.models import DailyHoursOfSupply, FeederEnergyDaily, FeederInterruption, HourlyLoad, calculate_interruption_metrics
+
+    base = _feeder_filter(feeder, district, state, voltage_level, band)
+    p1s, p1e = _parse(period1_start), _parse(period1_end)
+    p2s, p2e = _parse(period2_start), _parse(period2_end)
+
+    def _get_metrics(start, end):
+        hos = DailyHoursOfSupply.objects.filter(**base, date__gte=start, date__lte=end).aggregate(
+            avg=Avg('hours_supplied'), count=Count('id')
+        )
+        energy = FeederEnergyDaily.objects.filter(**base, date__gte=start, date__lte=end).aggregate(
+            total_mwh=Sum('energy_mwh'), days=Count('id')
+        )
+        load = HourlyLoad.objects.filter(**base, date__gte=start, date__lte=end).aggregate(
+            peak=Max('load_mw'), avg=Avg('load_mw'), count=Count('id')
+        )
+        intr_qs = FeederInterruption.objects.filter(
+            **base, occurred_at__date__gte=start, occurred_at__date__lte=end
+        )
+        intr = calculate_interruption_metrics(intr_qs)
+        return {
+            'avg_hours_of_supply': round(float(hos['avg'] or 0), 2),
+            'hos_records': hos['count'],
+            'total_energy_mwh': round(float(energy['total_mwh'] or 0), 2),
+            'total_energy_gwh': round(float(energy['total_mwh'] or 0) / 1000, 3),
+            'peak_load_mw': round(float(load['peak'] or 0), 2),
+            'avg_load_mw': round(float(load['avg'] or 0), 2),
+            'total_interruptions': intr['total_interruptions'],
+            'load_shedding_hours': intr['load_shedding_hours'],
+            'disco_fault_hours': intr['fault_hours'],
+            'avg_turnaround_hrs': intr['avg_turnaround_time'],
+        }
+
+    def _pct_change(a, b):
+        if a == 0:
+            return None
+        return round((b - a) / a * 100, 1)
+
+    p1 = _get_metrics(p1s, p1e)
+    p2 = _get_metrics(p2s, p2e)
+
+    changes = {k: _pct_change(p1[k], p2[k]) for k in p1 if isinstance(p1[k], (int, float))}
+
+    return {
+        'scope': {'feeder': feeder, 'district': district, 'state': state, 'voltage_level': voltage_level, 'band': band},
+        'period_1': {'start': period1_start, 'end': period1_end, 'metrics': p1},
+        'period_2': {'start': period2_start, 'end': period2_end, 'metrics': p2},
+        'change_pct': changes,
     }

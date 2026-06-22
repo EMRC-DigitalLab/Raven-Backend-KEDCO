@@ -4,6 +4,7 @@ Handles conversation management, tool execution, and streaming Claude responses.
 """
 
 import json
+import re
 
 import anthropic
 from channels.db import database_sync_to_async
@@ -70,6 +71,22 @@ def _extract_text(content) -> str:
         elif isinstance(block, dict) and block.get('type') == 'text':
             parts.append(block.get('text', ''))
     return '\n'.join(parts).strip()
+
+
+_CHART_RE = re.compile(r'<chart_data>\s*(.*?)\s*</chart_data>', re.DOTALL)
+
+
+def _split_chart(text: str) -> tuple[str, dict | None]:
+    """Extract <chart_data> JSON from response text. Returns (clean_text, chart_dict_or_None)."""
+    match = _CHART_RE.search(text)
+    if not match:
+        return text, None
+    clean = _CHART_RE.sub('', text).strip()
+    try:
+        chart = json.loads(match.group(1))
+    except (ValueError, TypeError):
+        chart = None
+    return clean, chart
 
 
 def _auto_title(message: str) -> str:
@@ -155,6 +172,8 @@ def run_aria(user, conversation_id, user_message: str) -> dict:
     if not final_text:
         final_text = "I couldn't generate a response. Please try rephrasing your question."
 
+    final_text, chart_data = _split_chart(final_text)
+
     # ── Persist both messages ─────────────────────────────────────────────────
     ARIAMessage.objects.create(conversation=conversation, role='user', content=user_message)
     ARIAMessage.objects.create(conversation=conversation, role='assistant', content=final_text)
@@ -162,11 +181,14 @@ def run_aria(user, conversation_id, user_message: str) -> dict:
     # Update conversation timestamp
     conversation.save()
 
-    return {
+    result = {
         'conversation_id': str(conversation.id),
         'response': final_text,
         'title': conversation.title,
     }
+    if chart_data:
+        result['chart_data'] = chart_data
+    return result
 
 
 # ── Streaming agent (WebSocket path) ─────────────────────────────────────────
@@ -254,7 +276,8 @@ async def stream_aria(user, conversation_id, user_message: str):
 
             break
 
-        final_text = accumulated_text.strip() or "I couldn't generate a response. Please try again."
+        raw_text = accumulated_text.strip() or "I couldn't generate a response. Please try again."
+        final_text, chart_data = _split_chart(raw_text)
 
         # Persist
         await database_sync_to_async(ARIAMessage.objects.create)(
@@ -264,6 +287,9 @@ async def stream_aria(user, conversation_id, user_message: str):
             conversation=conversation, role='assistant', content=final_text
         )
         await database_sync_to_async(conversation.save)()
+
+        if chart_data:
+            yield {'type': 'chart_data', 'chart': chart_data}
 
         yield {'type': 'done', 'conversation_id': str(conversation.id), 'title': conversation.title}
 

@@ -75,13 +75,15 @@ TOOL_SCHEMAS = {
         'description': (
             'Query technical metrics: average hours of supply, total energy delivered (MWh), '
             'interruption counts and durations broken down by type (load shedding, TCN, DisCo faults), '
-            'and average turnaround time. Scope by feeder/district/state.'
+            'and average turnaround time. Scope by feeder/district/state/voltage_level/band.'
         ),
         'input_schema': {
             'type': 'object',
             'properties': {
                 **_DATE_PROPS,
                 **_SCOPE_PROPS,
+                'voltage_level': {'type': 'string', 'description': 'Filter by voltage: "11kv" or "33kv"'},
+                'band': {'type': 'string', 'description': 'Filter by service band: A, B, C, D, or E'},
             },
             'required': ['start_date', 'end_date'],
         },
@@ -90,7 +92,8 @@ TOOL_SCHEMAS = {
         'name': 'query_feeder_ranking',
         'description': (
             'Rank feeders by hours_of_supply or energy_delivered for a period. '
-            'Great for "which feeders had the best/worst supply?" questions.'
+            'Supports filtering by voltage level (11kV/33kV) and service band. '
+            'Great for "which 11kV feeders had the best supply?", "rank Band A feeders by energy", etc.'
         ),
         'input_schema': {
             'type': 'object',
@@ -104,8 +107,56 @@ TOOL_SCHEMAS = {
                 'limit': {'type': 'integer', 'description': 'Number of feeders to return (default 10)'},
                 'district': _SCOPE_PROPS['district'],
                 'state': _SCOPE_PROPS['state'],
+                'voltage_level': {'type': 'string', 'description': 'Filter by voltage: "11kv" or "33kv"'},
+                'band': {'type': 'string', 'description': 'Filter by service band: A, B, C, D, or E'},
             },
             'required': ['start_date', 'end_date'],
+        },
+    },
+    'query_system_load': {
+        'name': 'query_system_load',
+        'description': (
+            'Return total, peak, and average load (MW) aggregated across all feeders for a date range. '
+            'Automatically breaks down by voltage level (11kV vs 33kV). '
+            'Also returns a daily trend so you can see how load changed day by day. '
+            'Use this for "what is the total load for all 11kV feeders?", '
+            '"show me the system load trend for last month", '
+            '"how does 33kV load compare to 11kV?" etc.'
+        ),
+        'input_schema': {
+            'type': 'object',
+            'properties': {
+                **_DATE_PROPS,
+                'voltage_level': {'type': 'string', 'description': 'Filter by voltage: "11kv" or "33kv" (optional — omit for all feeders)'},
+                'district': _SCOPE_PROPS['district'],
+                'state': _SCOPE_PROPS['state'],
+                'band': {'type': 'string', 'description': 'Filter by service band: A, B, C, D, or E'},
+            },
+            'required': ['start_date', 'end_date'],
+        },
+    },
+    'query_period_comparison': {
+        'name': 'query_period_comparison',
+        'description': (
+            'Compare technical metrics between two date periods side by side. '
+            'Returns hours of supply, energy delivered, peak load, and interruption stats for both periods, '
+            'plus the percentage change for each metric. '
+            'Use this for "compare this month vs last month", "how did energy delivery change quarter over quarter?", '
+            '"is Band A supply improving compared to last year?", etc. '
+            'Supports all scope filters: feeder, district, state, voltage_level, band.'
+        ),
+        'input_schema': {
+            'type': 'object',
+            'properties': {
+                'period1_start': {'type': 'string', 'description': 'Start of first period (YYYY-MM-DD)'},
+                'period1_end':   {'type': 'string', 'description': 'End of first period (YYYY-MM-DD)'},
+                'period2_start': {'type': 'string', 'description': 'Start of second period (YYYY-MM-DD)'},
+                'period2_end':   {'type': 'string', 'description': 'End of second period (YYYY-MM-DD)'},
+                **_SCOPE_PROPS,
+                'voltage_level': {'type': 'string', 'description': 'Filter by voltage: "11kv" or "33kv"'},
+                'band': {'type': 'string', 'description': 'Filter by service band: A, B, C, D, or E'},
+            },
+            'required': ['period1_start', 'period1_end', 'period2_start', 'period2_end'],
         },
     },
     'query_band_compliance': {
@@ -328,7 +379,7 @@ TOOL_SCHEMAS = {
 
 _MODULE_TOOLS = {
     'commercial':     ['query_commercial', 'query_top_commercial_feeders'],
-    'technical':      ['query_technical', 'query_feeder_ranking', 'query_feeder_records', 'query_hourly_load', 'query_band_compliance'],
+    'technical':      ['query_technical', 'query_feeder_ranking', 'query_feeder_records', 'query_hourly_load', 'query_band_compliance', 'query_system_load', 'query_period_comparison'],
     'financial':      ['query_financial'],
     'hr':             ['query_hr', 'query_executive_kpis'],
     'energy_account': ['query_energy_account'],
@@ -351,6 +402,8 @@ def _get_function(name: str):
         'query_feeder_records':         technical.query_feeder_records,
         'query_hourly_load':            technical.query_hourly_load,
         'query_band_compliance':        technical.query_band_compliance,
+        'query_system_load':            technical.query_system_load,
+        'query_period_comparison':      technical.query_period_comparison,
         'query_financial':              financial.query_financial,
         'query_hr':                     hr.query_hr,
         'query_executive_kpis':         hr.query_executive_kpis,

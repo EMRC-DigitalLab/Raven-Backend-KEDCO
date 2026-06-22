@@ -50,22 +50,26 @@ def query_commercial(start_date: str, end_date: str, feeder: str = None, distric
         total_readings=Count('id'),
     )
 
-    billed_naira_data = (
+    total_billed_kwh = float(totals['total_billed_kwh'] or 0)
+
+    # VAT (7.5%) and total billed naira computed in the DB
+    naira_agg = (
         readings_qs
         .exclude(billed_consumption__isnull=True)
         .exclude(tariff_rate__isnull=True)
         .aggregate(
-            energy_charge=Sum(
-                ExpressionWrapper(F('billed_consumption') * F('tariff_rate'), output_field=DecimalField())
-            )
+            total_billed_naira=Sum(
+                ExpressionWrapper(
+                    F('billed_consumption') * F('tariff_rate') * 1.075,
+                    output_field=DecimalField()
+                )
+            ),
         )
     )
+    total_billed_naira = round(float(naira_agg['total_billed_naira'] or 0), 2)
 
-    total_billed_kwh    = float(totals['total_billed_kwh'] or 0)
-    total_energy_charge = float(billed_naira_data['energy_charge'] or 0)
-    total_vat           = round(total_energy_charge * 0.075, 2)
-    total_billed_naira  = round(total_energy_charge + total_vat, 2)
-    billing_efficiency  = round(customers_read / total_customers * 100, 1) if total_customers else 0
+    # Billing efficiency: customers with a reading ÷ total customers, computed in DB
+    billing_efficiency = round(customers_read / total_customers * 100, 1) if total_customers else 0
 
     # Late / OCR / audit breakdown
     late_readings     = readings_qs.filter(submission_status='late').count()
