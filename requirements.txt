@@ -72,6 +72,7 @@ weasyprint==66.0
 webencodings==0.5.1
 zopfli==0.4.0
 anthropic==0.97.0
+duckduckgo-search==7.5.1
 channels==4.2.0
 channels-redis==4.2.1
 daphne==4.1.2
