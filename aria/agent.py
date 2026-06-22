@@ -17,8 +17,9 @@ from aria.tools.registry import execute_tool, get_tools_for_modules
 
 _MODEL = 'claude-sonnet-4-6'
 _MAX_TOKENS = 4096
-_MAX_HISTORY = 20   # messages per conversation sent to Claude
+_MAX_HISTORY = 10    # messages per conversation sent to Claude
 _MAX_ITERATIONS = 8  # max tool-call rounds before forcing a response
+_MAX_TOOL_RESULT = 6000  # max chars per tool result before truncation
 
 
 def _get_client() -> anthropic.Anthropic:
@@ -74,6 +75,13 @@ def _extract_text(content) -> str:
 
 
 _CHART_RE = re.compile(r'<chart_data>\s*(.*?)\s*</chart_data>', re.DOTALL)
+
+
+def _cap_tool_result(result_json: str) -> str:
+    """Truncate oversized tool results to keep token usage in check."""
+    if len(result_json) <= _MAX_TOOL_RESULT:
+        return result_json
+    return result_json[:_MAX_TOOL_RESULT] + f'\n... [truncated — {len(result_json)} chars total]'
 
 
 def _split_chart(text: str) -> tuple[str, dict | None]:
@@ -157,7 +165,7 @@ def run_aria(user, conversation_id, user_message: str) -> dict:
                     tool_results.append({
                         'type': 'tool_result',
                         'tool_use_id': block.id,
-                        'content': result_json,
+                        'content': _cap_tool_result(result_json),
                     })
 
             # Append assistant turn + tool results to history
@@ -267,7 +275,7 @@ async def stream_aria(user, conversation_id, user_message: str):
                         tool_results.append({
                             'type': 'tool_result',
                             'tool_use_id': block.id,
-                            'content': result_json,
+                            'content': _cap_tool_result(result_json),
                         })
 
                 history.append({'role': 'assistant', 'content': assistant_content})
