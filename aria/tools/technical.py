@@ -1,6 +1,7 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 
-from django.db.models import Avg, Count, Q, Sum
+from django.db.models import Avg, Count, Max, Min, Q, Sum
+from django.utils import timezone
 
 
 def _parse(d: str):
@@ -136,5 +137,140 @@ def query_feeder_ranking(start_date: str, end_date: str, metric: str = 'hours_of
                 label: round(float(r['value'] or 0), 2),
             }
             for r in rows
+        ],
+    }
+
+
+def query_feeder_records(feeder: str) -> dict:
+    """Return all-time highest and lowest recorded values for a feeder: hours of supply, energy delivered, and peak load."""
+    from common.models import Feeder
+    from technical.models import DailyHoursOfSupply, FeederEnergyDaily, HourlyLoad
+
+    obj = Feeder.objects.filter(Q(slug=feeder) | Q(name__icontains=feeder)).first()
+    if not obj:
+        return {'error': f'Feeder "{feeder}" not found.'}
+
+    hos = DailyHoursOfSupply.objects.filter(feeder=obj).aggregate(
+        max_hrs=Max('hours_supplied'),
+        min_hrs=Min('hours_supplied'),
+        avg_hrs=Avg('hours_supplied'),
+        total_days=Count('id'),
+    )
+    hos_max_day = (
+        DailyHoursOfSupply.objects.filter(feeder=obj, hours_supplied=hos['max_hrs']).first()
+    )
+    hos_min_day = (
+        DailyHoursOfSupply.objects.filter(feeder=obj, hours_supplied=hos['min_hrs']).first()
+    )
+
+    energy = FeederEnergyDaily.objects.filter(feeder=obj).aggregate(
+        max_mwh=Max('energy_mwh'),
+        min_mwh=Min('energy_mwh'),
+        avg_mwh=Avg('energy_mwh'),
+        total_days=Count('id'),
+    )
+    energy_max_day = (
+        FeederEnergyDaily.objects.filter(feeder=obj, energy_mwh=energy['max_mwh']).first()
+    )
+    energy_min_day = (
+        FeederEnergyDaily.objects.filter(feeder=obj, energy_mwh=energy['min_mwh']).first()
+    )
+
+    load = HourlyLoad.objects.filter(feeder=obj).aggregate(
+        peak_mw=Max('load_mw'),
+        min_mw=Min('load_mw'),
+        avg_mw=Avg('load_mw'),
+        total_readings=Count('id'),
+    )
+    load_peak_record = (
+        HourlyLoad.objects.filter(feeder=obj, load_mw=load['peak_mw']).first()
+    )
+    load_min_record = (
+        HourlyLoad.objects.filter(feeder=obj, load_mw=load['min_mw']).first()
+    )
+
+    return {
+        'feeder': obj.name,
+        'district': obj.business_district.name if obj.business_district else None,
+        'all_time_hours_of_supply': {
+            'highest_hrs': float(hos['max_hrs'] or 0),
+            'highest_on': str(hos_max_day.date) if hos_max_day else None,
+            'lowest_hrs': float(hos['min_hrs'] or 0),
+            'lowest_on': str(hos_min_day.date) if hos_min_day else None,
+            'average_hrs': round(float(hos['avg_hrs'] or 0), 2),
+            'days_with_data': hos['total_days'],
+        },
+        'all_time_energy_delivered': {
+            'highest_mwh': float(energy['max_mwh'] or 0),
+            'highest_on': str(energy_max_day.date) if energy_max_day else None,
+            'lowest_mwh': float(energy['min_mwh'] or 0),
+            'lowest_on': str(energy_min_day.date) if energy_min_day else None,
+            'average_mwh': round(float(energy['avg_mwh'] or 0), 2),
+            'days_with_data': energy['total_days'],
+        },
+        'all_time_load': {
+            'peak_mw': float(load['peak_mw'] or 0),
+            'peak_recorded_on': (
+                f"{load_peak_record.date} hour {load_peak_record.hour}:00"
+                if load_peak_record else None
+            ),
+            'lowest_mw': float(load['min_mw'] or 0),
+            'lowest_recorded_on': (
+                f"{load_min_record.date} hour {load_min_record.hour}:00"
+                if load_min_record else None
+            ),
+            'average_mw': round(float(load['avg_mw'] or 0), 2),
+            'total_hourly_readings': load['total_readings'],
+        },
+    }
+
+
+def query_hourly_load(feeder: str, date: str = None, last_hours: int = None) -> dict:
+    """Return hourly load (MW) readings for a feeder. Use date for a specific day or last_hours for recent readings."""
+    from common.models import Feeder
+    from technical.models import HourlyLoad
+
+    obj = Feeder.objects.filter(Q(slug=feeder) | Q(name__icontains=feeder)).first()
+    if not obj:
+        return {'error': f'Feeder "{feeder}" not found.'}
+
+    today = timezone.localdate()
+
+    if last_hours:
+        cutoff = timezone.now() - timedelta(hours=last_hours)
+        qs = HourlyLoad.objects.filter(
+            feeder=obj,
+            date__gte=cutoff.date(),
+        ).order_by('-date', '-hour')
+        period_label = f'last {last_hours} hours'
+    elif date:
+        target = _parse(date)
+        qs = HourlyLoad.objects.filter(feeder=obj, date=target).order_by('hour')
+        period_label = date
+    else:
+        qs = HourlyLoad.objects.filter(feeder=obj, date=today).order_by('hour')
+        period_label = str(today)
+
+    readings = list(qs.values('date', 'hour', 'load_mw'))
+
+    agg = qs.aggregate(peak=Max('load_mw'), avg=Avg('load_mw'), low=Min('load_mw'))
+
+    return {
+        'feeder': obj.name,
+        'district': obj.business_district.name if obj.business_district else None,
+        'period': period_label,
+        'summary': {
+            'peak_mw': float(agg['peak'] or 0),
+            'average_mw': round(float(agg['avg'] or 0), 2),
+            'lowest_mw': float(agg['low'] or 0),
+            'readings_count': len(readings),
+        },
+        'hourly_readings': [
+            {
+                'date': str(r['date']),
+                'hour': f"{r['hour']:02d}:00",
+                'load_mw': float(r['load_mw']),
+            }
+            for r in readings
         ],
     }

@@ -108,6 +108,54 @@ TOOL_SCHEMAS = {
             'required': ['start_date', 'end_date'],
         },
     },
+    'query_feeder_records': {
+        'name': 'query_feeder_records',
+        'description': (
+            'Return all-time highest and lowest recorded values for a specific feeder: '
+            'peak hours of supply, worst hours of supply, highest/lowest energy delivered (MWh), '
+            'and peak/lowest load (MW) with the exact date each record was set. '
+            'Use this for questions like "what is the highest/lowest ever recorded for feeder X?" '
+            'or "what is the all-time peak load on feeder Y?" — no date range needed.'
+        ),
+        'input_schema': {
+            'type': 'object',
+            'properties': {
+                'feeder': {
+                    'type': 'string',
+                    'description': 'Feeder name or slug (required)',
+                },
+            },
+            'required': ['feeder'],
+        },
+    },
+    'query_hourly_load': {
+        'name': 'query_hourly_load',
+        'description': (
+            'Return hour-by-hour load (MW) readings for a feeder. '
+            'Use last_hours to get recent readings (e.g. last_hours=1 for the last hour, last_hours=6 for last 6 hours). '
+            'Use date (YYYY-MM-DD) for a specific day. Omit both to get today\'s readings. '
+            'Also returns peak, average, and lowest load for the period. '
+            'Use this for "what was the load in the last hour?", "show me today\'s load profile", etc.'
+        ),
+        'input_schema': {
+            'type': 'object',
+            'properties': {
+                'feeder': {
+                    'type': 'string',
+                    'description': 'Feeder name or slug (required)',
+                },
+                'date': {
+                    'type': 'string',
+                    'description': 'Specific date in YYYY-MM-DD format (optional — defaults to today)',
+                },
+                'last_hours': {
+                    'type': 'integer',
+                    'description': 'Return readings from the last N hours (e.g. 1, 3, 6, 12, 24). Overrides date if provided.',
+                },
+            },
+            'required': ['feeder'],
+        },
+    },
 
     # ── FINANCIAL ─────────────────────────────────────────────────────────────
     'query_financial': {
@@ -254,7 +302,7 @@ TOOL_SCHEMAS = {
 
 _MODULE_TOOLS = {
     'commercial':     ['query_commercial', 'query_top_commercial_feeders'],
-    'technical':      ['query_technical', 'query_feeder_ranking'],
+    'technical':      ['query_technical', 'query_feeder_ranking', 'query_feeder_records', 'query_hourly_load'],
     'financial':      ['query_financial'],
     'hr':             ['query_hr', 'query_executive_kpis'],
     'energy_account': ['query_energy_account'],
@@ -274,6 +322,8 @@ def _get_function(name: str):
         'query_top_commercial_feeders': commercial.query_top_commercial_feeders,
         'query_technical':              technical.query_technical,
         'query_feeder_ranking':         technical.query_feeder_ranking,
+        'query_feeder_records':         technical.query_feeder_records,
+        'query_hourly_load':            technical.query_hourly_load,
         'query_financial':              financial.query_financial,
         'query_hr':                     hr.query_hr,
         'query_executive_kpis':         hr.query_executive_kpis,
