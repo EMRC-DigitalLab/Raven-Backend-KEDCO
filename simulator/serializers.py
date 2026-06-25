@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from .models import PCCConfig, SimulationFeederResult, SimulationRun
+from .models import FeederCommercialProfile, PCCConfig, SimulationFeederResult, SimulationRun
 
 
 class PCCConfigSerializer(serializers.ModelSerializer):
@@ -40,6 +40,18 @@ class BandSummarySerializer(serializers.Serializer):
     priority_order = serializers.IntegerField()
 
 
+class FeederCommercialProfileSerializer(serializers.ModelSerializer):
+    atcc_loss_pct = serializers.FloatField(read_only=True)
+
+    class Meta:
+        model = FeederCommercialProfile
+        fields = [
+            'billing_efficiency_pct', 'collection_efficiency_pct',
+            'atcc_loss_pct', 'monthly_revenue_target_ngn',
+            'effective_from', 'source',
+        ]
+
+
 class FeederResultSerializer(serializers.ModelSerializer):
     feeder_id = serializers.UUIDField(source='feeder.id')
     feeder_name = serializers.CharField(source='feeder.name')
@@ -60,6 +72,12 @@ class FeederResultSerializer(serializers.ModelSerializer):
             'allocated_energy_mwh', 'effective_hours',
             'status',
             'forecasted_demand_mwh', 'band_minimum_energy_mwh',
+            # Phase 2 — revenue
+            'tariff_rate_ngn_per_kwh',
+            'billing_efficiency_pct', 'collection_efficiency_pct',
+            'revenue_potential_ngn', 'expected_billing_ngn',
+            'expected_collection_ngn', 'atcc_loss_ngn',
+            'revenue_per_mwh_ngn',
         ]
 
     def get_business_district(self, obj):
@@ -84,6 +102,10 @@ class SimulationRunSerializer(serializers.ModelSerializer):
             'total_allocated_mwh', 'surplus_mwh', 'deficit_mwh',
             'deviation_from_actual', 'deviation_from_e_min', 'deviation_from_e_max',
             'energised_count', 'upgraded_count', 'downgraded_count', 'load_shed_count',
+            # Phase 2 — revenue summary
+            'total_revenue_potential_ngn', 'total_expected_billing_ngn',
+            'total_expected_collection_ngn', 'total_atcc_loss_ngn',
+            'revenue_per_mwh_ngn',
             'created_at',
             'feeder_results',
         ]

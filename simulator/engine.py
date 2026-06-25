@@ -2,10 +2,11 @@ from datetime import timedelta
 
 from django.db.models import Avg, Count
 
+from commercial.models import TariffRate
 from common.models import Band, Feeder
 from technical.models import FeederEnergyDaily
 
-from .models import PCCConfig
+from .models import FeederCommercialProfile, PCCConfig
 
 
 class AllocationEngine:
@@ -29,6 +30,10 @@ class AllocationEngine:
         'critical': 0.0,
     }
 
+    # Default KEDCO benchmarks (NERC Q1 2025) used when no profile exists for a feeder
+    DEFAULT_BILLING_EFFICIENCY_PCT  = 99.00
+    DEFAULT_COLLECTION_EFFICIENCY_PCT = 80.00
+
     def __init__(self, simulation_date):
         self.simulation_date = simulation_date
         self.bands = list(Band.objects.order_by('priority_order'))
@@ -37,6 +42,19 @@ class AllocationEngine:
             .select_related('band', 'substation', 'business_district')
         )
         self.pcc_config = PCCConfig.get_for_date(simulation_date)
+
+        # Phase 2: commercial profiles keyed by feeder id
+        self._commercial_profiles = {
+            str(p.feeder_id): p
+            for p in FeederCommercialProfile.objects.filter(is_active=True)
+            .select_related('feeder')
+        }
+
+        # Phase 2: tariff rates keyed by band name, most recent active rate
+        self._tariff_rates = {}
+        for rate in TariffRate.objects.filter(is_active=True).order_by('-effective_from'):
+            if rate.band not in self._tariff_rates:
+                self._tariff_rates[rate.band] = float(rate.rate_per_kwh)
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -58,10 +76,12 @@ class AllocationEngine:
             raw_allocations = self._allocate_operational(feeder_demands, e_offtake)
 
         feeder_results = self._resolve_states(raw_allocations, feeder_demands)
+        self._apply_revenue(feeder_results)
 
         total_allocated = sum(r['allocated_energy_mwh'] for r in feeder_results)
         band_a_greatly_downgraded = self._check_band_a_downgrade(feeder_results, shortage_severity)
         counts = self._count_states(feeder_results)
+        revenue_summary = self._summarise_revenue(feeder_results, total_allocated)
 
         return {
             'e_max': e_max,
@@ -85,6 +105,7 @@ class AllocationEngine:
             'data_reference_end': getattr(self, 'data_reference_end', None),
             'feeder_results': feeder_results,
             **counts,
+            **revenue_summary,
         }
 
     # ------------------------------------------------------------------
@@ -355,3 +376,73 @@ class AllocationEngine:
             if key in counts:
                 counts[key] += 1
         return counts
+
+    # ------------------------------------------------------------------
+    # Phase 2 — Revenue calculation
+    # ------------------------------------------------------------------
+
+    def _apply_revenue(self, feeder_results):
+        """
+        Attach per-feeder revenue figures to each result dict in-place.
+
+        Formula:
+          revenue_potential  = allocated_mwh × 1000 × tariff_rate (₦/kWh)
+          expected_billing   = revenue_potential × billing_efficiency
+          expected_collection= expected_billing  × collection_efficiency
+          atcc_loss          = revenue_potential − expected_collection
+          revenue_per_mwh    = expected_collection ÷ allocated_mwh
+        """
+        for r in feeder_results:
+            feeder = r['feeder']
+            allocated = r['allocated_energy_mwh']
+            band_name = feeder.band.name if feeder.band else None
+
+            tariff = self._tariff_rates.get(band_name) if band_name else None
+            profile = self._commercial_profiles.get(str(feeder.id))
+
+            billing_eff = (
+                float(profile.billing_efficiency_pct) / 100
+                if profile else self.DEFAULT_BILLING_EFFICIENCY_PCT / 100
+            )
+            collection_eff = (
+                float(profile.collection_efficiency_pct) / 100
+                if profile else self.DEFAULT_COLLECTION_EFFICIENCY_PCT / 100
+            )
+
+            if tariff and allocated > 0:
+                revenue_potential   = round(allocated * 1000 * tariff, 2)
+                expected_billing    = round(revenue_potential * billing_eff, 2)
+                expected_collection = round(expected_billing * collection_eff, 2)
+                atcc_loss           = round(revenue_potential - expected_collection, 2)
+                rev_per_mwh         = round(expected_collection / allocated, 2)
+            else:
+                revenue_potential = expected_billing = expected_collection = atcc_loss = rev_per_mwh = None
+
+            r.update({
+                'tariff_rate_ngn_per_kwh':    tariff,
+                'billing_efficiency_pct':      round(billing_eff * 100, 2),
+                'collection_efficiency_pct':   round(collection_eff * 100, 2),
+                'revenue_potential_ngn':       revenue_potential,
+                'expected_billing_ngn':        expected_billing,
+                'expected_collection_ngn':     expected_collection,
+                'atcc_loss_ngn':               atcc_loss,
+                'revenue_per_mwh_ngn':         rev_per_mwh,
+            })
+
+    def _summarise_revenue(self, feeder_results, total_allocated_mwh):
+        """Roll up per-feeder revenue to simulation-level totals."""
+        total_potential   = sum(r['revenue_potential_ngn']   or 0 for r in feeder_results)
+        total_billing     = sum(r['expected_billing_ngn']     or 0 for r in feeder_results)
+        total_collection  = sum(r['expected_collection_ngn']  or 0 for r in feeder_results)
+        total_atcc        = sum(r['atcc_loss_ngn']            or 0 for r in feeder_results)
+        rev_per_mwh = (
+            round(total_collection / total_allocated_mwh, 2)
+            if total_allocated_mwh > 0 else None
+        )
+        return {
+            'total_revenue_potential_ngn':  round(total_potential, 2),
+            'total_expected_billing_ngn':   round(total_billing, 2),
+            'total_expected_collection_ngn': round(total_collection, 2),
+            'total_atcc_loss_ngn':          round(total_atcc, 2),
+            'revenue_per_mwh_ngn':          rev_per_mwh,
+        }

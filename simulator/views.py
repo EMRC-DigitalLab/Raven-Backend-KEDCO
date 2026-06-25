@@ -78,6 +78,12 @@ class SimulationRunView(APIView):
             upgraded_count=result['upgraded_count'],
             downgraded_count=result['downgraded_count'],
             load_shed_count=result['load_shed_count'],
+            # Phase 2 — revenue summary
+            total_revenue_potential_ngn=result.get('total_revenue_potential_ngn'),
+            total_expected_billing_ngn=result.get('total_expected_billing_ngn'),
+            total_expected_collection_ngn=result.get('total_expected_collection_ngn'),
+            total_atcc_loss_ngn=result.get('total_atcc_loss_ngn'),
+            revenue_per_mwh_ngn=result.get('revenue_per_mwh_ngn'),
             created_by=request.user,
         )
 
@@ -92,6 +98,15 @@ class SimulationRunView(APIView):
                 status=r['status'],
                 forecasted_demand_mwh=r['forecasted_demand_mwh'],
                 band_minimum_energy_mwh=r['band_minimum_energy_mwh'],
+                # Phase 2 — per-feeder revenue
+                tariff_rate_ngn_per_kwh=r.get('tariff_rate_ngn_per_kwh'),
+                billing_efficiency_pct=r.get('billing_efficiency_pct'),
+                collection_efficiency_pct=r.get('collection_efficiency_pct'),
+                revenue_potential_ngn=r.get('revenue_potential_ngn'),
+                expected_billing_ngn=r.get('expected_billing_ngn'),
+                expected_collection_ngn=r.get('expected_collection_ngn'),
+                atcc_loss_ngn=r.get('atcc_loss_ngn'),
+                revenue_per_mwh_ngn=r.get('revenue_per_mwh_ngn'),
             )
             for r in result['feeder_results']
         ])

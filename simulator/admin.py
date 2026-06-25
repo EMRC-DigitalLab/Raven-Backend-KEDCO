@@ -1,6 +1,44 @@
 from django.contrib import admin
 
-from .models import PCCConfig, SimulationFeederResult, SimulationRun
+from .models import FeederCommercialProfile, PCCConfig, SimulationFeederResult, SimulationRun
+
+
+@admin.register(FeederCommercialProfile)
+class FeederCommercialProfileAdmin(admin.ModelAdmin):
+    list_display = (
+        'feeder', 'billing_efficiency_pct', 'collection_efficiency_pct',
+        'atcc_loss_pct_display', 'monthly_revenue_target_ngn',
+        'effective_from', 'is_active', 'source',
+    )
+    list_filter = ('is_active',)
+    search_fields = ('feeder__name', 'source')
+    ordering = ('feeder__name',)
+    readonly_fields = ('atcc_loss_pct_display', 'created_at', 'updated_at')
+
+    fieldsets = (
+        ('Feeder', {
+            'fields': ('feeder', 'is_active', 'effective_from', 'source'),
+        }),
+        ('ATC&C Components', {
+            'description': (
+                'ATC&C loss = 1 − (billing efficiency × collection efficiency). '
+                'Billing efficiency captures technical + commercial losses. '
+                'Collection efficiency captures cash collection performance.'
+            ),
+            'fields': ('billing_efficiency_pct', 'collection_efficiency_pct', 'atcc_loss_pct_display'),
+        }),
+        ('Revenue Target', {
+            'fields': ('monthly_revenue_target_ngn',),
+        }),
+        ('Metadata', {
+            'fields': ('created_at', 'updated_at'),
+            'classes': ('collapse',),
+        }),
+    )
+
+    def atcc_loss_pct_display(self, obj):
+        return f"{obj.atcc_loss_pct}%"
+    atcc_loss_pct_display.short_description = 'ATC&C Loss %'
 
 
 @admin.register(PCCConfig)
@@ -50,6 +88,9 @@ class SimulationFeederResultInline(admin.TabularInline):
         'feeder', 'assigned_band', 'effective_band',
         'allocated_energy_mwh', 'effective_hours', 'status',
         'forecasted_demand_mwh', 'band_minimum_energy_mwh',
+        'tariff_rate_ngn_per_kwh', 'billing_efficiency_pct', 'collection_efficiency_pct',
+        'revenue_potential_ngn', 'expected_billing_ngn',
+        'expected_collection_ngn', 'atcc_loss_ngn', 'revenue_per_mwh_ngn',
     )
     can_delete = False
     show_change_link = False
@@ -77,6 +118,8 @@ class SimulationRunAdmin(admin.ModelAdmin):
         'total_allocated_mwh', 'surplus_mwh', 'deficit_mwh',
         'deviation_from_actual', 'deviation_from_e_min', 'deviation_from_e_max',
         'energised_count', 'upgraded_count', 'downgraded_count', 'load_shed_count',
+        'total_revenue_potential_ngn', 'total_expected_billing_ngn',
+        'total_expected_collection_ngn', 'total_atcc_loss_ngn', 'revenue_per_mwh_ngn',
         'pcc_config', 'created_by', 'created_at',
     )
     inlines = [SimulationFeederResultInline]
@@ -98,6 +141,13 @@ class SimulationRunAdmin(admin.ModelAdmin):
             'fields': (
                 'total_allocated_mwh', 'surplus_mwh', 'deficit_mwh',
                 'deviation_from_actual', 'deviation_from_e_min', 'deviation_from_e_max',
+            ),
+        }),
+        ('Phase 2 — Revenue (₦)', {
+            'fields': (
+                'total_revenue_potential_ngn', 'total_expected_billing_ngn',
+                'total_expected_collection_ngn', 'total_atcc_loss_ngn',
+                'revenue_per_mwh_ngn',
             ),
         }),
         ('Feeder Counts', {

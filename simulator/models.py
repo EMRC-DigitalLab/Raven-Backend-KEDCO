@@ -4,6 +4,67 @@ from django.db import models
 from common.models import Band, Feeder, UUIDModel
 
 
+class FeederCommercialProfile(UUIDModel, models.Model):
+    """
+    Per-feeder commercial parameters used by the Phase 2 revenue simulation.
+
+    ATC&C loss components (NERC definition):
+      - billing_efficiency_pct  = Energy_Billed / Energy_Input (captures technical + commercial losses)
+      - collection_efficiency_pct = Revenue_Collected / Revenue_Billed (captures collection losses)
+      - ATC&C combined = 1 - (billing_efficiency × collection_efficiency)
+
+    KEDCO benchmarks (NERC Q1 2025):
+      billing_efficiency  ≈ 99%   (strong metering)
+      collection_efficiency ≈ 80% (improving, up +6.55pp Q1 2025)
+      ATC&C losses ≈ 42%
+    """
+    feeder = models.OneToOneField(
+        Feeder, on_delete=models.CASCADE, related_name='commercial_profile'
+    )
+    billing_efficiency_pct = models.DecimalField(
+        max_digits=5, decimal_places=2, default=99.00,
+        help_text="ATC component: Energy_Billed / Energy_Input × 100. Captures technical and commercial losses."
+    )
+    collection_efficiency_pct = models.DecimalField(
+        max_digits=5, decimal_places=2, default=80.00,
+        help_text="C component: Revenue_Collected / Revenue_Billed × 100. Captures cash collection performance."
+    )
+    monthly_revenue_target_ngn = models.DecimalField(
+        max_digits=18, decimal_places=2, null=True, blank=True,
+        help_text="Monthly revenue target in Naira for this feeder. Used to compute gap-to-target."
+    )
+    effective_from = models.DateField(
+        help_text="Date from which this commercial profile applies."
+    )
+    is_active = models.BooleanField(default=True)
+    source = models.CharField(
+        max_length=255, blank=True,
+        help_text="Reference e.g. 'NERC Q1 2025 KEDCO benchmark' or 'Internal audit Jan 2026'"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['feeder__name']
+        verbose_name = 'Feeder Commercial Profile'
+        verbose_name_plural = 'Feeder Commercial Profiles'
+
+    @property
+    def atcc_loss_pct(self):
+        """ATC&C combined loss = 1 - (billing_efficiency × collection_efficiency)."""
+        b = float(self.billing_efficiency_pct) / 100
+        c = float(self.collection_efficiency_pct) / 100
+        return round((1 - b * c) * 100, 2)
+
+    def __str__(self):
+        return (
+            f"{self.feeder.name} | "
+            f"Billing: {self.billing_efficiency_pct}% | "
+            f"Collection: {self.collection_efficiency_pct}% | "
+            f"ATC&C loss: {self.atcc_loss_pct}%"
+        )
+
+
 class PCCConfig(UUIDModel, models.Model):
     """
     Stores the DisCo-level PCC (Partially Contracted Capacity) figure from NERC.
@@ -138,6 +199,28 @@ class SimulationRun(UUIDModel, models.Model):
     downgraded_count = models.PositiveIntegerField(default=0)
     load_shed_count = models.PositiveIntegerField(default=0)
 
+    # Phase 2 — Revenue summary (₦)
+    total_revenue_potential_ngn = models.DecimalField(
+        max_digits=20, decimal_places=2, null=True, blank=True,
+        help_text="Gross revenue if 100% of allocated energy is billed and collected (₦)"
+    )
+    total_expected_billing_ngn = models.DecimalField(
+        max_digits=20, decimal_places=2, null=True, blank=True,
+        help_text="Expected billing after ATC losses applied (₦)"
+    )
+    total_expected_collection_ngn = models.DecimalField(
+        max_digits=20, decimal_places=2, null=True, blank=True,
+        help_text="Expected cash collected after collection efficiency applied (₦)"
+    )
+    total_atcc_loss_ngn = models.DecimalField(
+        max_digits=20, decimal_places=2, null=True, blank=True,
+        help_text="Total ATC&C loss exposure in Naira (₦)"
+    )
+    revenue_per_mwh_ngn = models.DecimalField(
+        max_digits=14, decimal_places=2, null=True, blank=True,
+        help_text="Expected collection per MWh allocated — efficiency ranking metric (₦/MWh)"
+    )
+
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
         null=True, blank=True, related_name='simulation_runs'
@@ -175,6 +258,40 @@ class SimulationFeederResult(UUIDModel, models.Model):
 
     forecasted_demand_mwh = models.DecimalField(max_digits=12, decimal_places=4)
     band_minimum_energy_mwh = models.DecimalField(max_digits=12, decimal_places=4)
+
+    # Phase 2 — Per-feeder revenue (₦)
+    tariff_rate_ngn_per_kwh = models.DecimalField(
+        max_digits=10, decimal_places=2, null=True, blank=True,
+        help_text="Tariff rate used for this feeder's revenue calculation (₦/kWh)"
+    )
+    billing_efficiency_pct = models.DecimalField(
+        max_digits=5, decimal_places=2, null=True, blank=True,
+        help_text="ATC component used: Energy_Billed / Energy_Input × 100"
+    )
+    collection_efficiency_pct = models.DecimalField(
+        max_digits=5, decimal_places=2, null=True, blank=True,
+        help_text="C component used: Revenue_Collected / Revenue_Billed × 100"
+    )
+    revenue_potential_ngn = models.DecimalField(
+        max_digits=18, decimal_places=2, null=True, blank=True,
+        help_text="Gross revenue potential: allocated MWh × 1000 × tariff rate (₦)"
+    )
+    expected_billing_ngn = models.DecimalField(
+        max_digits=18, decimal_places=2, null=True, blank=True,
+        help_text="Revenue potential × billing efficiency (₦)"
+    )
+    expected_collection_ngn = models.DecimalField(
+        max_digits=18, decimal_places=2, null=True, blank=True,
+        help_text="Expected billing × collection efficiency — cash KEDCO will actually receive (₦)"
+    )
+    atcc_loss_ngn = models.DecimalField(
+        max_digits=18, decimal_places=2, null=True, blank=True,
+        help_text="Revenue potential − expected collection — ATC&C loss in Naira (₦)"
+    )
+    revenue_per_mwh_ngn = models.DecimalField(
+        max_digits=14, decimal_places=2, null=True, blank=True,
+        help_text="Expected collection ÷ allocated MWh — feeder efficiency ranking metric (₦/MWh)"
+    )
 
     class Meta:
         unique_together = ('simulation', 'feeder')
