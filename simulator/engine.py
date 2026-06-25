@@ -33,7 +33,8 @@ class AllocationEngine:
         self.simulation_date = simulation_date
         self.bands = list(Band.objects.order_by('priority_order'))
         self.feeders = list(
-            Feeder.objects.filter(is_onboarded=True).select_related('band')
+            Feeder.objects.filter(is_onboarded=True)
+            .select_related('band', 'substation', 'business_district')
         )
         self.pcc_config = PCCConfig.get_for_date(simulation_date)
 

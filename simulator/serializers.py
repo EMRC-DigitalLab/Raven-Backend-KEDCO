@@ -43,6 +43,10 @@ class BandSummarySerializer(serializers.Serializer):
 class FeederResultSerializer(serializers.ModelSerializer):
     feeder_id = serializers.UUIDField(source='feeder.id')
     feeder_name = serializers.CharField(source='feeder.name')
+    voltage_level = serializers.CharField(source='feeder.voltage_level')
+    feeder_class = serializers.CharField(source='feeder.feeder_class')
+    substation = serializers.CharField(source='feeder.substation.name')
+    business_district = serializers.SerializerMethodField()
     assigned_band = BandSummarySerializer()
     effective_band = BandSummarySerializer()
 
@@ -50,11 +54,16 @@ class FeederResultSerializer(serializers.ModelSerializer):
         model = SimulationFeederResult
         fields = [
             'feeder_id', 'feeder_name',
+            'voltage_level', 'feeder_class',
+            'substation', 'business_district',
             'assigned_band', 'effective_band',
             'allocated_energy_mwh', 'effective_hours',
             'status',
             'forecasted_demand_mwh', 'band_minimum_energy_mwh',
         ]
+
+    def get_business_district(self, obj):
+        return obj.feeder.business_district.name if obj.feeder.business_district else None
 
 
 class SimulationRunSerializer(serializers.ModelSerializer):

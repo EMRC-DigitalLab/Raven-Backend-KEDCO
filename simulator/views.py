@@ -44,9 +44,13 @@ class SimulationRunView(APIView):
             'maximum_sbt':  e_max,
             'unsuppressed': e_max,
         }
-        e_offtake = float(
-            data.get('e_offtake') or scenario_offtake.get(scenario, e_actual)
-        )
+
+        # For sbt_ration the user enters MWh/h — multiply by 24 to get MWh/day.
+        # All other scenarios use pre-computed MWh/day benchmarks.
+        if scenario == 'sbt_ration' and data.get('e_offtake'):
+            e_offtake = float(data['e_offtake']) * 24
+        else:
+            e_offtake = float(scenario_offtake.get(scenario, e_actual))
 
         result = engine.run(e_offtake)
 
@@ -125,7 +129,8 @@ class SimulationRunDetailView(RetrieveAPIView):
     permission_classes = [IsAuthenticated]
     serializer_class = SimulationRunSerializer
     queryset = SimulationRun.objects.prefetch_related(
-        'feeder_results__feeder',
+        'feeder_results__feeder__substation',
+        'feeder_results__feeder__business_district',
         'feeder_results__assigned_band',
         'feeder_results__effective_band',
     )
