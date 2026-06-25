@@ -33,9 +33,11 @@ class SimulationRunView(APIView):
         sim_date = data['simulation_date']
 
         engine = AllocationEngine(simulation_date=sim_date)
+
+        # Pre-calculate benchmarks once to resolve scenario-based offtake,
+        # then run() re-uses the engine's cached state.
         e_max, e_min, e_actual, _ = engine._calculate_benchmarks()
 
-        # Resolve e_offtake based on scenario
         scenario_offtake = {
             'actual':       e_actual,
             'minimum_sbt':  e_min,
@@ -91,7 +93,12 @@ class SimulationRunView(APIView):
         ])
 
         serializer = SimulationRunSerializer(sim)
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
+        response_data = dict(serializer.data)
+        response_data['data_gap_detected'] = result.get('data_gap_detected', False)
+        response_data['data_reference_end'] = (
+            str(result['data_reference_end']) if result.get('data_reference_end') else None
+        )
+        return Response(response_data, status=status.HTTP_201_CREATED)
 
 
 class SimulationRunListView(ListAPIView):
@@ -284,6 +291,8 @@ class BenchmarkView(APIView):
             'e_max': e_max,
             'e_actual': e_actual,
             'feeder_count': len(feeder_demands),
+            'data_gap_detected': getattr(engine, 'data_gap_detected', False),
+            'data_reference_end': getattr(engine, 'data_reference_end', None),
         }
         serializer = BenchmarkSerializer(payload)
         return Response(serializer.data)

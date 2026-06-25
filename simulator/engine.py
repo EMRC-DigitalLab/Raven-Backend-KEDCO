@@ -1,6 +1,6 @@
 from datetime import timedelta
 
-from django.db.models import Avg, Sum
+from django.db.models import Avg, Count
 
 from common.models import Band, Feeder
 from technical.models import FeederEnergyDaily
@@ -80,6 +80,8 @@ class AllocationEngine:
             'deviation_from_actual': total_allocated - e_actual,
             'deviation_from_e_min': total_allocated - e_min,
             'deviation_from_e_max': total_allocated - e_max,
+            'data_gap_detected': getattr(self, 'data_gap_detected', False),
+            'data_reference_end': getattr(self, 'data_reference_end', None),
             'feeder_results': feeder_results,
             **counts,
         }
@@ -93,14 +95,60 @@ class AllocationEngine:
             self.pcc_config.demand_lookback_days
             if self.pcc_config else 30
         )
-        start = self.simulation_date - timedelta(days=lookback)
 
-        # Step 1: calculate each feeder's average historical demand
+        # Determine the reference window.
+        # Priority 1: the standard lookback window before the simulation date.
+        # Priority 2: if that window is missing or has very few feeders (sparse data),
+        #             find the most recent window that has adequate feeder coverage.
+        # "Adequate" = at least 25% of onboarded feeders or 50, whichever is smaller.
+        min_feeders = max(10, min(50, len(self.feeders) // 4))
+
+        window_end = self.simulation_date
+        standard_start = window_end - timedelta(days=lookback)
+
+        standard_feeder_count = (
+            FeederEnergyDaily.objects
+            .filter(date__gte=standard_start, date__lt=window_end)
+            .values('feeder').distinct().count()
+        )
+        has_adequate_coverage = standard_feeder_count >= min_feeders
+        self.data_gap_detected = not has_adequate_coverage
+
+        if not has_adequate_coverage:
+            # Find the most recent date where enough feeders reported,
+            # then build a lookback window ending there.
+            dense_date_row = (
+                FeederEnergyDaily.objects
+                .values('date')
+                .annotate(feeder_count=Count('feeder', distinct=True))
+                .filter(feeder_count__gte=min_feeders, date__lt=self.simulation_date)
+                .order_by('-date')
+                .first()
+            )
+            if dense_date_row:
+                window_end = dense_date_row['date'] + timedelta(days=1)
+            else:
+                # Last resort: anchor to most recent record regardless of coverage
+                latest = (
+                    FeederEnergyDaily.objects
+                    .filter(date__lt=self.simulation_date)
+                    .order_by('-date')
+                    .values('date')
+                    .first()
+                )
+                if latest:
+                    window_end = latest['date'] + timedelta(days=1)
+
+        start = window_end - timedelta(days=lookback)
+        self.data_reference_end = window_end - timedelta(days=1)
+
+        # Step 1: calculate each feeder's average historical demand over the
+        # reference window [start, window_end).
         feeder_averages = {}
         for feeder in self.feeders:
             avg = (
                 FeederEnergyDaily.objects
-                .filter(feeder=feeder, date__gte=start, date__lt=self.simulation_date)
+                .filter(feeder=feeder, date__gte=start, date__lt=window_end)
                 .aggregate(avg=Avg('energy_mwh'))['avg']
             )
             feeder_averages[str(feeder.id)] = float(avg or 0)
@@ -129,21 +177,10 @@ class AllocationEngine:
             if feeder and feeder.band:
                 e_min += demand * (float(feeder.band.minimum_hours) / 24)
 
-        # E_actual = most recent available day's total from meter data
-        latest = (
-            FeederEnergyDaily.objects
-            .filter(date__lt=self.simulation_date)
-            .order_by('-date')
-            .values('date')
-            .first()
-        )
-        e_actual = 0.0
-        if latest:
-            e_actual = float(
-                FeederEnergyDaily.objects
-                .filter(date=latest['date'])
-                .aggregate(total=Sum('energy_mwh'))['total'] or 0
-            )
+        # E_actual = average daily system delivery over the reference window.
+        # Using the same window as feeder_averages gives a consistent baseline.
+        # FeederEnergyDaily.energy_mwh is stored in kWh — divide by 1000.
+        e_actual = sum(feeder_averages.values())
 
         return e_max, e_min, e_actual, feeder_demands
 
@@ -181,11 +218,12 @@ class AllocationEngine:
     # ------------------------------------------------------------------
 
     def _allocate_operational(self, feeder_demands, e_offtake):
-        """Zone 2: allocate minimums band by band, then top-up with surplus."""
+        """Zone 2: allocate minimums band by band, then exhaust surplus toward full demand."""
         remaining = e_offtake
         allocations = {str(f.id): 0.0 for f in self.feeders}
         feeders_by_band = self._group_by_band()
 
+        # Pass 1: give each feeder its NERC band minimum, highest priority first
         for band in self.bands:
             for feeder in feeders_by_band.get(band.name, []):
                 demand = feeder_demands.get(str(feeder.id), 0)
@@ -198,17 +236,19 @@ class AllocationEngine:
             if remaining <= 0:
                 break
 
+        # Pass 2: distribute surplus — upgrade lowest bands first toward full demand.
+        # Iterates from Band E up to Band A, topping each feeder to its full 24h demand.
+        # At E_offtake = E_max this exhausts all energy; at E_min < E_offtake < E_max
+        # it produces partial upgrades, which the state resolver maps to the correct
+        # effective band.
         if remaining > 0:
-            for i in range(len(self.bands) - 1, 0, -1):
-                current_band = self.bands[i]
-                upper_band = self.bands[i - 1]
-                for feeder in feeders_by_band.get(current_band.name, []):
+            for band in reversed(self.bands):
+                for feeder in feeders_by_band.get(band.name, []):
                     if remaining <= 0:
                         break
                     demand = feeder_demands.get(str(feeder.id), 0)
-                    upgrade_target = demand * (float(upper_band.minimum_hours) / 24)
                     current = allocations[str(feeder.id)]
-                    top_up = max(0.0, upgrade_target - current)
+                    top_up = max(0.0, demand - current)
                     give = min(top_up, remaining)
                     allocations[str(feeder.id)] += give
                     remaining -= give

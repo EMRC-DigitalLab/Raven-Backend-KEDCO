@@ -104,3 +104,5 @@ class BenchmarkSerializer(serializers.Serializer):
     e_max = serializers.FloatField()
     e_actual = serializers.FloatField()
     feeder_count = serializers.IntegerField()
+    data_gap_detected = serializers.BooleanField()
+    data_reference_end = serializers.DateField(allow_null=True)
