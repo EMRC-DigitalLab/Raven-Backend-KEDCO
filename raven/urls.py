@@ -39,5 +39,6 @@ urlpatterns = [
     path('api/grid-view/', include('grid_view.urls', namespace='grid_view')),
     path('api/energy-account/', include('energy_account.urls')),
     path('api/aria/', include('aria.urls', namespace='aria')),
+    path('api/simulator/', include('simulator.urls', namespace='simulator')),
 ]
 urlpatterns += static(settings.STATIC_URL, document_root=settings.STATICFILES_DIRS[0])

@@ -68,6 +68,7 @@ INSTALLED_APPS = [
     'grid_view',
     'energy_account',
     'aria',
+    'simulator',
 ]
 
 MIDDLEWARE = [
