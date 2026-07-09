@@ -100,3 +100,6 @@ backend.zip
 setup_cron.md
 api_documentation.md
 staticfiles/
+
+# DB backup dumps — contain live data, never commit
+backups/
