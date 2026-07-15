@@ -67,6 +67,8 @@ INSTALLED_APPS = [
     'notifications',
     'grid_view',
     'energy_account',
+    'aria',
+    'simulator',
 ]
 
 MIDDLEWARE = [

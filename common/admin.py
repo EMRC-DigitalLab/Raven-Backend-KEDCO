@@ -18,9 +18,10 @@ from .models import (
 
 @admin.register(Band)
 class BandAdmin(admin.ModelAdmin):
-    list_display = ('name', 'description', 'slug')
+    list_display = ('name', 'minimum_hours', 'priority_order', 'description', 'slug')
     search_fields = ('name',)
     prepopulated_fields = {'slug': ('name',)}
+    ordering = ('priority_order',)
 
 
 @admin.register(State)

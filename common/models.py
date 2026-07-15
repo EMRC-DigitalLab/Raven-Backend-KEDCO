@@ -16,13 +16,20 @@ class Band(UUIDModel, models.Model):
     name = models.CharField(max_length=50, unique=True)  # e.g., A, B
     description = models.TextField(blank=True)
     slug = models.SlugField(unique=True, blank=True)
+    minimum_hours = models.DecimalField(
+        max_digits=4, decimal_places=1, default=0,
+        help_text="NERC mandated minimum service hours per day (e.g. 20 for Band A)"
+    )
+    priority_order = models.PositiveSmallIntegerField(
+        default=99,
+        help_text="Allocation priority: 1=highest (Band A), 5=lowest (Band E)"
+    )
 
     def save(self, *args, **kwargs):
         if not self.slug:
             self.slug = slugify(self.name)
         super().save(*args, **kwargs)
 
-        
     def __str__(self):
         return self.name
 
