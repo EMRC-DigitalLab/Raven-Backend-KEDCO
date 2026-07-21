@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 
 from dateutil.relativedelta import relativedelta
 from django.db import connection
-from django.db.models import Avg, Count, Max, Sum
+
 from django.utils import timezone
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
@@ -11,7 +11,7 @@ from rest_framework.response import Response
 from commercial.models import Customer
 from common.models import BusinessDistrict, Feeder
 from technical.constants import TURNAROUND_EXCLUSIONS
-from technical.models import EnergyDelivered, FeederInterruption, HourlyLoad
+
 from technical.utils.energy_utils import calculate_energy_delivered
 
 
@@ -81,78 +81,6 @@ def get_date_range_and_mode(request):
             return from_date, to_date, "monthly"
         except (KeyError, ValueError):
             raise ValueError("Invalid or missing year or month for monthly mode")
-
-
-def calculate_district_energy_delivered_sql(district_id, from_date, to_date, voltage_level=None):
-    """
-    Calculate total energy delivered for a district using hybrid approach.
-    Optionally filtered by voltage_level ('11kv' or '33kv').
-    """
-    voltage_clause = "AND f.voltage_level = %s" if voltage_level else ""
-    query = f"""
-        WITH date_series AS (
-            SELECT generate_series(
-                %s::date,
-                %s::date,
-                '1 day'::interval
-            )::date AS date
-        ),
-        onboarded_feeders AS (
-            SELECT DISTINCT f.id as feeder_id
-            FROM common_feeder f
-            WHERE f.business_district_id = %s
-                AND f.is_onboarded = TRUE
-                {voltage_clause}
-        ),
-        feeder_dates AS (
-            SELECT 
-                of.feeder_id,
-                ds.date
-            FROM onboarded_feeders of
-            CROSS JOIN date_series ds
-        ),
-        energy_delivered_data AS (
-            SELECT 
-                fd.feeder_id,
-                fd.date,
-                ed.energy_mwh as delivered_energy
-            FROM feeder_dates fd
-            LEFT JOIN technical_energydelivered ed 
-                ON ed.feeder_id = fd.feeder_id 
-                AND ed.date = fd.date
-        ),
-        hourly_load_data AS (
-            SELECT 
-                feeder_id,
-                date,
-                SUM(load_mw) as hourly_energy
-            FROM technical_hourlyload
-            WHERE date BETWEEN %s AND %s
-                AND feeder_id IN (SELECT feeder_id FROM onboarded_feeders)
-            GROUP BY feeder_id, date
-        )
-        SELECT 
-            COALESCE(
-                SUM(COALESCE(ed.delivered_energy, hl.hourly_energy, 0)),
-                0
-            ) as total_energy
-        FROM energy_delivered_data ed
-        LEFT JOIN hourly_load_data hl 
-            ON hl.feeder_id = ed.feeder_id 
-            AND hl.date = ed.date
-    """
-    
-    params = [from_date, to_date, district_id]
-    if voltage_level:
-        params.append(voltage_level)
-    params += [from_date, to_date]
-    
-    with connection.cursor() as cursor:
-        cursor.execute(query, params)
-        result = cursor.fetchone()
-        total_energy = float(result[0]) if result and result[0] else 0.0
-    
-    return round(total_energy, 2)
 
 
 def calculate_district_hours_of_supply_sql(district_id, from_date, to_date, voltage_level=None):

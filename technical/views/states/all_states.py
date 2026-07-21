@@ -525,7 +525,6 @@ def calculate_state_metrics_optimized(state, from_date, to_date, mode, voltage_l
         infrastructure = get_state_infrastructure_counts_sql(state.id, voltage_level=voltage_level)
     except Exception as e:
         print(f"DEBUG: SQL failed for infrastructure counts, using ORM fallback: {str(e)}")
-        # Fallback to ORM
         feeders = Feeder.objects.filter(
             business_district__state=state,
             is_onboarded=True
@@ -541,12 +540,27 @@ def calculate_state_metrics_optimized(state, from_date, to_date, mode, voltage_l
             'feeder_count': feeder_count,
             'customer_population': customer_count
         }
-    
+
+    try:
+        # 7. Energy delivered (smart meter-primary / system-fallback per feeder)
+        from technical.utils.energy_utils import calculate_energy_delivered
+        feeder_ids_for_energy = list(
+            Feeder.objects.filter(
+                business_district__state=state,
+                is_onboarded=True,
+                **({'voltage_level': voltage_level} if voltage_level else {})
+            ).values_list('id', flat=True)
+        )
+        energy_delivered = calculate_energy_delivered(feeder_ids_for_energy, from_date, to_date)['total_mwh']
+    except Exception as e:
+        print(f"DEBUG: SQL failed for energy delivered, using 0 fallback: {str(e)}")
+        energy_delivered = 0.0
+
     # Validation
     if avg_supply > 24:
         avg_supply = 24.0
 
-    avg_duration = round(24.0 - avg_supply, 2)  # always sums to 24 with supply
+    avg_duration = round(24.0 - avg_supply, 2)
 
     if turnaround > 24:
         turnaround = 24.0
@@ -556,10 +570,11 @@ def calculate_state_metrics_optimized(state, from_date, to_date, mode, voltage_l
         "avg_duration": avg_duration,
         "turnaround": turnaround,
         "avg_interruption_duration": avg_int_duration,
-        "ftc": ftc_all,  # Total interruption count (occurred in period)
+        "ftc": ftc_all,
         "feeder_count": infrastructure['feeder_count'],
         "peak_load": peak_load,
         "customer_population": infrastructure['customer_population'],
+        "energy_delivered": round(energy_delivered, 2),
         "_source": f"optimized_sql_{mode}"
     }
 
@@ -661,6 +676,7 @@ def all_states_technical_summary(request):
                     "feeder_count": 0,
                     "peak_load": 0.0,
                     "customer_population": 0,
+                    "energy_delivered": 0.0,
                     "_source": "error_fallback",
                     "_error": str(e)
                 }

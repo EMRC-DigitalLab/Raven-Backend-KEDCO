@@ -188,7 +188,7 @@ def _bulk_supply_hours(feeder_ids, from_date, to_date):
     period_days = 1 if is_single else (to_date - from_date).days + 1
 
     query = f"""
-        SELECT feeder_id, COUNT(DISTINCT hour) AS total_hours
+        SELECT feeder_id, COUNT(DISTINCT CONCAT(date, '-', hour)) AS total_hours
         FROM technical_hourlyload
         WHERE feeder_id IN ({placeholders})
             AND date BETWEEN %s AND %s

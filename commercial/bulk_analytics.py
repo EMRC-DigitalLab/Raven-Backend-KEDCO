@@ -77,7 +77,7 @@ _ESTIMATED_KWH_EXPR = Case(
 )
 
 
-def bulk_billing(readings_qs, feeder_to_dim, period_days=None, customer_baseline=None, period_start=None):
+def bulk_billing(readings_qs, feeder_to_dim, period_days=None, customer_baseline=None, period_start=None, baseline_period_days=None):
     """
     Per-customer billing rolled up to {dim_id: billing dict}.
 
@@ -144,7 +144,13 @@ def bulk_billing(readings_qs, feeder_to_dim, period_days=None, customer_baseline
             else:
                 kwh = raw_kwh / Decimal('30') * Decimal(str(period_days))
         else:
-            kwh = raw_kwh
+            if customer_id in customer_baseline and baseline_period_days:
+                if customer_id in baseline_done:
+                    continue
+                kwh = customer_baseline[customer_id] * Decimal(str(baseline_period_days))
+                baseline_done.add(customer_id)
+            else:
+                kwh = raw_kwh
 
         ec = kwh * rate
         if dim_id not in acc:

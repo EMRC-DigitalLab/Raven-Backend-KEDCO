@@ -63,9 +63,8 @@ def _state_metrics(state, customers_qs, readings_qs, date_range):
 
     p_start     = date_range['start_date']
     baseline    = compute_period_baseline(r_qs, p_start, date_range['end_date'])
-    billing     = calc_billing(r_qs, period_days=date_range['days'], customer_baseline=baseline, period_start=p_start)
-    billing_raw = calc_billing(r_qs, customer_baseline=baseline, period_start=p_start)
-    daily_kwh   = calc_daily_estimate(billing, date_range)
+    billing   = calc_billing(r_qs, period_days=date_range['days'], customer_baseline=baseline, period_start=p_start)
+    daily_kwh = calc_daily_estimate(billing, date_range)
     coverage    = calc_coverage(c_qs, r_qs)
     estimated   = calc_estimated_billing(c_qs, coverage['read_ids'], date_range)
 
@@ -156,12 +155,12 @@ def _state_metrics(state, customers_qs, readings_qs, date_range):
             'energy_delivered_vs_billed': metric(
                 {
                     'delivered_kwh':        delivered_kwh_period,
-                    'actual_billed_kwh':    float(billing_raw['total_billed_kwh']),
-                    'projected_billed_kwh': float(billing_raw['total_billed_kwh'] + estimated['estimated_kwh']),
-                    'gap_kwh':              round(delivered_kwh_period - float(billing_raw['total_billed_kwh']), 2),
+                    'actual_billed_kwh':    float(billing['total_billed_kwh']),
+                    'projected_billed_kwh': float(billing['total_billed_kwh'] + estimated['estimated_kwh']),
+                    'gap_kwh':              round(delivered_kwh_period - float(billing['total_billed_kwh']), 2),
                 },
                 unit='kWh', mode=delivered['mode'],
-                explanation='Energy delivered vs billed for this state. Gap = delivered minus actual billed (raw, unscaled).',
+                explanation='Energy delivered vs period-normalised billed kWh for this state. Gap = delivered minus billed.',
             ),
         },
         'revenue': {
@@ -208,9 +207,8 @@ def all_states(request):
     f2d = feeder_dim_map(customers_qs, 'feeder__business_district__state_id')
 
     global_baseline  = compute_period_baseline(readings_qs, date_range['start_date'], date_range['end_date'])
-    billing_data     = bulk_billing(readings_qs, f2d, period_days=date_range['days'], customer_baseline=global_baseline, period_start=date_range['start_date'])
-    billing_raw_data = bulk_billing(readings_qs, f2d, customer_baseline=global_baseline, period_start=date_range['start_date'])
-    type_billing   = bulk_billing_by_type(readings_qs, f2d)
+    billing_data = bulk_billing(readings_qs, f2d, period_days=date_range['days'], customer_baseline=global_baseline, period_start=date_range['start_date'])
+    type_billing = bulk_billing_by_type(readings_qs, f2d)
     ctype_counts   = bulk_customer_types(customers_qs, f2d)
     coverage_data  = bulk_coverage(customers_qs, readings_qs, f2d)
     estimated_data = bulk_estimated_billing(customers_qs, coverage_data, date_range, f2d)
@@ -223,9 +221,8 @@ def all_states(request):
     results = []
     for state in states:
         sid   = state.id
-        b     = billing_data.get(sid, empty_billing())
-        b_raw = billing_raw_data.get(sid, empty_billing())
-        e     = estimated_data.get(sid, empty_estimated())
+        b = billing_data.get(sid, empty_billing())
+        e = estimated_data.get(sid, empty_estimated())
         cov  = coverage_data.get(sid, empty_coverage())
         ct   = ctype_counts.get(sid, {'MDI': 0, 'MDNI': 0})
         mgrs = managers_data.get(sid, {'mdi': 0, 'mdni': 0})
@@ -261,10 +258,10 @@ def all_states(request):
                 'daily_energy_delivered_mwh': metric(float(daily_mwh), unit='MWh/day', mode=ed['mode'], explanation='Average daily energy delivered for this state — total_mwh / days. Source: meter or system fallback.'),
                 'energy_delivered_kwh': metric(delivered_kwh, unit='kWh', mode=ed['mode'], explanation='Total energy delivered for the period in this state from technical module.'),
                 'energy_delivered_vs_billed': metric(
-                    {'delivered_kwh': delivered_kwh, 'actual_billed_kwh': float(b_raw['total_billed_kwh']),
-                     'projected_billed_kwh': float(b_raw['total_billed_kwh'] + e['estimated_kwh']),
-                     'gap_kwh': round(delivered_kwh - float(b_raw['total_billed_kwh']), 2)},
-                    unit='kWh', mode=ed['mode'], explanation='Energy delivered vs billed for this state. Gap = delivered minus actual billed (raw, unscaled).',
+                    {'delivered_kwh': delivered_kwh, 'actual_billed_kwh': float(b['total_billed_kwh']),
+                     'projected_billed_kwh': float(b['total_billed_kwh'] + e['estimated_kwh']),
+                     'gap_kwh': round(delivered_kwh - float(b['total_billed_kwh']), 2)},
+                    unit='kWh', mode=ed['mode'], explanation='Energy delivered vs period-normalised billed kWh for this state. Gap = delivered minus billed.',
                 ),
             },
             'revenue': {

@@ -194,7 +194,7 @@ def reading_filter_kwargs(request, date_range):
 
 # ── Billing calculations ──────────────────────────────────────────────────────
 
-def calc_billing(readings_qs, period_days=None, customer_baseline=None, period_start=None):
+def calc_billing(readings_qs, period_days=None, customer_baseline=None, period_start=None, baseline_period_days=None):
     """
     Calculate energy and revenue totals from a MeterReading queryset.
     Raven does its own math: energy_charge = billed_consumption × tariff_rate.
@@ -275,7 +275,17 @@ def calc_billing(readings_qs, period_days=None, customer_baseline=None, period_s
             else:
                 kwh = raw_kwh / Decimal('30') * Decimal(str(period_days))
         else:
-            kwh = raw_kwh
+            # No period normalisation — use raw billed_consumption.
+            # Exception: first-sync customers whose raw value is inflated
+            # (accumulated months of data). For those, use the baseline
+            # daily estimate × baseline_period_days to get a realistic figure.
+            if customer_id in customer_baseline and baseline_period_days:
+                if customer_id in baseline_done:
+                    continue
+                kwh = customer_baseline[customer_id] * Decimal(str(baseline_period_days))
+                baseline_done.add(customer_id)
+            else:
+                kwh = raw_kwh
 
         energy_charge += kwh * rate
         estimated_kwh += kwh

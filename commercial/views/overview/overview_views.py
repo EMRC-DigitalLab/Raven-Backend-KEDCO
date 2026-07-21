@@ -115,8 +115,6 @@ def commercial_overview(request):
     # ── Billing ───────────────────────────────────────────────────────────────
     p_start     = date_range['start_date']
     billing     = calc_billing(readings_qs, period_days=date_range['days'], customer_baseline=customer_baseline, period_start=p_start)
-    billing_raw = calc_billing(readings_qs, customer_baseline=customer_baseline, period_start=p_start)
-
     # ── Daily consumption estimate from actual readings ────────────────────────
     daily_billed_kwh = calc_daily_estimate(billing, date_range)
 
@@ -412,13 +410,13 @@ def commercial_overview(request):
             'energy_delivered_vs_billed': metric(
                 {
                     'delivered_kwh':        delivered_kwh_period,
-                    'actual_billed_kwh':    float(billing_raw['total_billed_kwh']),
-                    'projected_billed_kwh': float(billing_raw['total_billed_kwh'] + estimated['estimated_kwh']),
-                    'gap_kwh':              round(delivered_kwh_period - float(billing_raw['total_billed_kwh']), 2),
+                    'actual_billed_kwh':    float(billing['total_billed_kwh']),
+                    'projected_billed_kwh': float(billing['total_billed_kwh'] + estimated['estimated_kwh']),
+                    'gap_kwh':              round(delivered_kwh_period - float(billing['total_billed_kwh']), 2),
                 },
                 unit='kWh',
                 mode=delivered['mode'],
-                explanation='Energy delivered vs energy billed. Gap = delivered minus actual billed (raw, unscaled). Projected includes estimates for unread customers.',
+                explanation='Energy delivered vs energy billed. Gap = delivered minus period-normalised billed kWh. Projected adds estimates for unread customers.',
             ),
         },
 
@@ -569,5 +567,98 @@ def commercial_overview(request):
             'by_state':    by_state_breakdown,
             'by_district': by_district_breakdown,
             'by_band':     by_band_breakdown,
+        },
+
+        # ── Methodology ───────────────────────────────────────────────────────
+        # Documents exactly how each key metric is derived so that any figure
+        # can be traced back to its source data and formula.
+        'methodology': {
+            'billing': {
+                'summary': (
+                    'All billing figures are estimates. Every reading from DataNest is normalised '
+                    'to the selected period window so that monthly, weekly, and daily views are '
+                    'directly comparable.'
+                ),
+                'formula': 'period_kwh = billed_consumption ÷ billing_cycle_days × period_days',
+                'billing_cycle_days': (
+                    'For each customer, billing_cycle_days = days between their current reading '
+                    'and their most recent prior reading in Raven\'s database (capped at 1 day minimum). '
+                    'Lookup cutoff is always the period start date so the result is stable across all views.'
+                ),
+                'first_sync_customers': (
+                    'Customers whose first DataNest reading falls within the selected period have no '
+                    'prior reading in the database. Their raw billed_consumption therefore represents '
+                    'accumulated consumption since meter installation — not a single billing cycle — '
+                    'and cannot be divided by a meaningful billing_cycle_days. '
+                    'For these customers, Raven derives an estimated daily rate from the 60-day window '
+                    'immediately after the period end (forward baseline). If no data exists in that window, '
+                    'it falls back to the 60-day window before the period start (backward baseline). '
+                    'period_kwh = estimated_daily_kwh × period_days.'
+                ),
+                'fallback': (
+                    'If a customer has no prior reading and no baseline data in either window, '
+                    'billed_consumption ÷ 30 × period_days is used as a last resort.'
+                ),
+            },
+            'revenue': {
+                'summary': (
+                    'Revenue is computed per customer then summed. '
+                    'energy_charge = period_kwh × tariff_rate. '
+                    'VAT = energy_charge × 7.5%. '
+                    'total_billed = energy_charge + VAT.'
+                ),
+                'tariff_rate': (
+                    'Each reading carries the tariff rate recorded in DataNest at the time of reading. '
+                    'Raven uses that rate directly — no override is applied.'
+                ),
+                'estimated_revenue': (
+                    'For customers not read this period, Raven projects revenue using their last known '
+                    'daily rate: daily_kwh = last_billed_consumption ÷ interval_days, where interval_days '
+                    'is the gap between their two most recent positive readings (falls back to the number '
+                    'of days in that reading\'s calendar month if only one reading exists). '
+                    'estimated_revenue = daily_kwh × tariff_rate × (1 + 0.075) × period_days.'
+                ),
+                'projected_revenue': (
+                    'total_projected_revenue = actual_billed (from read customers) + estimated_revenue '
+                    '(for unread customers). As field coverage improves, the estimated portion shrinks '
+                    'and actual portion grows.'
+                ),
+            },
+            'energy_gap': {
+                'summary': (
+                    'energy_gap = energy_delivered_kwh − billed_kwh_raw. '
+                    'A positive gap means more energy left the grid than was billed — '
+                    'the difference represents AT&C losses, unmetered consumption, or bypass. '
+                    'A value close to zero indicates strong commercial discipline.'
+                ),
+                'billed_kwh_raw': (
+                    'billed_kwh_raw is the period-normalised billed energy: each customer\'s '
+                    'billed_consumption is scaled to the selected window using their billing cycle length '
+                    '(billed_consumption ÷ billing_cycle_days × period_days). '
+                    'This makes the comparison with energy_delivered period-consistent.'
+                ),
+                'energy_delivered': (
+                    'Primary source: EnergyDelivered table (meter-based daily totals). '
+                    'Feeders where the maximum single-day value exceeds 500 MWh are treated as outliers '
+                    'and fall back to HourlyLoad avg_load × supply_hours. '
+                    'The mode field indicates which source was used: meter, system, or mixed.'
+                ),
+            },
+            'coverage_rate': {
+                'formula': 'coverage_rate = customers_read ÷ readable_customers × 100',
+                'readable_customers': (
+                    'Total registered customers minus those with meter_status = faulty or missing. '
+                    'Faulty and missing meters are excluded because they cannot physically be read '
+                    'and should not penalise the field team\'s coverage score.'
+                ),
+            },
+            'period_normalisation': {
+                'summary': (
+                    f'Selected period: {date_range["label"]} ({date_range["days"]} days, '
+                    f'{str(date_range["start_date"])} to {str(date_range["end_date"])}). '
+                    'All billing and revenue figures are scaled to this window so that a 31-day month '
+                    'and a 28-day month produce comparable per-period totals.'
+                ),
+            },
         },
     })
