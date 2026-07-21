@@ -37,6 +37,7 @@ from commercial.analytics_utils import (
 )
 from commercial.bulk_analytics import (
     bulk_coverage,
+    bulk_estimated_billing,
     feeder_dim_map,
     bulk_billing,
     bulk_energy_consumed,
@@ -302,18 +303,28 @@ def commercial_overview(request):
             'trend': state_trend,
         })
 
+    coverage_by_district = bulk_coverage(customers_qs, readings_qs, f2dmap)
+    estimated_by_district = bulk_estimated_billing(customers_qs, coverage_by_district, date_range, f2dmap)
+
     by_district_breakdown = []
     for d_obj in BusinessDistrict.objects.exclude(state__name='Test State').select_related('state').order_by('name'):
         did = d_obj.id
         ed  = energy_by_district.get(did, {'total_mwh': 0.0, 'mode': 'system'})
         b   = billing_by_district.get(did, _empty_b)
+        cov_d = coverage_by_district.get(did, {'read': 0, 'readable': 0, 'rate': 0.0})
+        est_d = estimated_by_district.get(did, {'estimated_kwh': ZERO, 'estimated_revenue': ZERO})
+        d_base = _bd_row(ed, b, consumed_by_district.get(did, ZERO))
+        d_base['revenue_billed']       = float(b.get('total_billed_amount', ZERO))
+        d_base['estimated_revenue']    = float(est_d.get('estimated_revenue', ZERO))
+        d_base['total_projected_revenue'] = float(b.get('total_billed_amount', ZERO)) + float(est_d.get('estimated_revenue', ZERO))
+        d_base['coverage_rate']        = cov_d['rate']
         by_district_breakdown.append({
             'district': {
                 'slug':  d_obj.slug,
                 'name':  d_obj.name,
                 'state': d_obj.state.slug if d_obj.state else None,
             },
-            **_bd_row(ed, b, consumed_by_district.get(did, ZERO)),
+            **d_base,
         })
 
     by_band_breakdown = []
