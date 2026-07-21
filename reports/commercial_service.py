@@ -7,6 +7,7 @@ dashboard views and this report service.
 from datetime import datetime
 
 from commercial.analytics_utils import (
+    compute_period_baseline,
     get_commercial_coverage,
     get_commercial_energy,
     get_commercial_overview,
@@ -88,7 +89,14 @@ class CommercialReportDataService:
         return get_revenue_by_district(self.customer_qs, self.from_date, self.to_date)
 
     def section_customer_type_summary(self):
-        return get_customer_type_summary(self.customer_qs, self.reading_qs)
+        period_days = (self.to_date - self.from_date).days + 1
+        baseline    = compute_period_baseline(self.reading_qs, self.from_date, self.to_date)
+        return get_customer_type_summary(
+            self.customer_qs, self.reading_qs,
+            period_days=period_days,
+            period_start=self.from_date,
+            customer_baseline=baseline,
+        )
 
     def section_commercial_coverage(self):
         return get_commercial_coverage(

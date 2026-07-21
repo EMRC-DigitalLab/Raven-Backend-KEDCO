@@ -35,7 +35,7 @@ _EC_EXPR = ExpressionWrapper(
 # ── Defaults ──────────────────────────────────────────────────────────────────
 
 def empty_billing():
-    return {'total_billed_kwh': ZERO, 'actual_billed_kwh': ZERO, 'estimated_billed_kwh': ZERO, 'energy_charge': ZERO, 'vat': ZERO, 'total_billed_amount': ZERO}
+    return {'total_billed_kwh': ZERO, 'estimated_billed_kwh': ZERO, 'energy_charge': ZERO, 'vat': ZERO, 'total_billed_amount': ZERO}
 
 def empty_estimated():
     return {'estimated_kwh': ZERO, 'estimated_energy_charge': ZERO, 'estimated_revenue': ZERO}
@@ -77,55 +77,89 @@ _ESTIMATED_KWH_EXPR = Case(
 )
 
 
-def bulk_billing(readings_qs, feeder_to_dim, period_days=None):
+def bulk_billing(readings_qs, feeder_to_dim, period_days=None, customer_baseline=None, period_start=None):
     """
-    ONE query (1 JOIN: customer→feeder) → {dim_id: billing dict}.
-    Splits actual_billed_kwh (real reads, estimation_method='') from
-    estimated_billed_kwh (DataNest-estimated reads, estimation_method non-empty).
+    Per-customer billing rolled up to {dim_id: billing dict}.
 
-    period_days: when supplied, each reading's billed_consumption is scaled by
-        (period_days / 30) so daily/weekly views show period-proportionate figures
-        rather than the raw 30-day billing cycle amounts.
-        Matches the normalisation logic in calc_billing().
+    Uses exactly the same normalisation logic as calc_billing so that list-view
+    totals (state/district/feeder/band) always match the overview total:
+      - customers with a prior reading: kwh = raw / billing_cycle * period_days
+      - first-sync customers in customer_baseline: kwh = daily_kwh * period_days
+      - otherwise: kwh = raw / 30 * period_days  (legacy fallback)
+
+    customer_baseline: optional {customer_id: Decimal daily_kwh} from
+        compute_period_baseline(). All values are treated as estimated.
+
+    period_start: used as the stable cutoff for prev_date_map so the result is
+        consistent regardless of which customers are in the queryset.
     """
-    rows = (
+    customer_baseline = customer_baseline or {}
+
+    rows = list(
         readings_qs
         .filter(billed_consumption__isnull=False, tariff_rate__isnull=False)
-        .values('customer__feeder_id')
-        .annotate(
-            total_kwh=Sum('billed_consumption'),
-            actual_kwh=Sum(_ACTUAL_KWH_EXPR),
-            estimated_kwh=Sum(_ESTIMATED_KWH_EXPR),
-            raw_ec=Sum(_EC_EXPR),
-        )
+        .values('customer_id', 'customer__feeder_id', 'reading_date',
+                'billed_consumption', 'tariff_rate')
     )
+    if not rows:
+        return {}
 
-    # Scale factor: proportion the billing cycle amount to the selected period
-    scale = (Decimal(str(period_days)) / Decimal('30')) if period_days and period_days != 30 else Decimal('1')
+    # ── Build prev_date_map (same stable cutoff as calc_billing) ─────────────
+    prev_date_map = {}
+    if period_days:
+        customer_ids = list({r['customer_id'] for r in rows})
+        cutoff       = period_start if period_start else min(r['reading_date'] for r in rows)
+        prev_date_map = {
+            r['customer_id']: r['prev_date']
+            for r in (
+                MeterReading.objects
+                .filter(customer_id__in=customer_ids, reading_date__lt=cutoff)
+                .values('customer_id')
+                .annotate(prev_date=Max('reading_date'))
+            )
+        }
 
-    acc = {}
-    for row in rows:
-        dim_id = feeder_to_dim.get(row['customer__feeder_id'])
+    acc           = {}
+    baseline_done = set()
+
+    for r in rows:
+        customer_id = r['customer_id']
+        dim_id      = feeder_to_dim.get(r['customer__feeder_id'])
         if dim_id is None:
             continue
+
+        raw_kwh = Decimal(str(r['billed_consumption']))
+        rate    = Decimal(str(r['tariff_rate']))
+
+        if period_days:
+            prev_date = prev_date_map.get(customer_id)
+            if prev_date:
+                billing_days = max((r['reading_date'] - prev_date).days, 1)
+                kwh = raw_kwh / Decimal(str(billing_days)) * Decimal(str(period_days))
+            elif customer_id in customer_baseline:
+                if customer_id in baseline_done:
+                    continue
+                kwh = customer_baseline[customer_id] * Decimal(str(period_days))
+                baseline_done.add(customer_id)
+            else:
+                kwh = raw_kwh / Decimal('30') * Decimal(str(period_days))
+        else:
+            kwh = raw_kwh
+
+        ec = kwh * rate
         if dim_id not in acc:
-            acc[dim_id] = {'kwh': ZERO, 'actual_kwh': ZERO, 'estimated_kwh': ZERO, 'ec': ZERO}
-        acc[dim_id]['kwh']           += Decimal(str(row['total_kwh']     or 0)) * scale
-        acc[dim_id]['actual_kwh']    += Decimal(str(row['actual_kwh']    or 0)) * scale
-        acc[dim_id]['estimated_kwh'] += Decimal(str(row['estimated_kwh'] or 0)) * scale
-        acc[dim_id]['ec']            += Decimal(str(row['raw_ec']        or 0)) * scale
+            acc[dim_id] = {'kwh': ZERO, 'ec': ZERO}
+        acc[dim_id]['kwh'] += kwh
+        acc[dim_id]['ec']  += ec
 
     result = {}
     for dim_id, r in acc.items():
-        kwh           = round(r['kwh'], 2)
-        actual_kwh    = round(r['actual_kwh'], 2)
-        estimated_kwh = round(r['estimated_kwh'], 2)
-        ec            = round(r['ec'], 2)
-        vat           = round(ec * VAT_RATE, 2)
+        kwh = round(r['kwh'], 2)
+        ec  = round(r['ec'], 2)
+        vat = round(ec * VAT_RATE, 2)
         result[dim_id] = {
             'total_billed_kwh':     kwh,
-            'actual_billed_kwh':    actual_kwh,
-            'estimated_billed_kwh': estimated_kwh,
+            'estimated_billed_kwh': kwh,
             'energy_charge':        ec,
             'vat':                  vat,
             'total_billed_amount':  round(ec + vat, 2),

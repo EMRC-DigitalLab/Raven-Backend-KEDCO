@@ -29,6 +29,7 @@ from commercial.analytics_utils import (
     calc_energy_consumed,
     calc_energy_delivered,
     calc_estimated_billing,
+    compute_period_baseline,
     customer_filter_kwargs,
     metric,
     parse_date_range,
@@ -104,9 +105,17 @@ def commercial_overview(request):
     total_mdni   = customers_qs.filter(customer_type='MDNI').count()
     bypass_count = customers_qs.filter(is_bypass=True).count()
 
-    # ── Billing (actual from real readings) ───────────────────────────────────
-    billing     = calc_billing(readings_qs, period_days=date_range['days'])
-    billing_raw = calc_billing(readings_qs)  # raw totals for energy gap (no period scaling)
+    # ── Baseline assumption: derive estimated daily rate from surrounding months
+    # for first-sync customers whose raw billed_consumption is inflated.
+    # All billing figures are estimated — this applies across all periods.
+    customer_baseline = compute_period_baseline(
+        readings_qs, date_range['start_date'], date_range['end_date']
+    )
+
+    # ── Billing ───────────────────────────────────────────────────────────────
+    p_start     = date_range['start_date']
+    billing     = calc_billing(readings_qs, period_days=date_range['days'], customer_baseline=customer_baseline, period_start=p_start)
+    billing_raw = calc_billing(readings_qs, customer_baseline=customer_baseline, period_start=p_start)
 
     # ── Daily consumption estimate from actual readings ────────────────────────
     daily_billed_kwh = calc_daily_estimate(billing, date_range)
@@ -117,9 +126,9 @@ def commercial_overview(request):
     # ── Estimated billing for unread customers ────────────────────────────────
     estimated = calc_estimated_billing(customers_qs, coverage['read_ids'], date_range)
 
-    # ── MDI vs MDNI revenue split (from actual readings) ──────────────────────
-    mdi_billing  = calc_billing(readings_qs.filter(reading_type='MDI'),  period_days=date_range['days'])
-    mdni_billing = calc_billing(readings_qs.filter(reading_type='MDNI'), period_days=date_range['days'])
+    # ── MDI vs MDNI revenue split ─────────────────────────────────────────────
+    mdi_billing  = calc_billing(readings_qs.filter(reading_type='MDI'),  period_days=date_range['days'], customer_baseline=customer_baseline, period_start=p_start)
+    mdni_billing = calc_billing(readings_qs.filter(reading_type='MDNI'), period_days=date_range['days'], customer_baseline=customer_baseline, period_start=p_start)
     total_rev    = billing['total_billed_amount']
     mdi_split  = round(float(mdi_billing['total_billed_amount']) / float(total_rev) * 100, 2) if total_rev else 0
     mdni_split = round(float(mdni_billing['total_billed_amount']) / float(total_rev) * 100, 2) if total_rev else 0
@@ -158,15 +167,15 @@ def commercial_overview(request):
     _pd = date_range['days']   # period_days — normalises billing to selected window
 
     energy_by_state    = rollup_energy(pf_energy, f2s)
-    billing_by_state   = bulk_billing(readings_qs, f2s,    period_days=_pd)
+    billing_by_state   = bulk_billing(readings_qs, f2s,    period_days=_pd, customer_baseline=customer_baseline, period_start=p_start)
     consumed_by_state  = bulk_energy_consumed(readings_qs, f2s)
 
     energy_by_district   = rollup_energy(pf_energy, f2dmap)
-    billing_by_district  = bulk_billing(readings_qs, f2dmap, period_days=_pd)
+    billing_by_district  = bulk_billing(readings_qs, f2dmap, period_days=_pd, customer_baseline=customer_baseline, period_start=p_start)
     consumed_by_district = bulk_energy_consumed(readings_qs, f2dmap)
 
     energy_by_band   = rollup_energy(pf_energy, f2b)
-    billing_by_band  = bulk_billing(readings_qs, f2b,    period_days=_pd)
+    billing_by_band  = bulk_billing(readings_qs, f2b,    period_days=_pd, customer_baseline=customer_baseline, period_start=p_start)
     consumed_by_band = bulk_energy_consumed(readings_qs, f2b)
 
     _empty_b = {'total_billed_kwh': ZERO, 'total_billed_amount': ZERO}
@@ -364,10 +373,11 @@ def commercial_overview(request):
                 unit='kWh',
                 explanation='Total energy consumed = sum(present_reading - previous_reading) for all customers read in this period. MDI (Maximum Demand Industrial) customers only contribute actual metered values.',
             ),
-            'actual_billed_kwh': metric(
-                float(billing['actual_billed_kwh']),
+            'estimated_billed_kwh_read': metric(
+                float(billing['total_billed_kwh']),
                 unit='kWh',
-                explanation='Energy billed from real meter readings only (estimation_method is empty).',
+                mode='estimated',
+                explanation='Estimated energy billed from customers read this period.',
             ),
             'estimated_billed_kwh': metric(
                 float(billing['estimated_billed_kwh'] + estimated['estimated_kwh']),
@@ -416,7 +426,8 @@ def commercial_overview(request):
             'actual_energy_charge': metric(
                 float(billing['energy_charge']),
                 unit='NGN',
-                explanation='Actual energy charge from real readings — billed_consumption x tariff_rate per customer.',
+                mode='estimated',
+                explanation='Estimated energy charge from meter readings — billed_consumption x tariff_rate per customer, baseline-adjusted for first-sync periods.',
             ),
             'estimated_energy_charge': metric(
                 float(estimated['estimated_energy_charge']),
@@ -427,15 +438,17 @@ def commercial_overview(request):
             'actual_vat': metric(
                 float(billing['vat']),
                 unit='NGN',
-                explanation='7.5% VAT on actual energy charge.',
+                mode='estimated',
+                explanation='7.5% VAT on estimated energy charge.',
             ),
             'actual_total_billed': metric(
                 float(billing['total_billed_amount']),
                 unit='NGN',
+                mode='estimated',
                 explanation=(
-                    'Revenue confirmed from customers who were physically read this period. '
+                    'Estimated revenue from customers read this period. '
                     'Calculated as: billed consumption (kWh) x tariff rate per customer, plus 7.5% VAT. '
-                    'This is hard fact — sourced directly from DataNest meter readings.'
+                    'First-sync customer values are baseline-adjusted from surrounding months.'
                 ),
             ),
             'estimated_revenue': metric(
@@ -473,7 +486,8 @@ def commercial_overview(request):
             'arpu': metric(
                 float(arpu),
                 unit='NGN',
-                explanation='Average Revenue Per Customer — actual total billed divided by customers read in this period.',
+                mode='estimated',
+                explanation='Average Revenue Per Customer — estimated total billed divided by customers read in this period.',
             ),
         },
 
@@ -532,7 +546,8 @@ def commercial_overview(request):
             'actual_revenue': metric(
                 float(billing['total_billed_amount']),
                 unit='NGN',
-                explanation='Confirmed revenue from customers physically read in this period. Does not include estimates.',
+                mode='estimated',
+                explanation='Estimated revenue from customers read this period, baseline-adjusted for first-sync periods.',
             ),
             'projected_revenue': metric(
                 float(billing['total_billed_amount'] + estimated['estimated_revenue']),
@@ -543,11 +558,7 @@ def commercial_overview(request):
             'customers_read': coverage['read'],
             'total_customers': coverage['read'] + coverage['unread'],
             'coverage_rate': coverage['rate'],
-            'revenue_mode': (
-                'actual'         if coverage['rate'] >= 99.0 else
-                'partial_actual' if coverage['rate'] >= 50.0 else
-                'estimated'
-            ),
+            'revenue_mode': 'estimated',
             'period_label': date_range['label'],
         },
 

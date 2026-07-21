@@ -21,6 +21,7 @@ from commercial.analytics_utils import (
     calc_energy_consumed,
     calc_energy_delivered,
     calc_estimated_billing,
+    compute_period_baseline,
     customer_filter_kwargs,
     metric,
     parse_date_range,
@@ -60,14 +61,16 @@ def _state_metrics(state, customers_qs, readings_qs, date_range):
     total_mdni   = c_qs.filter(customer_type='MDNI').count()
     bypass_count = c_qs.filter(is_bypass=True).count()
 
-    billing     = calc_billing(r_qs, period_days=date_range['days'])
-    billing_raw = calc_billing(r_qs)  # raw totals for energy gap (no period scaling)
+    p_start     = date_range['start_date']
+    baseline    = compute_period_baseline(r_qs, p_start, date_range['end_date'])
+    billing     = calc_billing(r_qs, period_days=date_range['days'], customer_baseline=baseline, period_start=p_start)
+    billing_raw = calc_billing(r_qs, customer_baseline=baseline, period_start=p_start)
     daily_kwh   = calc_daily_estimate(billing, date_range)
     coverage    = calc_coverage(c_qs, r_qs)
     estimated   = calc_estimated_billing(c_qs, coverage['read_ids'], date_range)
 
-    mdi_billing  = calc_billing(r_qs.filter(reading_type='MDI'),  period_days=date_range['days'])
-    mdni_billing = calc_billing(r_qs.filter(reading_type='MDNI'), period_days=date_range['days'])
+    mdi_billing  = calc_billing(r_qs.filter(reading_type='MDI'),  period_days=date_range['days'], customer_baseline=baseline, period_start=p_start)
+    mdni_billing = calc_billing(r_qs.filter(reading_type='MDNI'), period_days=date_range['days'], customer_baseline=baseline, period_start=p_start)
     total_rev    = billing['total_billed_amount']
     mdi_split  = round(float(mdi_billing['total_billed_amount']) / float(total_rev) * 100, 2) if total_rev else 0
     mdni_split = round(float(mdni_billing['total_billed_amount']) / float(total_rev) * 100, 2) if total_rev else 0
@@ -96,7 +99,7 @@ def _state_metrics(state, customers_qs, readings_qs, date_range):
     if f2dist:
         pf_dist   = energy_per_feeder(list(f2dist.keys()), date_range)
         e_by_dist = rollup_energy(pf_dist, f2dist)
-        b_by_dist = bulk_billing(r_qs, f2dist, period_days=date_range['days'])
+        b_by_dist = bulk_billing(r_qs, f2dist, period_days=date_range['days'], customer_baseline=baseline, period_start=p_start)
         c_by_dist = bulk_energy_consumed(r_qs, f2dist)
         for d_obj in BusinessDistrict.objects.filter(state=state).order_by('name'):
             did       = d_obj.id
@@ -126,9 +129,9 @@ def _state_metrics(state, customers_qs, readings_qs, date_range):
                 float(energy_consumed_kwh), unit='kWh',
                 explanation='Total energy consumed = sum(present_reading - previous_reading) for all customers read in this state in this period.',
             ),
-            'actual_billed_kwh': metric(
-                float(billing['actual_billed_kwh']), unit='kWh',
-                explanation='Energy billed from real meter readings only (estimation_method is empty) in this state.',
+            'estimated_billed_kwh_read': metric(
+                float(billing['total_billed_kwh']), unit='kWh', mode='estimated',
+                explanation='Estimated energy billed from customers read this period in this state.',
             ),
             'estimated_billed_kwh': metric(
                 float(billing['estimated_billed_kwh'] + estimated['estimated_kwh']), unit='kWh', mode='estimated',
@@ -204,8 +207,9 @@ def all_states(request):
     # ── One query builds feeder→state map; all bulk fns use it ───────────────
     f2d = feeder_dim_map(customers_qs, 'feeder__business_district__state_id')
 
-    billing_data     = bulk_billing(readings_qs, f2d, period_days=date_range['days'])
-    billing_raw_data = bulk_billing(readings_qs, f2d)  # raw for energy gap
+    global_baseline  = compute_period_baseline(readings_qs, date_range['start_date'], date_range['end_date'])
+    billing_data     = bulk_billing(readings_qs, f2d, period_days=date_range['days'], customer_baseline=global_baseline, period_start=date_range['start_date'])
+    billing_raw_data = bulk_billing(readings_qs, f2d, customer_baseline=global_baseline, period_start=date_range['start_date'])
     type_billing   = bulk_billing_by_type(readings_qs, f2d)
     ctype_counts   = bulk_customer_types(customers_qs, f2d)
     coverage_data  = bulk_coverage(customers_qs, readings_qs, f2d)

@@ -1,5 +1,5 @@
 # commercial/views/feeders/utils.py
-from commercial.analytics_utils import calc_atc_loss, calc_billing, calc_energy_delivered
+from commercial.analytics_utils import calc_atc_loss, calc_billing, calc_energy_delivered, compute_period_baseline
 from commercial.models import CommercialCustomer, MeterReading
 
 
@@ -27,7 +27,8 @@ def calculate_atcc_metrics(feeder, start_date, end_date):
         reading_date__lte=end_date,
     )
 
-    billing   = calc_billing(readings_qs, period_days=days)
+    baseline  = compute_period_baseline(readings_qs, start_date, end_date)
+    billing   = calc_billing(readings_qs, period_days=days, customer_baseline=baseline, period_start=start_date)
     delivered = calc_energy_delivered([feeder.id], date_range)
 
     delivered_kwh    = round(float(delivered['total_mwh']) * 1000, 2)
