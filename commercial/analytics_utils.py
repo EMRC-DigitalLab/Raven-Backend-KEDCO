@@ -226,14 +226,22 @@ def calc_billing(readings_qs, period_days=None, customer_baseline=None, period_s
 
     customer_baseline = customer_baseline or {}
 
-    rows = list(
+    all_rows = list(
         readings_qs
         .filter(billed_consumption__isnull=False, tariff_rate__isnull=False)
         .values('customer_id', 'reading_date', 'billed_consumption', 'tariff_rate', 'estimation_method')
     )
 
-    if not rows:
+    if not all_rows:
         return _EMPTY
+
+    # One billing entry per customer — keep only the latest reading in the period
+    _latest = {}
+    for r in all_rows:
+        cid = r['customer_id']
+        if cid not in _latest or r['reading_date'] > _latest[cid]['reading_date']:
+            _latest[cid] = r
+    rows = list(_latest.values())
 
     # ── Period normalisation setup ────────────────────────────────────────────
     prev_date_map = {}

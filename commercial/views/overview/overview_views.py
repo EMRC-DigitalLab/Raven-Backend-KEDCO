@@ -13,7 +13,6 @@ Query params:
 """
 
 from datetime import date, timedelta
-from decimal import Decimal
 
 from dateutil.relativedelta import relativedelta
 from django.db.models import Count
@@ -197,25 +196,6 @@ def commercial_overview(request):
     trend_start   = trend_periods[0]['start_date']
     trend_end     = trend_periods[-1]['end_date']
 
-    # ONE readings query spanning all 4 periods
-    trend_rows = list(
-        MeterReading.objects
-        .filter(
-            customer__in=customers_qs,
-            reading_date__gte=trend_start,
-            reading_date__lte=trend_end,
-            billed_consumption__isnull=False,
-            tariff_rate__isnull=False,
-        )
-        .values(
-            'reading_date',
-            'customer_id',
-            'customer__feeder__business_district__state_id',
-            'billed_consumption',
-            'tariff_rate',
-        )
-    )
-
     # Energy per trend period — reuse current-period result, 3 new calls for prev
     trend_energy_by_period = []
     for p in trend_periods:
@@ -235,30 +215,38 @@ def commercial_overview(request):
         .annotate(n=Count('id'))
     }
 
-    # Bucket trend rows per period → per state in Python (no extra DB hits)
-    _ZERO_D = Decimal('0')
+    # Trend billing: same baseline-adjusted calculation as current period
+    def _trend_billing_for_period(p, customers_qs, f2s):
+        p_readings = MeterReading.objects.filter(
+            customer__in=customers_qs,
+            reading_date__gte=p['start_date'],
+            reading_date__lte=p['end_date'],
+            billed_consumption__isnull=False,
+            tariff_rate__isnull=False,
+        )
+        p_baseline = compute_period_baseline(p_readings, p['start_date'], p['end_date'])
+        p_bill     = bulk_billing(p_readings, f2s, period_days=p['days'], customer_baseline=p_baseline, period_start=p['start_date'])
+        p_cov      = bulk_coverage(customers_qs, p_readings, f2s)
+        return {
+            sid: {
+                'kwh':      b['total_billed_kwh'],
+                'ec':       b['energy_charge'],
+                'read_ids': p_cov.get(sid, {}).get('read_ids', set()),
+            }
+            for sid, b in p_bill.items()
+        }
 
-    def _bucket_state(rows, p_start, p_end, p_days):
-        # Scale raw billed_consumption to the period window (same logic as calc_billing)
-        p_scale = Decimal(str(p_days)) / Decimal('30')
-        acc = {}
-        for r in rows:
-            if not (p_start <= r['reading_date'] <= p_end):
-                continue
-            sid = r['customer__feeder__business_district__state_id']
-            if sid is None:
-                continue
-            if sid not in acc:
-                acc[sid] = {'kwh': _ZERO_D, 'ec': _ZERO_D, 'read_ids': set()}
-            kwh  = Decimal(str(r['billed_consumption'])) * p_scale
-            rate = Decimal(str(r['tariff_rate']))
-            acc[sid]['kwh'] += kwh
-            acc[sid]['ec']  += kwh * rate
-            acc[sid]['read_ids'].add(r['customer_id'])
-        return acc
-
+    _current_trend_bill = {
+        sid: {
+            'kwh':      billing_by_state.get(sid, _empty_b)['total_billed_kwh'],
+            'ec':       billing_by_state.get(sid, _empty_b)['energy_charge'],
+            'read_ids': coverage_by_state.get(sid, {}).get('read_ids', set()),
+        }
+        for sid in set(billing_by_state) | set(coverage_by_state)
+    }
     trend_bill_by_period = [
-        _bucket_state(trend_rows, p['start_date'], p['end_date'], p['days'])
+        _current_trend_bill if p.get('is_current')
+        else _trend_billing_for_period(p, customers_qs, f2s)
         for p in trend_periods
     ]
 
@@ -276,7 +264,7 @@ def commercial_overview(request):
 
         state_trend = []
         for i, p in enumerate(trend_periods):
-            bill = trend_bill_by_period[i].get(sid, {'kwh': _ZERO_D, 'ec': _ZERO_D, 'read_ids': set()})
+            bill = trend_bill_by_period[i].get(sid, {'kwh': ZERO, 'ec': ZERO, 'read_ids': set()})
             t_ed = trend_energy_by_period[i].get(sid, {'total_mwh': 0.0, 'mode': 'system'})
             ec   = float(round(bill['ec'], 2))
             vat  = round(ec * 0.075, 2)
