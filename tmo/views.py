@@ -158,6 +158,122 @@ class TMOFeedersView(APIView):
             return Response({'error': str(exc)}, status=500)
 
 
+class TMODailyEnergyView(APIView):
+    """
+    GET /api/tmo/energy/daily/
+    Daily total network energy (GWh) for the selected period vs monthly target.
+    Covers Slides 2 & 3.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        try:
+            data = _make_service(request).get_daily_energy()
+            return Response(data)
+        except Exception as exc:
+            return Response({'error': str(exc)}, status=500)
+
+
+class TMOPEARView(APIView):
+    """
+    GET /api/tmo/pear/
+    Premium Energy Allocation Ratio: MD vs NMD share yesterday vs MTD,
+    compared against configured target mix (default 65% MD / 35% NMD).
+    Covers Slide 10.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        try:
+            data = _make_service(request).get_pear()
+            return Response(data)
+        except Exception as exc:
+            return Response({'error': str(exc)}, status=500)
+
+
+class TMOComplianceSummaryView(APIView):
+    """
+    GET /api/tmo/compliance/summary/
+    Feeder count bucketed by compliance status (Exceeding/OnTarget/BelowTarget/Poor/Critical)
+    per segment (MDI, Non-MDI Band A, Non-MDI Non-Band A).
+    Covers Slide 6.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        try:
+            data = _make_service(request).get_compliance_summary()
+            return Response(data)
+        except Exception as exc:
+            return Response({'error': str(exc)}, status=500)
+
+
+class TMOEnergyByVoltageView(APIView):
+    """
+    GET /api/tmo/energy/by-voltage/
+    Per-segment daily energy split by 33KV vs 11KV, plus current vs previous month totals.
+    Covers Slides 13, 14, 15.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        try:
+            data = _make_service(request).get_energy_by_voltage()
+            return Response(data)
+        except Exception as exc:
+            return Response({'error': str(exc)}, status=500)
+
+
+class TMOIncidentsView(APIView):
+    """
+    GET /api/tmo/incidents/
+    Techno-Commercial Incidence report: faults per feeder with financial loss,
+    status (Rectified/Lingering) and rectification rate.
+    Covers Slide 16.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        try:
+            data = _make_service(request).get_incidents()
+            return Response(data)
+        except Exception as exc:
+            return Response({'error': str(exc)}, status=500)
+
+
+class TMOGCRView(APIView):
+    """
+    GET /api/tmo/gcr/
+    Energy Gap-to-Cost Ratio: target vs consumed GWh per segment,
+    with expected bill value, MTD bill value, and gap.
+    Covers Slide 18.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        try:
+            data = _make_service(request).get_gcr()
+            return Response(data)
+        except Exception as exc:
+            return Response({'error': str(exc)}, status=500)
+
+
+class TMOVolatilityView(APIView):
+    """
+    GET /api/tmo/volatility/
+    P&L Mix Volatility Index: each segment's share of total energy for
+    the selected day vs month-to-date, with Decline/Growth/Stable remark.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        try:
+            data = _make_service(request).get_volatility()
+            return Response(data)
+        except Exception as exc:
+            return Response({'error': str(exc)}, status=500)
+
+
 class TMOFeederDetailView(APIView):
     """
     GET /api/tmo/feeders/<feeder_slug>/

@@ -11,7 +11,7 @@ from commercial.models import (
 from commercial.models import CommercialCustomer
 from common.models import Band, Feeder
 from technical.models import DailyHoursOfSupply, EnergyDelivered
-from tmo.models import TMOMonthlySegmentTarget
+from tmo.models import TMOIncident, TMOMonthlySegmentTarget, TMONetworkConfig
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -655,7 +655,569 @@ class TMOService:
             'count':   len(rows),
         }
 
-    # ── 10. Single Feeder Detail ─────────────────────────────────────────────
+    # ── 10. P&L Mix Volatility Index ────────────────────────────────────────
+
+    def get_volatility(self):
+        """
+        P&L Mix Volatility Index.
+        Compares each segment's share of total energy for:
+          - the selected day (T-1 by default)
+          - month-to-date (start of that month → selected day)
+        Flags when high-ROI segment share is declining vs MTD average.
+        """
+        # Day = to_date (T-1 or user-selected date)
+        day = self.to_date
+        mtd_start = day.replace(day=1)
+
+        feeder_qs  = self._base_feeder_qs()
+        feeder_ids = set(feeder_qs.values_list('id', flat=True))
+        minigrid_ids = set(feeder_qs.filter(is_minigrid=True).values_list('id', flat=True))
+
+        def _energy(ids, from_d, to_d):
+            if not ids:
+                return 0.0
+            return float(
+                EnergyDelivered.objects.filter(
+                    feeder_id__in=ids,
+                    date__gte=from_d,
+                    date__lte=to_d,
+                ).aggregate(t=Sum('energy_mwh'))['t'] or 0
+            )
+
+        def _total(from_d, to_d):
+            return float(
+                EnergyDelivered.objects.filter(
+                    feeder_id__in=feeder_ids,
+                    date__gte=from_d,
+                    date__lte=to_d,
+                ).aggregate(t=Sum('energy_mwh'))['t'] or 0
+            )
+
+        def _share(part, total):
+            return round(_pct(part, total), 1) if total else 0.0
+
+        def _remark(seg, diff):
+            if seg in ('MDI', 'MDNI'):
+                if diff < -1:
+                    return 'Decline'
+                if diff > 1:
+                    return 'Growth'
+                return 'Stable'
+            else:  # Regional / Minigrid
+                if diff > 1:
+                    return 'High — Daily spike sustained'
+                if diff < -1:
+                    return 'Declining'
+                return 'Stable'
+
+        # Day totals
+        day_total = _total(day, day)
+        day_mdi   = _energy(self.mdi_ids & feeder_ids, day, day)
+        day_mdni  = _energy(self.mdni_ids & feeder_ids, day, day)
+        day_mini  = _energy(minigrid_ids, day, day)
+        day_reg   = max(day_total - day_mdi - day_mdni - day_mini, 0.0)
+
+        # MTD totals
+        mtd_total = _total(mtd_start, day)
+        mtd_mdi   = _energy(self.mdi_ids & feeder_ids, mtd_start, day)
+        mtd_mdni  = _energy(self.mdni_ids & feeder_ids, mtd_start, day)
+        mtd_mini  = _energy(minigrid_ids, mtd_start, day)
+        mtd_reg   = max(mtd_total - mtd_mdi - mtd_mdni - mtd_mini, 0.0)
+
+        segments = []
+        for seg, d_val, m_val in [
+            ('MDI',      day_mdi,  mtd_mdi),
+            ('MDNI',     day_mdni, mtd_mdni),
+            ('Regions',  day_reg,  mtd_reg),
+            ('Minigrid', day_mini, mtd_mini),
+        ]:
+            d_share = _share(d_val, day_total)
+            m_share = _share(m_val, mtd_total)
+            diff    = round(d_share - m_share, 1)
+            segments.append({
+                'segment':          seg,
+                'yesterday_share_pct': d_share,
+                'mtd_share_pct':    m_share,
+                'difference_pct':   diff,
+                'remark':           _remark(seg, diff),
+            })
+
+        return {
+            'day':      str(day),
+            'mtd_from': str(mtd_start),
+            'day_total_mwh': round(day_total, 2),
+            'mtd_total_mwh': round(mtd_total, 2),
+            'segments': segments,
+        }
+
+    # ── 11. Daily Network Energy (Forecast vs Actual) ────────────────────────
+
+    def get_daily_energy(self):
+        """
+        Daily total energy across the network for the selected period.
+        Compares against daily target derived from monthly GWh target in TMONetworkConfig.
+        Covers Slides 2 & 3 (Daily Energy Forecast / Daily Energy Allocation).
+        """
+        feeder_ids = list(self._base_feeder_qs().values_list('id', flat=True))
+
+        daily = list(
+            EnergyDelivered.objects.filter(
+                feeder_id__in=feeder_ids,
+                date__gte=self.from_date,
+                date__lte=self.to_date,
+            ).values('date').annotate(total_mwh=Sum('energy_mwh')).order_by('date')
+        )
+
+        config = TMONetworkConfig.objects.filter(
+            year=self.from_date.year,
+            month=self.from_date.month,
+        ).first()
+
+        monthly_target_gwh = float(config.monthly_energy_target_gwh) if config else 0.0
+
+        import calendar
+        days_in_month = calendar.monthrange(self.from_date.year, self.from_date.month)[1]
+        daily_target_gwh = monthly_target_gwh / days_in_month if days_in_month else 0.0
+
+        days = []
+        for row in daily:
+            actual_gwh = float(row['total_mwh'] or 0) / 1000
+            ach = _pct(actual_gwh, daily_target_gwh)
+            days.append({
+                'date':          str(row['date']),
+                'day':           row['date'].day,
+                'target_gwh':    round(daily_target_gwh, 4),
+                'actual_gwh':    round(actual_gwh, 4),
+                'variance_gwh':  round(actual_gwh - daily_target_gwh, 4),
+                'achievement_pct': round(ach, 1),
+                'status':        _compliance(ach),
+            })
+
+        total_actual_gwh = sum(d['actual_gwh'] for d in days)
+        mtd_ach = _pct(total_actual_gwh, monthly_target_gwh)
+
+        return {
+            'period': {'from': str(self.from_date), 'to': str(self.to_date)},
+            'monthly_target_gwh':  round(monthly_target_gwh, 4),
+            'total_actual_gwh':    round(total_actual_gwh, 4),
+            'mtd_achievement_pct': round(mtd_ach, 1),
+            'mtd_status':          _compliance(mtd_ach),
+            'days':                days,
+        }
+
+    # ── 12. PEAR (Premium Energy Allocation Ratio) ────────────────────────────
+
+    def get_pear(self):
+        """
+        PEAR: MD (MDI+MDNI) vs NMD share of total energy.
+        Compares yesterday vs MTD average, against the configured target mix.
+        Covers Slide 10.
+        """
+        day       = self.to_date
+        mtd_start = day.replace(day=1)
+
+        feeder_qs  = self._base_feeder_qs()
+        feeder_ids = set(feeder_qs.values_list('id', flat=True))
+        md_ids     = (self.mdi_ids | self.mdni_ids) & feeder_ids
+        nmd_ids    = feeder_ids - md_ids
+
+        config = TMONetworkConfig.objects.filter(year=day.year, month=day.month).first()
+        target_md_pct  = float(config.target_md_share_pct)  if config else 65.0
+        target_nmd_pct = round(100.0 - target_md_pct, 2)
+
+        def _e(ids, fd, td):
+            if not ids:
+                return 0.0
+            return float(
+                EnergyDelivered.objects.filter(
+                    feeder_id__in=ids, date__gte=fd, date__lte=td,
+                ).aggregate(t=Sum('energy_mwh'))['t'] or 0
+            )
+
+        def _tot(fd, td):
+            return float(
+                EnergyDelivered.objects.filter(
+                    feeder_id__in=feeder_ids, date__gte=fd, date__lte=td,
+                ).aggregate(t=Sum('energy_mwh'))['t'] or 0
+            )
+
+        day_total = _tot(day, day)
+        day_md    = _e(md_ids, day, day)
+        day_nmd   = max(day_total - day_md, 0.0)
+
+        mtd_total = _tot(mtd_start, day)
+        mtd_md    = _e(md_ids, mtd_start, day)
+        mtd_nmd   = max(mtd_total - mtd_md, 0.0)
+
+        return {
+            'day':      str(day),
+            'mtd_from': str(mtd_start),
+            'target_mix': {
+                'md_pct':  target_md_pct,
+                'nmd_pct': target_nmd_pct,
+            },
+            'yesterday': {
+                'total_mwh':    round(day_total, 2),
+                'md_mwh':       round(day_md, 2),
+                'nmd_mwh':      round(day_nmd, 2),
+                'md_share_pct': round(_pct(day_md, day_total), 1),
+                'nmd_share_pct': round(_pct(day_nmd, day_total), 1),
+            },
+            'mtd': {
+                'total_mwh':    round(mtd_total, 2),
+                'md_mwh':       round(mtd_md, 2),
+                'nmd_mwh':      round(mtd_nmd, 2),
+                'md_share_pct': round(_pct(mtd_md, mtd_total), 1),
+                'nmd_share_pct': round(_pct(mtd_nmd, mtd_total), 1),
+            },
+        }
+
+    # ── 13. Compliance Summary by Segment ────────────────────────────────────
+
+    def get_compliance_summary(self):
+        """
+        Feeder count bucketed by compliance status per segment.
+        Segments: MDI | Non-MDI Band A | Non-MDI Non-Band A.
+        Covers Slide 6.
+        """
+        feeder_qs  = self._base_feeder_qs()
+        feeder_ids = list(feeder_qs.values_list('id', flat=True))
+        feeders    = {f.id: f for f in feeder_qs}
+
+        supply_map = {
+            row['feeder_id']: float(row['avg'] or 0)
+            for row in DailyHoursOfSupply.objects.filter(
+                feeder_id__in=feeder_ids,
+                date__gte=self.from_date,
+                date__lte=self.to_date,
+            ).values('feeder_id').annotate(avg=Avg('hours_supplied'))
+        }
+
+        # We also check hours target compliance (like TMOFeederTarget for hours)
+        # But here the "target" is TMOFeederTarget (hours) not Band minimum
+        # The slide uses feeder targets not NERC minimums — use same target_hours
+        target_map = {
+            row['feeder_id']: float(row['total'] or 0)
+            for row in TMOFeederTarget.objects.filter(
+                feeder_id__in=feeder_ids,
+                target_date__gte=self.from_date,
+                target_date__lte=self.to_date,
+            ).values('feeder_id').annotate(total=Sum('target_mwh'))
+        }
+
+        # Classify feeder into the 3 compliance segments (matching slide 6)
+        def _seg_label(fid, feeder):
+            if fid in self.mdi_ids:
+                return 'MDI'
+            if feeder and feeder.band and feeder.band.slug == 'a':
+                return 'Non-MDI Band A'
+            return 'Non-MDI, Non-Band A'
+
+        BUCKETS = [
+            ('exceeding',     lambda p: p > 105),
+            ('on_target',     lambda p: 95 <= p <= 105),
+            ('below_target',  lambda p: 85 <= p < 95),
+            ('poor',          lambda p: 75 <= p < 85),
+            ('critical',      lambda p: p < 75),
+        ]
+
+        segments = {
+            'MDI':                 {b: 0 for b, _ in BUCKETS},
+            'Non-MDI Band A':      {b: 0 for b, _ in BUCKETS},
+            'Non-MDI, Non-Band A': {b: 0 for b, _ in BUCKETS},
+        }
+        seg_totals = {k: 0 for k in segments}
+
+        for fid in feeder_ids:
+            feeder  = feeders.get(fid)
+            actual  = supply_map.get(fid, 0.0)
+            target  = target_map.get(fid, 0.0)
+            pct     = _pct(actual, target) if target else 0.0
+            seg     = _seg_label(fid, feeder)
+            seg_totals[seg] += 1
+            for bucket_name, test in BUCKETS:
+                if test(pct):
+                    segments[seg][bucket_name] += 1
+                    break
+
+        result = []
+        for seg_name, counts in segments.items():
+            total = seg_totals[seg_name]
+            result.append({
+                'segment':      seg_name,
+                'total_feeders': total,
+                'buckets': {
+                    name: {
+                        'count': counts[name],
+                        'pct':   round(_pct(counts[name], total), 1) if total else 0.0,
+                    }
+                    for name, _ in BUCKETS
+                },
+            })
+
+        return {
+            'period':   {'from': str(self.from_date), 'to': str(self.to_date)},
+            'segments': result,
+        }
+
+    # ── 14. Energy by Voltage (33KV vs 11KV per segment) ─────────────────────
+
+    def get_energy_by_voltage(self):
+        """
+        Per-segment daily energy split by voltage level (33KV vs 11KV),
+        plus month-vs-previous-month totals.
+        Covers Slides 13, 14, 15.
+        """
+        from datetime import date as date_type
+        import calendar
+
+        feeder_qs  = self._base_feeder_qs()
+        feeder_ids = list(feeder_qs.values_list('id', flat=True))
+
+        # Build feeder → (segment, voltage) map
+        feeders = {f.id: f for f in feeder_qs}
+        fid_meta = {}
+        for fid, feeder in feeders.items():
+            seg = self._segment_label(fid)
+            vol = feeder.voltage_level if feeder else ''
+            fid_meta[fid] = (seg, vol)
+
+        # Daily energy per feeder for current period
+        daily_rows = (
+            EnergyDelivered.objects.filter(
+                feeder_id__in=feeder_ids,
+                date__gte=self.from_date,
+                date__lte=self.to_date,
+            ).values('date', 'feeder_id').annotate(mwh=Sum('energy_mwh'))
+        )
+
+        # Aggregate by (date, segment, voltage)
+        from collections import defaultdict
+        day_agg = defaultdict(lambda: defaultdict(lambda: {'33kv': 0.0, '11kv': 0.0}))
+        for row in daily_rows:
+            meta = fid_meta.get(row['feeder_id'])
+            if not meta:
+                continue
+            seg, vol = meta
+            mwh = float(row['mwh'] or 0)
+            if vol == '33kv':
+                day_agg[str(row['date'])][seg]['33kv'] += mwh
+            else:
+                day_agg[str(row['date'])][seg]['11kv'] += mwh
+
+        days = []
+        for d_str in sorted(day_agg):
+            entry = {'date': d_str, 'segments': {}}
+            for seg in ('MDI', 'MDNI', 'Regional'):
+                v = day_agg[d_str].get(seg, {'33kv': 0.0, '11kv': 0.0})
+                entry['segments'][seg] = {
+                    'energy_33kv_mwh': round(v['33kv'], 4),
+                    'energy_11kv_mwh': round(v['11kv'], 4),
+                    'total_mwh':       round(v['33kv'] + v['11kv'], 4),
+                }
+            days.append(entry)
+
+        # Previous month totals
+        y, m = self.from_date.year, self.from_date.month
+        if m == 1:
+            prev_y, prev_m = y - 1, 12
+        else:
+            prev_y, prev_m = y, m - 1
+        prev_start = date_type(prev_y, prev_m, 1)
+        prev_end   = date_type(prev_y, prev_m, calendar.monthrange(prev_y, prev_m)[1])
+
+        def _vol_totals(fd, td):
+            rows = (
+                EnergyDelivered.objects.filter(
+                    feeder_id__in=feeder_ids,
+                    date__gte=fd,
+                    date__lte=td,
+                ).values('feeder_id').annotate(mwh=Sum('energy_mwh'))
+            )
+            seg_vol = defaultdict(lambda: {'33kv': 0.0, '11kv': 0.0})
+            for row in rows:
+                meta = fid_meta.get(row['feeder_id'])
+                if not meta:
+                    continue
+                seg, vol = meta
+                mwh = float(row['mwh'] or 0)
+                seg_vol[seg]['33kv' if vol == '33kv' else '11kv'] += mwh
+            return seg_vol
+
+        curr_totals = _vol_totals(self.from_date, self.to_date)
+        prev_totals = _vol_totals(prev_start, prev_end)
+
+        month_comparison = {}
+        for seg in ('MDI', 'MDNI', 'Regional'):
+            c = curr_totals.get(seg, {'33kv': 0.0, '11kv': 0.0})
+            p = prev_totals.get(seg, {'33kv': 0.0, '11kv': 0.0})
+            month_comparison[seg] = {
+                'current_month':  {
+                    'energy_33kv_mwh': round(c['33kv'], 2),
+                    'energy_11kv_mwh': round(c['11kv'], 2),
+                    'total_mwh':       round(c['33kv'] + c['11kv'], 2),
+                },
+                'previous_month': {
+                    'energy_33kv_mwh': round(p['33kv'], 2),
+                    'energy_11kv_mwh': round(p['11kv'], 2),
+                    'total_mwh':       round(p['33kv'] + p['11kv'], 2),
+                },
+            }
+
+        return {
+            'period':           {'from': str(self.from_date), 'to': str(self.to_date)},
+            'days':             days,
+            'month_comparison': month_comparison,
+        }
+
+    # ── 15. Techno-Commercial Incidents ──────────────────────────────────────
+
+    def get_incidents(self):
+        """
+        Weekly Techno-Commercial Incidence report per feeder.
+        Covers Slide 16.
+        """
+        qs = TMOIncident.objects.filter(
+            incident_date__gte=self.from_date,
+            incident_date__lte=self.to_date,
+        ).select_related('feeder', 'feeder__substation', 'feeder__substation__state', 'feeder__business_district')
+
+        f = self.filters
+        if f.get('state'):
+            qs = qs.filter(feeder__substation__state__slug=f['state'])
+        if f.get('district'):
+            qs = qs.filter(feeder__business_district__slug=f['district'])
+        if f.get('feeder'):
+            qs = qs.filter(feeder__slug=f['feeder'])
+
+        rows = []
+        total_loss = 0.0
+        rectified  = 0
+        lingering  = 0
+
+        for obj in qs:
+            loss = float(obj.financial_loss_ngn)
+            total_loss += loss
+            if obj.status == 'rectified':
+                rectified += 1
+            else:
+                lingering += 1
+            rows.append({
+                'id':              obj.id,
+                'feeder_name':     obj.feeder.name,
+                'feeder_slug':     obj.feeder.slug,
+                'coordinate':      obj.coordinate,
+                'region':          obj.region,
+                'nature_of_fault': obj.nature_of_fault,
+                'status':          obj.status,
+                'financial_loss_ngn': loss,
+                'incident_date':   str(obj.incident_date),
+                'rectified_date':  str(obj.rectified_date) if obj.rectified_date else None,
+            })
+
+        total = rectified + lingering
+        return {
+            'period': {'from': str(self.from_date), 'to': str(self.to_date)},
+            'summary': {
+                'total_incidents':   total,
+                'rectified':         rectified,
+                'lingering':         lingering,
+                'rectification_rate_pct': round(_pct(rectified, total), 1),
+                'total_financial_loss_ngn': round(total_loss, 2),
+            },
+            'incidents': rows,
+        }
+
+    # ── 16. GCR (Energy Gap-to-Cost Ratio) ───────────────────────────────────
+
+    def get_gcr(self):
+        """
+        P&L Target vs Billing Value Realization — Energy Gap-to-Cost Ratio.
+        Uses TMOMonthlySegmentTarget.average_tariff_ngn_per_mwh to compute bill values.
+        Covers Slide 18.
+        """
+        feeder_ids = set(self._base_feeder_qs().values_list('id', flat=True))
+
+        target_qs = TMOMonthlySegmentTarget.objects.filter(
+            year=self.from_date.year,
+            month=self.from_date.month,
+        )
+        targets = {t.segment: t for t in target_qs}
+
+        def _actual(ids):
+            if not ids:
+                return 0.0
+            return float(
+                EnergyDelivered.objects.filter(
+                    feeder_id__in=ids,
+                    date__gte=self.from_date,
+                    date__lte=self.to_date,
+                ).aggregate(t=Sum('energy_mwh'))['t'] or 0
+            )
+
+        regional_ids = feeder_ids - self.mdi_ids - self.mdni_ids
+
+        seg_data = [
+            ('MDI',     self.mdi_ids & feeder_ids),
+            ('MDNI',    self.mdni_ids & feeder_ids),
+            ('Regions', regional_ids),
+        ]
+
+        rows = []
+        grand_target_mwh   = 0.0
+        grand_actual_mwh   = 0.0
+        grand_exp_bill     = 0.0
+        grand_mtd_bill     = 0.0
+
+        for seg_name, ids in seg_data:
+            t = targets.get(seg_name)
+            target_mwh  = float(t.target_energy_mwh) if t else 0.0
+            tariff      = float(t.average_tariff_ngn_per_mwh) if t else 0.0
+            actual_mwh  = _actual(ids)
+            gap_mwh     = target_mwh - actual_mwh
+            exp_bill    = target_mwh * tariff
+            mtd_bill    = actual_mwh * tariff
+            gap_bill    = exp_bill - mtd_bill
+            mtd_ach     = _pct(actual_mwh, target_mwh)
+
+            grand_target_mwh += target_mwh
+            grand_actual_mwh += actual_mwh
+            grand_exp_bill   += exp_bill
+            grand_mtd_bill   += mtd_bill
+
+            rows.append({
+                'segment':              seg_name,
+                'target_gwh':           round(target_mwh / 1000, 4),
+                'consumed_gwh':         round(actual_mwh / 1000, 4),
+                'gap_gwh':              round(gap_mwh / 1000, 4),
+                'expected_bill_value':  round(exp_bill, 2),
+                'mtd_bill_value':       round(mtd_bill, 2),
+                'gap_bill_value':       round(gap_bill, 2),
+                'mtd_achievement_pct':  round(mtd_ach, 1),
+                'gap_pct':              round(100 - mtd_ach, 1),
+                'average_tariff_ngn_per_mwh': tariff,
+            })
+
+        grand_ach = _pct(grand_actual_mwh, grand_target_mwh)
+        rows.append({
+            'segment':              'Total',
+            'target_gwh':           round(grand_target_mwh / 1000, 4),
+            'consumed_gwh':         round(grand_actual_mwh / 1000, 4),
+            'gap_gwh':              round((grand_target_mwh - grand_actual_mwh) / 1000, 4),
+            'expected_bill_value':  round(grand_exp_bill, 2),
+            'mtd_bill_value':       round(grand_mtd_bill, 2),
+            'gap_bill_value':       round(grand_exp_bill - grand_mtd_bill, 2),
+            'mtd_achievement_pct':  round(grand_ach, 1),
+            'gap_pct':              round(100 - grand_ach, 1),
+            'average_tariff_ngn_per_mwh': None,
+        })
+
+        return {
+            'period': {'from': str(self.from_date), 'to': str(self.to_date)},
+            'rows':   rows,
+        }
+
+    # ── 17. Single Feeder Detail ─────────────────────────────────────────────
 
     def get_feeder_detail(self, feeder_slug):
         feeder = Feeder.objects.select_related(

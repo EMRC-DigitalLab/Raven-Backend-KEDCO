@@ -1,9 +1,23 @@
 from django.contrib import admin
-from .models import TMOMonthlySegmentTarget
+from .models import TMOIncident, TMOMonthlySegmentTarget, TMONetworkConfig
 
 
 @admin.register(TMOMonthlySegmentTarget)
 class TMOMonthlySegmentTargetAdmin(admin.ModelAdmin):
-    list_display  = ('segment', 'year', 'month', 'target_energy_mwh', 'target_revenue_ngn', 'target_collection_ngn')
+    list_display  = ('segment', 'year', 'month', 'target_energy_mwh', 'target_revenue_ngn', 'target_collection_ngn', 'average_tariff_ngn_per_mwh')
     list_filter   = ('segment', 'year')
     ordering      = ('-year', '-month', 'segment')
+
+
+@admin.register(TMONetworkConfig)
+class TMONetworkConfigAdmin(admin.ModelAdmin):
+    list_display  = ('year', 'month', 'target_md_share_pct', 'monthly_energy_target_gwh')
+    ordering      = ('-year', '-month')
+
+
+@admin.register(TMOIncident)
+class TMOIncidentAdmin(admin.ModelAdmin):
+    list_display  = ('feeder', 'incident_date', 'coordinate', 'region', 'status', 'financial_loss_ngn')
+    list_filter   = ('status', 'coordinate')
+    search_fields = ('feeder__name', 'nature_of_fault', 'region')
+    ordering      = ('-incident_date',)
