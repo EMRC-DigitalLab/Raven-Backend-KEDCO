@@ -458,3 +458,74 @@ class MonthlyCommercialSummary(UUIDModel):
 
     class Meta:
         unique_together = ('sales_rep', 'transformer', 'month')
+
+
+# =============================================================================
+# TMO (Technical & Management Operations) — synced from DataNest
+# =============================================================================
+
+class TMOFeederTarget(UUIDModel, models.Model):
+    """Feeder dispatch targets — mirrors DataNest tmo_targets."""
+    tmo_id         = models.IntegerField(unique=True, help_text='DataNest tmo_id')
+    feeder         = models.ForeignKey(Feeder, on_delete=models.SET_NULL, null=True, blank=True, related_name='tmo_targets')
+    feeder_code    = models.CharField(max_length=100, help_text='Raw DataNest feeder_id')
+    target_date    = models.DateField(db_index=True)
+    target_mwh     = models.DecimalField(max_digits=12, decimal_places=4)
+    set_by_user_id = models.CharField(max_length=100, blank=True)
+    dn_created_at  = models.DateTimeField(null=True, blank=True)
+    dn_updated_at  = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-target_date', 'feeder_code']
+        indexes  = [models.Index(fields=['target_date'])]
+
+    def __str__(self):
+        return f'{self.feeder_code} | {self.target_date} | {self.target_mwh} MWh'
+
+
+class TMOCollectionTarget(UUIDModel, models.Model):
+    """Collection targets vs actuals by segment — mirrors DataNest tmo_collection_targets."""
+    tmo_id         = models.IntegerField(unique=True, help_text='DataNest tmo_id')
+    segment_code   = models.CharField(max_length=100, db_index=True)
+    sub_segment    = models.CharField(max_length=100)
+    period_month   = models.DateField(db_index=True)
+    target_amount  = models.DecimalField(max_digits=18, decimal_places=2)
+    actual_amount  = models.DecimalField(max_digits=18, decimal_places=2)
+    set_by_user_id = models.CharField(max_length=100, blank=True)
+    dn_created_at  = models.DateTimeField(null=True, blank=True)
+    dn_updated_at  = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-period_month', 'segment_code', 'sub_segment']
+        indexes  = [models.Index(fields=['period_month', 'segment_code'])]
+
+    def __str__(self):
+        return f'{self.segment_code}/{self.sub_segment} | {self.period_month}'
+
+
+class TMOBillingEfficiency(UUIDModel, models.Model):
+    """Billing efficiency BE/FBE — mirrors DataNest tmo_billing_efficiency."""
+    SCOPE_CHOICES = [
+        ('feeder',   'Feeder'),
+        ('district', 'District'),
+        ('state',    'State'),
+    ]
+    tmo_id                = models.IntegerField(unique=True, help_text='DataNest tmo_id')
+    scope_type            = models.CharField(max_length=20, choices=SCOPE_CHOICES, db_index=True)
+    scope_code            = models.CharField(max_length=100)
+    scope_label           = models.CharField(max_length=200, blank=True)
+    period_month          = models.DateField(db_index=True)
+    energy_delivered_gwh  = models.DecimalField(max_digits=14, decimal_places=4)
+    energy_billed_gwh     = models.DecimalField(max_digits=14, decimal_places=4)
+    target_revenue_amount = models.DecimalField(max_digits=18, decimal_places=2)
+    billed_amount         = models.DecimalField(max_digits=18, decimal_places=2)
+    set_by_user_id        = models.CharField(max_length=100, blank=True)
+    dn_created_at         = models.DateTimeField(null=True, blank=True)
+    dn_updated_at         = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-period_month', 'scope_type', 'scope_label']
+        indexes  = [models.Index(fields=['period_month', 'scope_type'])]
+
+    def __str__(self):
+        return f'{self.scope_label or self.scope_code} | {self.period_month}'

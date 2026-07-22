@@ -31,17 +31,18 @@ from datetime import date, timedelta
 from decimal import Decimal
 
 from dateutil.relativedelta import relativedelta
-from django.db.models import DecimalField, ExpressionWrapper, F
+from django.db.models import DecimalField, ExpressionWrapper, F, Sum
 
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
 from commercial.analytics_utils import (
-    VAT_RATE,
+    calc_billing,
+    calc_coverage,
+    compute_period_baseline,
     customer_filter_kwargs,
     metric,
     parse_date_range,
-    reading_filter_kwargs,
 )
 from commercial.models import CommercialCustomer, MeterReading
 
@@ -126,59 +127,36 @@ def commercial_trend(request):
     if feeder_slug:
         read_base['customer__feeder__slug'] = feeder_slug
 
-    # ── ONE query spanning all 5 periods ─────────────────────────────────────
-    overall_start = all_periods[0]['start_date']
-    overall_end   = all_periods[-1]['end_date']
-
-    rows = list(
-        MeterReading.objects
-        .filter(
-            **read_base,
-            reading_date__gte=overall_start,
-            reading_date__lte=overall_end,
-            billed_consumption__isnull=False,
-            tariff_rate__isnull=False,
-        )
-        .values(
-            'reading_date',
-            'customer_id',
-            'billed_consumption',
-            'tariff_rate',
-            'present_reading',
-            'previous_reading',
-        )
+    # ── Per-period metrics using the same calc_billing pipeline as all other views
+    customers_qs = CommercialCustomer.objects.filter(**cust_kwargs)
+    _consumed_expr = ExpressionWrapper(
+        F('present_reading') - F('previous_reading'),
+        output_field=DecimalField(max_digits=20, decimal_places=4),
     )
-
-    # ── Bucket rows into periods in Python — no extra DB hits ─────────────────
-    ZERO = Decimal('0')
 
     results = []
     for period in all_periods:
         p_start = period['start_date']
         p_end   = period['end_date']
+        p_days  = period['days']
 
-        total_kwh    = ZERO
-        raw_ec       = ZERO
-        consumed_kwh = ZERO
-        read_ids     = set()
+        p_readings_qs = MeterReading.objects.filter(
+            **read_base,
+            reading_date__gte=p_start,
+            reading_date__lte=p_end,
+        )
 
-        for r in rows:
-            if not (p_start <= r['reading_date'] <= p_end):
-                continue
-            kwh  = Decimal(str(r['billed_consumption']))
-            rate = Decimal(str(r['tariff_rate']))
-            total_kwh += kwh
-            raw_ec    += kwh * rate
-            read_ids.add(r['customer_id'])
-            if r['present_reading'] is not None and r['previous_reading'] is not None:
-                consumed_kwh += Decimal(str(r['present_reading'])) - Decimal(str(r['previous_reading']))
+        baseline = compute_period_baseline(p_readings_qs, p_start, p_end)
+        billing  = calc_billing(p_readings_qs, period_days=p_days, customer_baseline=baseline, period_start=p_start)
+        coverage = calc_coverage(customers_qs, p_readings_qs)
 
-        energy_charge  = round(raw_ec, 2)
-        vat            = round(raw_ec * VAT_RATE, 2)
-        total_billed   = round(energy_charge + vat, 2)
-        customers_read = len(read_ids)
-        coverage_rate  = round(customers_read / total_customers * 100, 2) if total_customers else 0
-        arpu           = round(total_billed / customers_read, 2) if customers_read else ZERO
+        consumed_kwh = p_readings_qs.filter(
+            present_reading__isnull=False, previous_reading__isnull=False
+        ).aggregate(total=Sum(_consumed_expr))['total'] or Decimal('0')
+
+        customers_read = coverage['read']
+        total_billed   = float(billing['total_billed_amount'])
+        arpu           = round(total_billed / customers_read, 2) if customers_read else 0
 
         results.append({
             'period': {
@@ -186,17 +164,17 @@ def commercial_trend(request):
                 'start_date': str(p_start),
                 'end_date':   str(p_end),
                 'label':      period['label'],
-                'days':       period['days'],
-                'is_current': period['is_current'],
+                'days':       p_days,
+                'is_current': period.get('is_current', False),
             },
-            'actual_billed_kwh':   metric(float(round(total_kwh, 2)),    unit='kWh',  explanation='Energy billed from real meter readings in this period.'),
-            'energy_consumed_kwh': metric(float(round(consumed_kwh, 2)), unit='kWh',  explanation='Sum of (present_reading - previous_reading) for all customers read in this period.'),
-            'actual_total_billed': metric(float(total_billed),           unit='NGN',  explanation='Total revenue billed including VAT.'),
-            'energy_charge':       metric(float(energy_charge),          unit='NGN',  explanation='Revenue excluding VAT — billed_consumption × tariff_rate.'),
-            'vat':                 metric(float(vat),                    unit='NGN',  explanation='7.5% VAT on energy charge.'),
-            'customers_read':      metric(customers_read,                             explanation='Distinct customers with at least one reading in this period.'),
-            'coverage_rate':       metric(coverage_rate,                 unit='%',    explanation='customers_read / total_registered × 100.'),
-            'arpu':                metric(float(arpu),                   unit='NGN',  explanation='Average Revenue Per Customer — actual_total_billed / customers_read.'),
+            'actual_billed_kwh':   metric(float(billing['total_billed_kwh']),    unit='kWh', explanation='Energy billed from real meter readings in this period.'),
+            'energy_consumed_kwh': metric(float(round(consumed_kwh, 2)),          unit='kWh', explanation='Sum of (present_reading - previous_reading) for all customers read in this period.'),
+            'actual_total_billed': metric(float(billing['total_billed_amount']),  unit='NGN', explanation='Total revenue billed including VAT.'),
+            'energy_charge':       metric(float(billing['energy_charge']),         unit='NGN', explanation='Revenue excluding VAT — billed_consumption × tariff_rate.'),
+            'vat':                 metric(float(billing['vat']),                   unit='NGN', explanation='7.5% VAT on energy charge.'),
+            'customers_read':      metric(customers_read,                                      explanation='Distinct customers with at least one reading in this period.'),
+            'coverage_rate':       metric(coverage['rate'],                        unit='%',   explanation='customers_read / total_registered × 100.'),
+            'arpu':                metric(arpu,                                    unit='NGN', explanation='Average Revenue Per Customer — actual_total_billed / customers_read.'),
         })
 
     return Response({

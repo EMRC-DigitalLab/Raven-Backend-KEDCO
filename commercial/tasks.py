@@ -133,6 +133,51 @@ def sync_commercial_tariff_task(self):
 
 
 @shared_task(
+    name='commercial.tasks.sync_tmo_feeder_targets_task',
+    bind=True,
+    max_retries=2,
+    default_retry_delay=60,
+)
+def sync_tmo_feeder_targets_task(self):
+    """Sync DataNest tmo_targets -> TMOFeederTarget. Runs every 30 minutes."""
+    from commercial.sync.tmo import sync_tmo_feeder_targets
+    try:
+        _run_sync('tmo_feeder_targets', sync_tmo_feeder_targets)
+    except Exception as exc:
+        raise self.retry(exc=exc)
+
+
+@shared_task(
+    name='commercial.tasks.sync_tmo_collection_targets_task',
+    bind=True,
+    max_retries=2,
+    default_retry_delay=60,
+)
+def sync_tmo_collection_targets_task(self):
+    """Sync DataNest tmo_collection_targets -> TMOCollectionTarget. Runs every 30 minutes."""
+    from commercial.sync.tmo import sync_tmo_collection_targets
+    try:
+        _run_sync('tmo_collection_targets', sync_tmo_collection_targets)
+    except Exception as exc:
+        raise self.retry(exc=exc)
+
+
+@shared_task(
+    name='commercial.tasks.sync_tmo_billing_efficiency_task',
+    bind=True,
+    max_retries=2,
+    default_retry_delay=60,
+)
+def sync_tmo_billing_efficiency_task(self):
+    """Sync DataNest tmo_billing_efficiency -> TMOBillingEfficiency. Runs every 30 minutes."""
+    from commercial.sync.tmo import sync_tmo_billing_efficiency
+    try:
+        _run_sync('tmo_billing_efficiency', sync_tmo_billing_efficiency)
+    except Exception as exc:
+        raise self.retry(exc=exc)
+
+
+@shared_task(
     name='commercial.tasks.backfill_commercial_data_task',
     bind=True,
     max_retries=0,

@@ -166,6 +166,21 @@ app.conf.update(
             'task': 'commercial.tasks.sync_commercial_tariff_task',
             'schedule': crontab(minute=45),
         },
+
+        # ── DataNest -> Raven TMO Sync ────────────────────────────────────────
+        # TMO data changes infrequently (monthly targets) — sync every 30 min
+        'tmo-sync-feeder-targets': {
+            'task': 'commercial.tasks.sync_tmo_feeder_targets_task',
+            'schedule': crontab(minute='*/30'),
+        },
+        'tmo-sync-collection-targets': {
+            'task': 'commercial.tasks.sync_tmo_collection_targets_task',
+            'schedule': crontab(minute='*/30'),
+        },
+        'tmo-sync-billing-efficiency': {
+            'task': 'commercial.tasks.sync_tmo_billing_efficiency_task',
+            'schedule': crontab(minute='*/30'),
+        },
     },
 )
 

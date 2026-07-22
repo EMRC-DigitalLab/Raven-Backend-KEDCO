@@ -7,6 +7,7 @@ from commercial.analytics_utils import (
     calc_billing,
     calc_coverage,
     calc_energy_delivered,
+    compute_period_baseline,
     parse_date_range,
 )
 from commercial.models import CommercialCustomer, DistributionTransformer, MeterReading
@@ -45,7 +46,8 @@ def transformer_metrics_by_feeder_view(request):
             reading_date__lte=p_end,
         )
 
-        billing   = calc_billing(readings_qs, period_days=days)
+        baseline  = compute_period_baseline(readings_qs, p_start, p_end)
+        billing   = calc_billing(readings_qs, period_days=days, customer_baseline=baseline, period_start=p_start)
         coverage  = calc_coverage(customers_qs, readings_qs)
         delivered = calc_energy_delivered([feeder.id], date_range)
 

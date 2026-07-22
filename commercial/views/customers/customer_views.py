@@ -24,6 +24,8 @@ from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
 from commercial.analytics_utils import (
+    calc_billing,
+    compute_period_baseline,
     customer_filter_kwargs,
     parse_date_range,
     reading_filter_kwargs,
@@ -33,31 +35,20 @@ from commercial.models import CommercialCustomer, MeterReading
 VAT_RATE = Decimal('0.075')
 
 
-def _customer_billing_summary(customer, readings_qs):
-    """Compute billing summary for a single customer from a pre-scoped readings queryset."""
-    r_qs = readings_qs.filter(customer=customer)
-    rows = list(
-        r_qs.filter(billed_consumption__isnull=False, tariff_rate__isnull=False)
-        .values('billed_consumption', 'tariff_rate', 'reading_date')
-        .order_by('-reading_date')
-    )
-    total_kwh     = Decimal('0')
-    energy_charge = Decimal('0')
-    for r in rows:
-        kwh  = Decimal(str(r['billed_consumption']))
-        rate = Decimal(str(r['tariff_rate']))
-        total_kwh     += kwh
-        energy_charge += kwh * rate
-
-    vat   = round(energy_charge * VAT_RATE, 2)
-    total = round(energy_charge + vat, 2)
+def _customer_billing_summary(customer, readings_qs, date_range):
+    """Period-normalised billing summary for one customer — consistent with all other views."""
+    r_qs     = readings_qs.filter(customer=customer)
+    baseline = compute_period_baseline(r_qs, date_range['start_date'], date_range['end_date'])
+    billing  = calc_billing(r_qs, period_days=date_range['days'], customer_baseline=baseline, period_start=date_range['start_date'])
+    count    = r_qs.filter(billed_consumption__isnull=False).count()
+    last     = r_qs.filter(billed_consumption__isnull=False).order_by('-reading_date').values_list('reading_date', flat=True).first()
     return {
-        'readings_count':   len(rows),
-        'total_billed_kwh': float(round(total_kwh, 2)),
-        'energy_charge':    float(round(energy_charge, 2)),
-        'vat':              float(vat),
-        'total_billed':     float(total),
-        'last_reading_date': str(rows[0]['reading_date']) if rows else None,
+        'readings_count':    count,
+        'total_billed_kwh':  float(billing['total_billed_kwh']),
+        'energy_charge':     float(billing['energy_charge']),
+        'vat':               float(billing['vat']),
+        'total_billed':      float(billing['total_billed_amount']),
+        'last_reading_date': str(last) if last else None,
     }
 
 
@@ -115,7 +106,7 @@ def customer_list(request):
 
     results = []
     for c in customers:
-        billing  = _customer_billing_summary(c, readings_qs)
+        billing  = _customer_billing_summary(c, readings_qs, date_range)
         feeder   = c.feeder
         district = feeder.business_district if feeder else None
         state    = district.state if district else None
@@ -200,20 +191,15 @@ def customer_detail(request, pk):
             'audited_at':   r.audited_at.isoformat() if r.audited_at else None,
         })
 
-    # Billing summary scoped to this customer in the period
-    total_kwh     = Decimal('0')
-    energy_charge = Decimal('0')
-    for rd in readings_data:
-        total_kwh     += Decimal(str(rd['billed_consumption']))
-        energy_charge += Decimal(str(rd['energy_charge']))
-    vat   = round(energy_charge * VAT_RATE, 2)
-    total = round(energy_charge + vat, 2)
+    # Billing summary — period-normalised, consistent with all other commercial views
+    baseline = compute_period_baseline(readings_qs, date_range['start_date'], date_range['end_date'])
+    billing  = calc_billing(readings_qs, period_days=date_range['days'], customer_baseline=baseline, period_start=date_range['start_date'])
     billing_summary = {
-        'readings_count':   len(readings_data),
-        'total_billed_kwh': float(round(total_kwh, 2)),
-        'energy_charge':    float(round(energy_charge, 2)),
-        'vat':              float(vat),
-        'total_billed':     float(total),
+        'readings_count':    len(readings_data),
+        'total_billed_kwh':  float(billing['total_billed_kwh']),
+        'energy_charge':     float(billing['energy_charge']),
+        'vat':               float(billing['vat']),
+        'total_billed':      float(billing['total_billed_amount']),
         'last_reading_date': readings_data[0]['reading_date'] if readings_data else None,
     }
 
@@ -289,7 +275,7 @@ def top_customers(request):
 
     ranked = []
     for c in customers:
-        billing  = _customer_billing_summary(c, readings_qs)
+        billing  = _customer_billing_summary(c, readings_qs, date_range)
         feeder   = c.feeder
         district = feeder.business_district if feeder else None
         state    = district.state if district else None

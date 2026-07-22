@@ -13,7 +13,6 @@ Query params:
 """
 
 from datetime import date, timedelta
-from decimal import Decimal
 
 from dateutil.relativedelta import relativedelta
 from django.db.models import Count
@@ -29,6 +28,7 @@ from commercial.analytics_utils import (
     calc_energy_consumed,
     calc_energy_delivered,
     calc_estimated_billing,
+    compute_period_baseline,
     customer_filter_kwargs,
     metric,
     parse_date_range,
@@ -36,6 +36,7 @@ from commercial.analytics_utils import (
 )
 from commercial.bulk_analytics import (
     bulk_coverage,
+    bulk_estimated_billing,
     feeder_dim_map,
     bulk_billing,
     bulk_energy_consumed,
@@ -104,10 +105,16 @@ def commercial_overview(request):
     total_mdni   = customers_qs.filter(customer_type='MDNI').count()
     bypass_count = customers_qs.filter(is_bypass=True).count()
 
-    # ── Billing (actual from real readings) ───────────────────────────────────
-    billing     = calc_billing(readings_qs, period_days=date_range['days'])
-    billing_raw = calc_billing(readings_qs)  # raw totals for energy gap (no period scaling)
+    # ── Baseline assumption: derive estimated daily rate from surrounding months
+    # for first-sync customers whose raw billed_consumption is inflated.
+    # All billing figures are estimated — this applies across all periods.
+    customer_baseline = compute_period_baseline(
+        readings_qs, date_range['start_date'], date_range['end_date']
+    )
 
+    # ── Billing ───────────────────────────────────────────────────────────────
+    p_start     = date_range['start_date']
+    billing     = calc_billing(readings_qs, period_days=date_range['days'], customer_baseline=customer_baseline, period_start=p_start)
     # ── Daily consumption estimate from actual readings ────────────────────────
     daily_billed_kwh = calc_daily_estimate(billing, date_range)
 
@@ -117,9 +124,9 @@ def commercial_overview(request):
     # ── Estimated billing for unread customers ────────────────────────────────
     estimated = calc_estimated_billing(customers_qs, coverage['read_ids'], date_range)
 
-    # ── MDI vs MDNI revenue split (from actual readings) ──────────────────────
-    mdi_billing  = calc_billing(readings_qs.filter(reading_type='MDI'),  period_days=date_range['days'])
-    mdni_billing = calc_billing(readings_qs.filter(reading_type='MDNI'), period_days=date_range['days'])
+    # ── MDI vs MDNI revenue split ─────────────────────────────────────────────
+    mdi_billing  = calc_billing(readings_qs.filter(reading_type='MDI'),  period_days=date_range['days'], customer_baseline=customer_baseline, period_start=p_start)
+    mdni_billing = calc_billing(readings_qs.filter(reading_type='MDNI'), period_days=date_range['days'], customer_baseline=customer_baseline, period_start=p_start)
     total_rev    = billing['total_billed_amount']
     mdi_split  = round(float(mdi_billing['total_billed_amount']) / float(total_rev) * 100, 2) if total_rev else 0
     mdni_split = round(float(mdni_billing['total_billed_amount']) / float(total_rev) * 100, 2) if total_rev else 0
@@ -158,15 +165,15 @@ def commercial_overview(request):
     _pd = date_range['days']   # period_days — normalises billing to selected window
 
     energy_by_state    = rollup_energy(pf_energy, f2s)
-    billing_by_state   = bulk_billing(readings_qs, f2s,    period_days=_pd)
+    billing_by_state   = bulk_billing(readings_qs, f2s,    period_days=_pd, customer_baseline=customer_baseline, period_start=p_start)
     consumed_by_state  = bulk_energy_consumed(readings_qs, f2s)
 
     energy_by_district   = rollup_energy(pf_energy, f2dmap)
-    billing_by_district  = bulk_billing(readings_qs, f2dmap, period_days=_pd)
+    billing_by_district  = bulk_billing(readings_qs, f2dmap, period_days=_pd, customer_baseline=customer_baseline, period_start=p_start)
     consumed_by_district = bulk_energy_consumed(readings_qs, f2dmap)
 
     energy_by_band   = rollup_energy(pf_energy, f2b)
-    billing_by_band  = bulk_billing(readings_qs, f2b,    period_days=_pd)
+    billing_by_band  = bulk_billing(readings_qs, f2b,    period_days=_pd, customer_baseline=customer_baseline, period_start=p_start)
     consumed_by_band = bulk_energy_consumed(readings_qs, f2b)
 
     _empty_b = {'total_billed_kwh': ZERO, 'total_billed_amount': ZERO}
@@ -189,25 +196,6 @@ def commercial_overview(request):
     trend_start   = trend_periods[0]['start_date']
     trend_end     = trend_periods[-1]['end_date']
 
-    # ONE readings query spanning all 4 periods
-    trend_rows = list(
-        MeterReading.objects
-        .filter(
-            customer__in=customers_qs,
-            reading_date__gte=trend_start,
-            reading_date__lte=trend_end,
-            billed_consumption__isnull=False,
-            tariff_rate__isnull=False,
-        )
-        .values(
-            'reading_date',
-            'customer_id',
-            'customer__feeder__business_district__state_id',
-            'billed_consumption',
-            'tariff_rate',
-        )
-    )
-
     # Energy per trend period — reuse current-period result, 3 new calls for prev
     trend_energy_by_period = []
     for p in trend_periods:
@@ -227,30 +215,38 @@ def commercial_overview(request):
         .annotate(n=Count('id'))
     }
 
-    # Bucket trend rows per period → per state in Python (no extra DB hits)
-    _ZERO_D = Decimal('0')
+    # Trend billing: same baseline-adjusted calculation as current period
+    def _trend_billing_for_period(p, customers_qs, f2s):
+        p_readings = MeterReading.objects.filter(
+            customer__in=customers_qs,
+            reading_date__gte=p['start_date'],
+            reading_date__lte=p['end_date'],
+            billed_consumption__isnull=False,
+            tariff_rate__isnull=False,
+        )
+        p_baseline = compute_period_baseline(p_readings, p['start_date'], p['end_date'])
+        p_bill     = bulk_billing(p_readings, f2s, period_days=p['days'], customer_baseline=p_baseline, period_start=p['start_date'])
+        p_cov      = bulk_coverage(customers_qs, p_readings, f2s)
+        return {
+            sid: {
+                'kwh':      b['total_billed_kwh'],
+                'ec':       b['energy_charge'],
+                'read_ids': p_cov.get(sid, {}).get('read_ids', set()),
+            }
+            for sid, b in p_bill.items()
+        }
 
-    def _bucket_state(rows, p_start, p_end, p_days):
-        # Scale raw billed_consumption to the period window (same logic as calc_billing)
-        p_scale = Decimal(str(p_days)) / Decimal('30')
-        acc = {}
-        for r in rows:
-            if not (p_start <= r['reading_date'] <= p_end):
-                continue
-            sid = r['customer__feeder__business_district__state_id']
-            if sid is None:
-                continue
-            if sid not in acc:
-                acc[sid] = {'kwh': _ZERO_D, 'ec': _ZERO_D, 'read_ids': set()}
-            kwh  = Decimal(str(r['billed_consumption'])) * p_scale
-            rate = Decimal(str(r['tariff_rate']))
-            acc[sid]['kwh'] += kwh
-            acc[sid]['ec']  += kwh * rate
-            acc[sid]['read_ids'].add(r['customer_id'])
-        return acc
-
+    _current_trend_bill = {
+        sid: {
+            'kwh':      billing_by_state.get(sid, _empty_b)['total_billed_kwh'],
+            'ec':       billing_by_state.get(sid, _empty_b)['energy_charge'],
+            'read_ids': coverage_by_state.get(sid, {}).get('read_ids', set()),
+        }
+        for sid in set(billing_by_state) | set(coverage_by_state)
+    }
     trend_bill_by_period = [
-        _bucket_state(trend_rows, p['start_date'], p['end_date'], p['days'])
+        _current_trend_bill if p.get('is_current')
+        else _trend_billing_for_period(p, customers_qs, f2s)
         for p in trend_periods
     ]
 
@@ -268,7 +264,7 @@ def commercial_overview(request):
 
         state_trend = []
         for i, p in enumerate(trend_periods):
-            bill = trend_bill_by_period[i].get(sid, {'kwh': _ZERO_D, 'ec': _ZERO_D, 'read_ids': set()})
+            bill = trend_bill_by_period[i].get(sid, {'kwh': ZERO, 'ec': ZERO, 'read_ids': set()})
             t_ed = trend_energy_by_period[i].get(sid, {'total_mwh': 0.0, 'mode': 'system'})
             ec   = float(round(bill['ec'], 2))
             vat  = round(ec * 0.075, 2)
@@ -295,18 +291,28 @@ def commercial_overview(request):
             'trend': state_trend,
         })
 
+    coverage_by_district = bulk_coverage(customers_qs, readings_qs, f2dmap)
+    estimated_by_district = bulk_estimated_billing(customers_qs, coverage_by_district, date_range, f2dmap)
+
     by_district_breakdown = []
     for d_obj in BusinessDistrict.objects.exclude(state__name='Test State').select_related('state').order_by('name'):
         did = d_obj.id
         ed  = energy_by_district.get(did, {'total_mwh': 0.0, 'mode': 'system'})
         b   = billing_by_district.get(did, _empty_b)
+        cov_d = coverage_by_district.get(did, {'read': 0, 'readable': 0, 'rate': 0.0})
+        est_d = estimated_by_district.get(did, {'estimated_kwh': ZERO, 'estimated_revenue': ZERO})
+        d_base = _bd_row(ed, b, consumed_by_district.get(did, ZERO))
+        d_base['revenue_billed']       = float(b.get('total_billed_amount', ZERO))
+        d_base['estimated_revenue']    = float(est_d.get('estimated_revenue', ZERO))
+        d_base['total_projected_revenue'] = float(b.get('total_billed_amount', ZERO)) + float(est_d.get('estimated_revenue', ZERO))
+        d_base['coverage_rate']        = cov_d['rate']
         by_district_breakdown.append({
             'district': {
                 'slug':  d_obj.slug,
                 'name':  d_obj.name,
                 'state': d_obj.state.slug if d_obj.state else None,
             },
-            **_bd_row(ed, b, consumed_by_district.get(did, ZERO)),
+            **d_base,
         })
 
     by_band_breakdown = []
@@ -364,10 +370,11 @@ def commercial_overview(request):
                 unit='kWh',
                 explanation='Total energy consumed = sum(present_reading - previous_reading) for all customers read in this period. MDI (Maximum Demand Industrial) customers only contribute actual metered values.',
             ),
-            'actual_billed_kwh': metric(
-                float(billing['actual_billed_kwh']),
+            'estimated_billed_kwh_read': metric(
+                float(billing['total_billed_kwh']),
                 unit='kWh',
-                explanation='Energy billed from real meter readings only (estimation_method is empty).',
+                mode='estimated',
+                explanation='Estimated energy billed from customers read this period.',
             ),
             'estimated_billed_kwh': metric(
                 float(billing['estimated_billed_kwh'] + estimated['estimated_kwh']),
@@ -402,13 +409,13 @@ def commercial_overview(request):
             'energy_delivered_vs_billed': metric(
                 {
                     'delivered_kwh':        delivered_kwh_period,
-                    'actual_billed_kwh':    float(billing_raw['total_billed_kwh']),
-                    'projected_billed_kwh': float(billing_raw['total_billed_kwh'] + estimated['estimated_kwh']),
-                    'gap_kwh':              round(delivered_kwh_period - float(billing_raw['total_billed_kwh']), 2),
+                    'actual_billed_kwh':    float(billing['total_billed_kwh']),
+                    'projected_billed_kwh': float(billing['total_billed_kwh'] + estimated['estimated_kwh']),
+                    'gap_kwh':              round(delivered_kwh_period - float(billing['total_billed_kwh']), 2),
                 },
                 unit='kWh',
                 mode=delivered['mode'],
-                explanation='Energy delivered vs energy billed. Gap = delivered minus actual billed (raw, unscaled). Projected includes estimates for unread customers.',
+                explanation='Energy delivered vs energy billed. Gap = delivered minus period-normalised billed kWh. Projected adds estimates for unread customers.',
             ),
         },
 
@@ -416,7 +423,8 @@ def commercial_overview(request):
             'actual_energy_charge': metric(
                 float(billing['energy_charge']),
                 unit='NGN',
-                explanation='Actual energy charge from real readings — billed_consumption x tariff_rate per customer.',
+                mode='estimated',
+                explanation='Estimated energy charge from meter readings — billed_consumption x tariff_rate per customer, baseline-adjusted for first-sync periods.',
             ),
             'estimated_energy_charge': metric(
                 float(estimated['estimated_energy_charge']),
@@ -427,15 +435,17 @@ def commercial_overview(request):
             'actual_vat': metric(
                 float(billing['vat']),
                 unit='NGN',
-                explanation='7.5% VAT on actual energy charge.',
+                mode='estimated',
+                explanation='7.5% VAT on estimated energy charge.',
             ),
             'actual_total_billed': metric(
                 float(billing['total_billed_amount']),
                 unit='NGN',
+                mode='estimated',
                 explanation=(
-                    'Revenue confirmed from customers who were physically read this period. '
+                    'Estimated revenue from customers read this period. '
                     'Calculated as: billed consumption (kWh) x tariff rate per customer, plus 7.5% VAT. '
-                    'This is hard fact — sourced directly from DataNest meter readings.'
+                    'First-sync customer values are baseline-adjusted from surrounding months.'
                 ),
             ),
             'estimated_revenue': metric(
@@ -473,7 +483,8 @@ def commercial_overview(request):
             'arpu': metric(
                 float(arpu),
                 unit='NGN',
-                explanation='Average Revenue Per Customer — actual total billed divided by customers read in this period.',
+                mode='estimated',
+                explanation='Average Revenue Per Customer — estimated total billed divided by customers read in this period.',
             ),
         },
 
@@ -532,7 +543,8 @@ def commercial_overview(request):
             'actual_revenue': metric(
                 float(billing['total_billed_amount']),
                 unit='NGN',
-                explanation='Confirmed revenue from customers physically read in this period. Does not include estimates.',
+                mode='estimated',
+                explanation='Estimated revenue from customers read this period, baseline-adjusted for first-sync periods.',
             ),
             'projected_revenue': metric(
                 float(billing['total_billed_amount'] + estimated['estimated_revenue']),
@@ -543,11 +555,7 @@ def commercial_overview(request):
             'customers_read': coverage['read'],
             'total_customers': coverage['read'] + coverage['unread'],
             'coverage_rate': coverage['rate'],
-            'revenue_mode': (
-                'actual'         if coverage['rate'] >= 99.0 else
-                'partial_actual' if coverage['rate'] >= 50.0 else
-                'estimated'
-            ),
+            'revenue_mode': 'estimated',
             'period_label': date_range['label'],
         },
 
@@ -558,5 +566,98 @@ def commercial_overview(request):
             'by_state':    by_state_breakdown,
             'by_district': by_district_breakdown,
             'by_band':     by_band_breakdown,
+        },
+
+        # ── Methodology ───────────────────────────────────────────────────────
+        # Documents exactly how each key metric is derived so that any figure
+        # can be traced back to its source data and formula.
+        'methodology': {
+            'billing': {
+                'summary': (
+                    'All billing figures are estimates. Every reading from DataNest is normalised '
+                    'to the selected period window so that monthly, weekly, and daily views are '
+                    'directly comparable.'
+                ),
+                'formula': 'period_kwh = billed_consumption ÷ billing_cycle_days × period_days',
+                'billing_cycle_days': (
+                    'For each customer, billing_cycle_days = days between their current reading '
+                    'and their most recent prior reading in Raven\'s database (capped at 1 day minimum). '
+                    'Lookup cutoff is always the period start date so the result is stable across all views.'
+                ),
+                'first_sync_customers': (
+                    'Customers whose first DataNest reading falls within the selected period have no '
+                    'prior reading in the database. Their raw billed_consumption therefore represents '
+                    'accumulated consumption since meter installation — not a single billing cycle — '
+                    'and cannot be divided by a meaningful billing_cycle_days. '
+                    'For these customers, Raven derives an estimated daily rate from the 60-day window '
+                    'immediately after the period end (forward baseline). If no data exists in that window, '
+                    'it falls back to the 60-day window before the period start (backward baseline). '
+                    'period_kwh = estimated_daily_kwh × period_days.'
+                ),
+                'fallback': (
+                    'If a customer has no prior reading and no baseline data in either window, '
+                    'billed_consumption ÷ 30 × period_days is used as a last resort.'
+                ),
+            },
+            'revenue': {
+                'summary': (
+                    'Revenue is computed per customer then summed. '
+                    'energy_charge = period_kwh × tariff_rate. '
+                    'VAT = energy_charge × 7.5%. '
+                    'total_billed = energy_charge + VAT.'
+                ),
+                'tariff_rate': (
+                    'Each reading carries the tariff rate recorded in DataNest at the time of reading. '
+                    'Raven uses that rate directly — no override is applied.'
+                ),
+                'estimated_revenue': (
+                    'For customers not read this period, Raven projects revenue using their last known '
+                    'daily rate: daily_kwh = last_billed_consumption ÷ interval_days, where interval_days '
+                    'is the gap between their two most recent positive readings (falls back to the number '
+                    'of days in that reading\'s calendar month if only one reading exists). '
+                    'estimated_revenue = daily_kwh × tariff_rate × (1 + 0.075) × period_days.'
+                ),
+                'projected_revenue': (
+                    'total_projected_revenue = actual_billed (from read customers) + estimated_revenue '
+                    '(for unread customers). As field coverage improves, the estimated portion shrinks '
+                    'and actual portion grows.'
+                ),
+            },
+            'energy_gap': {
+                'summary': (
+                    'energy_gap = energy_delivered_kwh − billed_kwh_raw. '
+                    'A positive gap means more energy left the grid than was billed — '
+                    'the difference represents AT&C losses, unmetered consumption, or bypass. '
+                    'A value close to zero indicates strong commercial discipline.'
+                ),
+                'billed_kwh_raw': (
+                    'billed_kwh_raw is the period-normalised billed energy: each customer\'s '
+                    'billed_consumption is scaled to the selected window using their billing cycle length '
+                    '(billed_consumption ÷ billing_cycle_days × period_days). '
+                    'This makes the comparison with energy_delivered period-consistent.'
+                ),
+                'energy_delivered': (
+                    'Primary source: EnergyDelivered table (meter-based daily totals). '
+                    'Feeders where the maximum single-day value exceeds 500 MWh are treated as outliers '
+                    'and fall back to HourlyLoad avg_load × supply_hours. '
+                    'The mode field indicates which source was used: meter, system, or mixed.'
+                ),
+            },
+            'coverage_rate': {
+                'formula': 'coverage_rate = customers_read ÷ readable_customers × 100',
+                'readable_customers': (
+                    'Total registered customers minus those with meter_status = faulty or missing. '
+                    'Faulty and missing meters are excluded because they cannot physically be read '
+                    'and should not penalise the field team\'s coverage score.'
+                ),
+            },
+            'period_normalisation': {
+                'summary': (
+                    f'Selected period: {date_range["label"]} ({date_range["days"]} days, '
+                    f'{str(date_range["start_date"])} to {str(date_range["end_date"])}). '
+                    'All billing and revenue figures are scaled to this window so that a 31-day month '
+                    'and a 28-day month produce comparable per-period totals.'
+                ),
+            },
         },
     })

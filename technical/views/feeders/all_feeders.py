@@ -154,18 +154,11 @@ def calculate_feeder_interruption_metrics_sql(feeder_id, from_date, to_date, exc
     )
     
     if to_date >= today:
-        # Querying today - use current time as end boundary
         end_of_period = now
-        print(f"DEBUG: Querying today/future - end_of_period set to NOW: {end_of_period}")
     else:
-        # Querying past date - use end of day
         end_of_period = timezone.make_aware(
             datetime.combine(to_date, datetime.max.time())
         )
-        print(f"DEBUG: Querying past date - end_of_period set to end of day: {end_of_period}")
-    
-    print(f"DEBUG FEEDER {feeder_id}: from_date={from_date}, to_date={to_date}, today={today}")
-    print(f"DEBUG FEEDER {feeder_id}: start_of_period={start_of_period}, end_of_period={end_of_period}, now={now}")
     
     # Build exclusion clause
     exclusion_clause = ""
@@ -211,27 +204,16 @@ def calculate_feeder_interruption_metrics_sql(feeder_id, from_date, to_date, exc
     """
     
     with connection.cursor() as cursor:
-        # Get duration (includes ongoing from before)
         cursor.execute(duration_query, duration_params)
         result = cursor.fetchone()
         total_hours = float(result[0]) if result and result[0] else 0
-        
-        print(f"DEBUG FEEDER {feeder_id}: total_hours from SQL = {total_hours}")
-        
-        # Get count (only those that started in period)
+
         cursor.execute(count_query, count_params)
         result = cursor.fetchone()
         total_interruptions = result[0] if result and result[0] else 0
-    
-    # Calculate average per day
+
     avg_hours_per_day = total_hours / period_days if period_days > 0 else 0
-    
-    print(f"DEBUG FEEDER {feeder_id}: avg_hours_per_day before cap = {avg_hours_per_day}")
-    
-    # Ensure non-negative and cap at 24
     avg_hours_per_day = max(0, min(avg_hours_per_day, 24.0))
-    
-    print(f"DEBUG FEEDER {feeder_id}: avg_hours_per_day after cap = {avg_hours_per_day}")
     
     return round(avg_hours_per_day, 2), int(total_interruptions)
 

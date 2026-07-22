@@ -105,6 +105,7 @@ def available_sections(request):
             {"id": "commercial",  "name": "Commercial"},
             {"id": "financial",   "name": "Financial"},
             {"id": "comparison",  "name": "Comparisons"},
+            {"id": "tmo",         "name": "TMO"},
         ]
     })
 

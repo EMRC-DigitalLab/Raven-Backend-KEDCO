@@ -11,6 +11,11 @@ from .views import (
     MonthlyRevenueRecoveryViewSet,
     MonthlyUSoASubmissionViewSet,
 )
+from .nerc_views import (
+    api_feeder_streaming,
+    capping_estimated_bills,
+    revenue_recovery,
+)
 
 router = DefaultRouter()
 router.register(r'regulatory/energy-offtake', MonthlyEnergyOfftakeViewSet, basename='reg-energy-offtake')
@@ -24,4 +29,8 @@ router.register(r'regulatory/complaints-resolution', MonthlyNERCComplaintResolut
 
 urlpatterns = [
     path('', include(router.urls)),
+    # Computed NERC endpoints — derived live from Raven DB
+    path('nerc/capping-estimated-bills/', capping_estimated_bills, name='nerc-capping'),
+    path('nerc/revenue-recovery/',        revenue_recovery,         name='nerc-revenue-recovery'),
+    path('nerc/api-feeder-streaming/',    api_feeder_streaming,     name='nerc-api-streaming'),
 ]

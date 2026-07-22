@@ -18,6 +18,98 @@ from technical.utils.energy_utils import calculate_energy_delivered as _tech_ene
 VAT_RATE = Decimal('0.075')
 
 
+# ── Baseline helpers ───────────────────────────────────────────────────────────
+
+def fetch_customer_baseline(customer_ids, period_start, period_end):
+    """
+    For first-sync customers (no prior reading in DB), derive estimated daily
+    kWh from readings in the 60-day window AFTER period_end.
+    Falls back to the 60-day window BEFORE period_start when no forward data.
+    Returns {customer_id: Decimal daily_kwh}.
+    """
+    from datetime import timedelta
+
+    fwd_start = period_end  + timedelta(days=1)
+    fwd_end   = period_end  + timedelta(days=60)
+
+    fwd_rows = list(
+        MeterReading.objects
+        .filter(
+            customer_id__in=customer_ids,
+            reading_date__gte=fwd_start,
+            reading_date__lte=fwd_end,
+            billed_consumption__isnull=False,
+            billed_consumption__gt=0,
+        )
+        .values('customer_id')
+        .annotate(total_kwh=Sum('billed_consumption'))
+    )
+
+    ref_days = max((fwd_end - fwd_start).days + 1, 1)
+    result   = {}
+    covered  = set()
+    for r in fwd_rows:
+        result[r['customer_id']] = Decimal(str(r['total_kwh'])) / Decimal(str(ref_days))
+        covered.add(r['customer_id'])
+
+    remaining = [cid for cid in customer_ids if cid not in covered]
+    if remaining:
+        bwd_start = period_start - timedelta(days=60)
+        bwd_end   = period_start - timedelta(days=1)
+        bwd_days  = max((bwd_end - bwd_start).days + 1, 1)
+        bwd_rows  = list(
+            MeterReading.objects
+            .filter(
+                customer_id__in=remaining,
+                reading_date__gte=bwd_start,
+                reading_date__lte=bwd_end,
+                billed_consumption__isnull=False,
+                billed_consumption__gt=0,
+            )
+            .values('customer_id')
+            .annotate(total_kwh=Sum('billed_consumption'))
+        )
+        for r in bwd_rows:
+            result[r['customer_id']] = Decimal(str(r['total_kwh'])) / Decimal(str(bwd_days))
+
+    return result
+
+
+def compute_period_baseline(readings_qs, period_start, period_end):
+    """
+    Identify customers in readings_qs that have no prior reading in Raven's DB
+    (i.e. first-sync period), then return their estimated daily kWh derived
+    from surrounding months via fetch_customer_baseline().
+
+    Uses period_start as the cutoff (not min reading date from the queryset) so
+    that the same customer is always classified the same way regardless of which
+    scoped queryset calls this function.
+
+    Returns {customer_id: Decimal daily_kwh}.
+    """
+    customer_ids = list(
+        readings_qs
+        .filter(billed_consumption__isnull=False)
+        .values_list('customer_id', flat=True)
+        .distinct()
+    )
+    if not customer_ids:
+        return {}
+
+    has_prior = set(
+        MeterReading.objects
+        .filter(customer_id__in=customer_ids, reading_date__lt=period_start)
+        .values_list('customer_id', flat=True)
+        .distinct()
+    )
+
+    no_prev_ids = [cid for cid in customer_ids if cid not in has_prior]
+    if not no_prev_ids:
+        return {}
+
+    return fetch_customer_baseline(no_prev_ids, period_start, period_end)
+
+
 # ── Date helpers ──────────────────────────────────────────────────────────────
 
 def parse_date_range(request):
@@ -102,7 +194,7 @@ def reading_filter_kwargs(request, date_range):
 
 # ── Billing calculations ──────────────────────────────────────────────────────
 
-def calc_billing(readings_qs, period_days=None):
+def calc_billing(readings_qs, period_days=None, customer_baseline=None, period_start=None, baseline_period_days=None):
     """
     Calculate energy and revenue totals from a MeterReading queryset.
     Raven does its own math: energy_charge = billed_consumption × tariff_rate.
@@ -110,76 +202,108 @@ def calc_billing(readings_qs, period_days=None):
     When period_days is supplied, each reading's billed_consumption is
     normalised to the selected period:
         period_kwh = billed_consumption / billing_cycle_days × period_days
-    This makes daily, weekly, and monthly views show period-proportionate
-    figures rather than the raw accumulated billing cycle amount.
     billing_cycle_days defaults to 30 when no previous reading exists in DB.
 
-    Returns all figures in Decimal, plus:
-      - actual_billed_kwh:    from real meter reads (estimation_method='')
-      - estimated_billed_kwh: from DataNest-estimated readings
+    customer_baseline: optional {customer_id: Decimal daily_kwh} produced by
+    compute_period_baseline(). When a customer has no prior reading in DB and
+    appears in this map, their contribution is derived from the baseline daily
+    rate instead of the raw (potentially inflated first-sync) billed_consumption.
+    Only one baseline contribution is counted per customer regardless of how
+    many readings they have in the period. All baseline-derived values are
+    counted as estimated.
+
+    period_start: the start date of the period being analysed. Used as the
+    cutoff for the prev_date_map lookup so results are consistent regardless of
+    which customers happen to have the earliest reading date in the queryset.
     """
     from django.db.models import Max
 
     _ZERO = Decimal('0')
     _EMPTY = {
-        'total_billed_kwh': _ZERO, 'actual_billed_kwh': _ZERO,
-        'estimated_billed_kwh': _ZERO, 'energy_charge': _ZERO,
-        'vat': _ZERO, 'total_billed_amount': _ZERO,
+        'total_billed_kwh': _ZERO, 'estimated_billed_kwh': _ZERO,
+        'energy_charge': _ZERO, 'vat': _ZERO, 'total_billed_amount': _ZERO,
     }
 
-    rows = list(
+    customer_baseline = customer_baseline or {}
+
+    all_rows = list(
         readings_qs
         .filter(billed_consumption__isnull=False, tariff_rate__isnull=False)
         .values('customer_id', 'reading_date', 'billed_consumption', 'tariff_rate', 'estimation_method')
     )
 
-    if not rows:
+    if not all_rows:
         return _EMPTY
+
+    # One billing entry per customer — keep only the latest reading in the period
+    _latest = {}
+    for r in all_rows:
+        cid = r['customer_id']
+        if cid not in _latest or r['reading_date'] > _latest[cid]['reading_date']:
+            _latest[cid] = r
+    rows = list(_latest.values())
 
     # ── Period normalisation setup ────────────────────────────────────────────
     prev_date_map = {}
     if period_days:
-        customer_ids     = list({r['customer_id'] for r in rows})
-        min_reading_date = min(r['reading_date'] for r in rows)
-        prev_date_map    = {
+        customer_ids = list({r['customer_id'] for r in rows})
+        # Use period_start as the cutoff if provided; otherwise fall back to
+        # the earliest reading date in the queryset. period_start is preferred
+        # because it makes the prev_date lookup stable across different query scopes.
+        cutoff = period_start if period_start else min(r['reading_date'] for r in rows)
+        prev_date_map = {
             r['customer_id']: r['prev_date']
             for r in (
                 MeterReading.objects
-                .filter(customer_id__in=customer_ids, reading_date__lt=min_reading_date)
+                .filter(customer_id__in=customer_ids, reading_date__lt=cutoff)
                 .values('customer_id')
                 .annotate(prev_date=Max('reading_date'))
             )
         }
 
-    actual_kwh    = _ZERO
-    estimated_kwh = _ZERO
-    energy_charge = _ZERO
+    estimated_kwh  = _ZERO
+    energy_charge  = _ZERO
+    baseline_done  = set()  # prevent counting baseline customers more than once
 
     for r in rows:
-        raw_kwh = Decimal(str(r['billed_consumption']))
-        rate    = Decimal(str(r['tariff_rate']))
+        customer_id = r['customer_id']
+        raw_kwh     = Decimal(str(r['billed_consumption']))
+        rate        = Decimal(str(r['tariff_rate']))
 
         if period_days:
-            prev_date    = prev_date_map.get(r['customer_id'])
-            billing_days = max((r['reading_date'] - prev_date).days, 1) if prev_date else 30
-            kwh = raw_kwh / Decimal(str(billing_days)) * Decimal(str(period_days))
+            prev_date = prev_date_map.get(customer_id)
+            if prev_date:
+                billing_days = max((r['reading_date'] - prev_date).days, 1)
+                kwh = raw_kwh / Decimal(str(billing_days)) * Decimal(str(period_days))
+            elif customer_id in customer_baseline:
+                if customer_id in baseline_done:
+                    continue
+                kwh = customer_baseline[customer_id] * Decimal(str(period_days))
+                baseline_done.add(customer_id)
+            else:
+                kwh = raw_kwh / Decimal('30') * Decimal(str(period_days))
         else:
-            kwh = raw_kwh
+            # No period normalisation — use raw billed_consumption.
+            # Exception: first-sync customers whose raw value is inflated
+            # (accumulated months of data). For those, use the baseline
+            # daily estimate × baseline_period_days to get a realistic figure.
+            if customer_id in customer_baseline and baseline_period_days:
+                if customer_id in baseline_done:
+                    continue
+                kwh = customer_baseline[customer_id] * Decimal(str(baseline_period_days))
+                baseline_done.add(customer_id)
+            else:
+                kwh = raw_kwh
 
         energy_charge += kwh * rate
-        if r['estimation_method']:
-            estimated_kwh += kwh
-        else:
-            actual_kwh += kwh
+        estimated_kwh += kwh
 
-    total_kwh     = actual_kwh + estimated_kwh
-    vat           = round(energy_charge * VAT_RATE, 2)
-    total_billed  = round(energy_charge + vat, 2)
+    vat          = round(energy_charge * VAT_RATE, 2)
+    total_billed = round(energy_charge + vat, 2)
     energy_charge = round(energy_charge, 2)
 
     return {
-        'total_billed_kwh':     round(total_kwh, 2),
-        'actual_billed_kwh':    round(actual_kwh, 2),
+        'total_billed_kwh':     round(estimated_kwh, 2),
         'estimated_billed_kwh': round(estimated_kwh, 2),
         'energy_charge':        energy_charge,
         'vat':                  vat,
@@ -453,20 +577,19 @@ def get_commercial_overview(customer_qs, reading_qs, feeder_ids, from_date, to_d
 
     period_days_arg = date_range['days'] if normalize else None
 
-    billing   = calc_billing(reading_qs, period_days=period_days_arg)
-    coverage  = calc_coverage(customer_qs, reading_qs)
-    estimated = calc_estimated_billing(customer_qs, coverage['read_ids'], date_range)
+    baseline   = compute_period_baseline(reading_qs, from_date, to_date)
+    billing    = calc_billing(reading_qs, period_days=period_days_arg, customer_baseline=baseline, period_start=from_date)
+    coverage   = calc_coverage(customer_qs, reading_qs)
+    estimated  = calc_estimated_billing(customer_qs, coverage['read_ids'], date_range)
     energy_del = calc_energy_delivered(feeder_ids, date_range)
     energy_con = calc_energy_consumed(reading_qs)
     efficiency, atc_loss = calc_atc_loss(billing['total_billed_kwh'], energy_del['total_mwh'])
     arpu = calc_arpu(billing['total_billed_amount'], coverage['read'])
 
-    # MDI / MDNI split — always query directly from customer_qs regardless of
-    # how reading_qs was originally scoped, so both types are always present.
     mdi_qs       = reading_qs.filter(reading_type='MDI')
     mdni_qs      = reading_qs.filter(reading_type='MDNI')
-    mdi_billing  = calc_billing(mdi_qs,  period_days=period_days_arg)
-    mdni_billing = calc_billing(mdni_qs, period_days=period_days_arg)
+    mdi_billing  = calc_billing(mdi_qs,  period_days=period_days_arg, customer_baseline=baseline, period_start=from_date)
+    mdni_billing = calc_billing(mdni_qs, period_days=period_days_arg, customer_baseline=baseline, period_start=from_date)
 
     return {
         'total_customers':      coverage['total'],
@@ -554,7 +677,8 @@ def get_commercial_coverage(customer_qs, reading_qs, from_date, to_date):
         'end_date':   to_date,
         'days':       (to_date - from_date).days + 1,
     }
-    billing   = calc_billing(reading_qs, period_days=date_range['days'])
+    baseline  = compute_period_baseline(reading_qs, from_date, to_date)
+    billing   = calc_billing(reading_qs, period_days=date_range['days'], customer_baseline=baseline, period_start=from_date)
     coverage  = calc_coverage(customer_qs, reading_qs)
     estimated = calc_estimated_billing(customer_qs, coverage['read_ids'], date_range)
 
@@ -587,7 +711,8 @@ def get_commercial_energy(reading_qs, feeder_ids, from_date, to_date):
         'end_date':   to_date,
         'days':       (to_date - from_date).days + 1,
     }
-    billing    = calc_billing(reading_qs, period_days=date_range['days'])
+    baseline   = compute_period_baseline(reading_qs, from_date, to_date)
+    billing    = calc_billing(reading_qs, period_days=date_range['days'], customer_baseline=baseline, period_start=from_date)
     energy_del = calc_energy_delivered(feeder_ids, date_range)
     energy_con = calc_energy_consumed(reading_qs)
     efficiency, atc_loss = calc_atc_loss(billing['total_billed_kwh'], energy_del['total_mwh'])
@@ -648,14 +773,16 @@ def get_revenue_by_feeder(customer_qs, from_date, to_date):
     return result
 
 
-def get_customer_type_summary(customer_qs, reading_qs, period_days=None):
+def get_customer_type_summary(customer_qs, reading_qs, period_days=None, period_start=None, customer_baseline=None):
     """
     MDI vs MDNI headcount and revenue summary.
 
     Args:
-        customer_qs  : CommercialCustomer queryset (already scoped)
-        reading_qs   : MeterReading queryset (already scoped)
-        period_days  : int — when supplied, normalises billing to this period
+        customer_qs       : CommercialCustomer queryset (already scoped)
+        reading_qs        : MeterReading queryset (already scoped)
+        period_days       : int — when supplied, normalises billing to this period
+        period_start      : date — start of the period; stabilises prev_date_map lookup
+        customer_baseline : {customer_id: Decimal daily_kwh} from compute_period_baseline
 
     Returns: dict with mdi and mdni sub-dicts
     """
@@ -666,8 +793,8 @@ def get_customer_type_summary(customer_qs, reading_qs, period_days=None):
         .values_list('customer_type', 'count')
     )
 
-    mdi_billing  = calc_billing(reading_qs.filter(reading_type='MDI'),  period_days=period_days)
-    mdni_billing = calc_billing(reading_qs.filter(reading_type='MDNI'), period_days=period_days)
+    mdi_billing  = calc_billing(reading_qs.filter(reading_type='MDI'),  period_days=period_days, customer_baseline=customer_baseline, period_start=period_start)
+    mdni_billing = calc_billing(reading_qs.filter(reading_type='MDNI'), period_days=period_days, customer_baseline=customer_baseline, period_start=period_start)
 
     return {
         'mdi': {
