@@ -176,7 +176,7 @@ def commercial_overview(request):
     billing_by_band  = bulk_billing(readings_qs, f2b,    period_days=_pd, customer_baseline=customer_baseline, period_start=p_start)
     consumed_by_band = bulk_energy_consumed(readings_qs, f2b)
 
-    _empty_b = {'total_billed_kwh': ZERO, 'total_billed_amount': ZERO}
+    _empty_b = {'total_billed_kwh': ZERO, 'total_billed_amount': ZERO, 'energy_charge': ZERO}
 
     def _bd_row(ed, b, consumed):
         delivered_kwh = round(float(ed['total_mwh']) * 1000, 2)
