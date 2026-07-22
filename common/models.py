@@ -177,6 +177,12 @@ class Feeder(UUIDModel, models.Model):
         help_text="Date from which commercial analytics data is valid for this feeder"
     )
 
+    is_minigrid = models.BooleanField(
+        default=False,
+        db_index=True,
+        help_text="True for solar/minigrid feeders (e.g. Haske Solar) — tracked separately in TMO"
+    )
+
     objects = FeederManager()
 
     def save(self, *args, **kwargs):

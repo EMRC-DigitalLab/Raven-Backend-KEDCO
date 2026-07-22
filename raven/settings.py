@@ -69,6 +69,7 @@ INSTALLED_APPS = [
     'energy_account',
     'aria',
     'simulator',
+    'tmo',
 ]
 
 MIDDLEWARE = [
