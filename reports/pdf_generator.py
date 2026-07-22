@@ -4121,153 +4121,353 @@ _STATUS_COLORS = {
     'critical':     '#ef4444',
 }
 
+
 def _status_badge(status):
     color = _STATUS_COLORS.get(status, '#94a3b8')
     label = status.replace('_', ' ').title()
     return (
-        f'<span style="display:inline-block;padding:2px 7px;border-radius:4px;'
+        f'<span style="display:inline-block;padding:2px 8px;border-radius:4px;'
         f'background:{color};color:#fff;font-size:9px;font-weight:700;">{label}</span>'
     )
 
 
-def render_tmo_feeder_dispatch(data, context, page_number):
-    """Feeder Dispatch Targets vs Actuals — paginated landscape table + summary KPIs."""
-    feeders     = data.get('feeders', [])
-    tot_target  = data.get('total_target_mwh', 0.0)
-    tot_actual  = data.get('total_actual_mwh', 0.0)
-    ach_pct     = data.get('overall_achievement_pct', 0.0)
-    status      = data.get('overall_status', '')
+def _ach_color(pct):
+    if pct >= 100: return '#15803d'
+    if pct >= 90:  return '#f59e0b'
+    if pct >= 75:  return '#f97316'
+    return '#ef4444'
 
-    note_html = f"""
-    <div style="display:flex;gap:20px;margin-bottom:10px;align-items:center;flex-wrap:wrap;">
-        <div style="background:#f0f4f8;border-radius:8px;padding:8px 16px;text-align:center;">
-            <div style="font-size:8px;font-weight:700;text-transform:uppercase;opacity:0.6;margin-bottom:2px;">Total Target</div>
-            <div style="font-size:16px;font-weight:800;color:#002050;">{tot_target:,.2f} MWh</div>
-        </div>
-        <div style="background:#f0f4f8;border-radius:8px;padding:8px 16px;text-align:center;">
-            <div style="font-size:8px;font-weight:700;text-transform:uppercase;opacity:0.6;margin-bottom:2px;">Total Actual</div>
-            <div style="font-size:16px;font-weight:800;color:#002050;">{tot_actual:,.2f} MWh</div>
-        </div>
-        <div style="background:#f0f4f8;border-radius:8px;padding:8px 16px;text-align:center;">
-            <div style="font-size:8px;font-weight:700;text-transform:uppercase;opacity:0.6;margin-bottom:2px;">Overall Achievement</div>
-            <div style="font-size:16px;font-weight:800;color:#002050;">{ach_pct:.1f}%</div>
-        </div>
-        <div style="padding:4px 0;">{_status_badge(status)}</div>
-    </div>"""
 
-    header_html = """
-        <colgroup>
-            <col style="width:28%">
-            <col style="width:12%">
-            <col style="width:12%">
-            <col style="width:12%">
-            <col style="width:10%">
-            <col style="width:13%">
-            <col style="width:13%">
-        </colgroup>
-        <thead>
-            <tr>
-                <th>Feeder</th>
-                <th style="text-align:right">Target (MWh)</th>
-                <th style="text-align:right">Actual (MWh)</th>
-                <th style="text-align:right">Variance (MWh)</th>
-                <th style="text-align:right">Var %</th>
-                <th style="text-align:right">Achievement %</th>
-                <th>Status</th>
-            </tr>
-        </thead>"""
+def _tmo_compliance(pct):
+    if pct >= 100: return 'on_target'
+    if pct >= 90:  return 'below_target'
+    if pct >= 75:  return 'poor'
+    return 'critical'
 
-    rows = []
-    for f in feeders:
-        var_color = '#15803d' if f.get('variance_mwh', 0) >= 0 else '#ef4444'
-        rows.append(
-            f"<tr>"
-            f"<td>{f.get('feeder_name','—')}</td>"
-            f"<td style='text-align:right'>{f.get('target_mwh',0):,.2f}</td>"
-            f"<td style='text-align:right'>{f.get('actual_mwh',0):,.2f}</td>"
-            f"<td style='text-align:right;color:{var_color};font-weight:700'>{f.get('variance_mwh',0):+,.2f}</td>"
-            f"<td style='text-align:right'>{f.get('variance_pct',0):+.1f}%</td>"
-            f"<td style='text-align:right;font-weight:700'>{f.get('achievement_pct',0):.1f}%</td>"
-            f"<td>{_status_badge(f.get('status',''))}</td>"
-            f"</tr>"
-        )
 
-    return _paginate_table(
-        rows, header_html, 'Feeder Dispatch — Targets vs Actuals',
-        context, page_number, max_rows=14, landscape=True, note_html=note_html,
+def _tmo_banner(title, eyebrow, ach_pct, status):
+    col = _ach_color(ach_pct)
+    return (
+        f'<div style="background:linear-gradient(135deg,#1565C0 0%,#0D47A1 100%);'
+        f'border-radius:10px;padding:11px 18px;margin-bottom:10px;'
+        f'display:flex;justify-content:space-between;align-items:center;">'
+        f'<div>'
+        f'<div style="color:rgba(255,255,255,0.6);font-size:8px;font-weight:700;'
+        f'letter-spacing:2px;text-transform:uppercase;margin-bottom:2px;">{eyebrow}</div>'
+        f'<div style="color:#fff;font-size:17px;font-weight:800;letter-spacing:-0.2px;">{title}</div>'
+        f'</div>'
+        f'<div style="background:rgba(255,255,255,0.12);border-radius:8px;'
+        f'padding:8px 18px;text-align:center;min-width:88px;">'
+        f'<div style="color:rgba(255,255,255,0.6);font-size:7px;font-weight:700;'
+        f'text-transform:uppercase;margin-bottom:1px;">Achievement</div>'
+        f'<div style="color:#FFC107;font-size:22px;font-weight:800;line-height:1;">{ach_pct:.1f}%</div>'
+        f'<div style="color:rgba(255,255,255,0.7);font-size:8px;margin-top:2px;">'
+        f'{status.replace("_"," ").title()}</div>'
+        f'</div>'
+        f'</div>'
     )
 
 
+def _tmo_kpi(label, value, color='#1565C0', bg='#f0f4f8', accent=None):
+    border = f';border-left:3px solid {accent}' if accent else ''
+    return (
+        f'<div style="flex:1;background:{bg};border-radius:8px;padding:8px 10px;'
+        f'margin-right:8px;text-align:center{border};">'
+        f'<div style="font-size:7px;font-weight:700;text-transform:uppercase;color:#999;margin-bottom:2px;">{label}</div>'
+        f'<div style="font-size:16px;font-weight:800;color:{color};line-height:1.1;">{value}</div>'
+        f'</div>'
+    )
+
+
+def _tmo_page(context, page_number, body_html):
+    return (
+        f'<div class="page page-landscape">'
+        f'<div class="page-content">'
+        f'<div class="header">'
+        f'<div class="company-name">{context.get("company_name","")} | {context.get("report_scope","")}</div>'
+        f'<div class="date">{context.get("report_date","")}</div>'
+        f'</div>'
+        f'{body_html}'
+        f'</div>'
+        f'<div class="footer">'
+        f'<img src="{context.get("footer_logo_url","")}" alt="Powered by EMRC"/>'
+        f'<div class="page-number">{page_number}</div>'
+        f'</div>'
+        f'</div>'
+    )
+
+
+# ── 1. Feeder Dispatch ─────────────────────────────────────────────────────────
+
+def render_tmo_feeder_dispatch(data, context, page_number):
+    """Feeder Dispatch — visual chart slide + paginated detail table."""
+    feeders    = data.get('feeders', [])
+    tot_target = data.get('total_target_mwh', 0.0)
+    tot_actual = data.get('total_actual_mwh', 0.0)
+    ach_pct    = data.get('overall_achievement_pct', 0.0)
+    status     = data.get('overall_status', '')
+
+    # Top feeders by target for the chart (progress-bar style: background=target, fill=actual)
+    chart_f = sorted(feeders, key=lambda f: f.get('target_mwh') or 0, reverse=True)[:18]
+    max_val = max(
+        (max(f.get('target_mwh') or 0, f.get('actual_mwh') or 0) for f in chart_f),
+        default=1
+    ) or 1
+
+    LW, BW, RH, RG = 158, 340, 16, 4  # label-width, bar-width, row-height, row-gap
+    VW = LW + BW + 72
+    VH = 14 + len(chart_f) * (RH + RG) + 26
+
+    svg_rows = ''
+    for i, f in enumerate(chart_f):
+        y     = 12 + i * (RH + RG)
+        name  = (f.get('feeder_name') or '—')[:26]
+        t_mwh = f.get('target_mwh') or 0
+        a_mwh = f.get('actual_mwh') or 0
+        ach   = f.get('achievement_pct') or 0
+        t_w   = max(round(BW * t_mwh / max_val), 2) if t_mwh else 0
+        a_w   = max(round(BW * a_mwh / max_val), 2) if a_mwh else 0
+        a_col = _ach_color(ach)
+        svg_rows += (
+            f'<text x="{LW-5}" y="{y+RH-3}" text-anchor="end" font-size="9" fill="#444"'
+            f' font-family="Arial,sans-serif">{name}</text>'
+            # background bar = target (light blue)
+            f'<rect x="{LW}" y="{y}" width="{t_w}" height="{RH}" fill="#BBDEFB" rx="3"/>'
+            # filled bar = actual (colored by achievement)
+            f'<rect x="{LW}" y="{y}" width="{a_w}" height="{RH}" fill="{a_col}" rx="3"/>'
+            # achievement % label to the right
+            f'<text x="{LW+t_w+4}" y="{y+RH-3}" font-size="8" fill="{a_col}"'
+            f' font-weight="bold" font-family="Arial,sans-serif">{ach:.0f}%</text>'
+        )
+
+    leg_y = VH - 14
+    legend = (
+        f'<rect x="{LW}" y="{leg_y}" width="12" height="9" fill="#BBDEFB" rx="2"/>'
+        f'<text x="{LW+16}" y="{leg_y+9}" font-size="8" fill="#666" font-family="Arial,sans-serif">Target</text>'
+        f'<rect x="{LW+68}" y="{leg_y}" width="12" height="9" fill="#15803d" rx="2"/>'
+        f'<text x="{LW+84}" y="{leg_y+9}" font-size="8" fill="#666" font-family="Arial,sans-serif">Actual (bar colour = achievement)</text>'
+    )
+
+    chart_svg = (
+        f'<svg width="100%" viewBox="0 0 {VW} {VH}" xmlns="http://www.w3.org/2000/svg"'
+        f' style="display:block;max-width:100%;">'
+        f'<rect width="{VW}" height="{VH}" fill="#f8fafc" rx="8"/>'
+        f'{svg_rows}{legend}</svg>'
+    )
+
+    variance  = tot_actual - tot_target
+    var_col   = '#15803d' if variance >= 0 else '#ef4444'
+    kpi_row = (
+        f'<div style="display:flex;margin-bottom:10px;">'
+        + _tmo_kpi('Total Target (MWh)', f'{tot_target:,.1f}')
+        + _tmo_kpi('Total Actual (MWh)', f'{tot_actual:,.1f}')
+        + _tmo_kpi('Variance (MWh)', f'{variance:+,.1f}', color=var_col)
+        + _tmo_kpi('Feeders Monitored', str(len(feeders)), accent=_ach_color(ach_pct))
+        + '</div>'
+    )
+
+    body = (
+        _tmo_banner('Feeder Dispatch — Targets vs Actuals', 'Technical Management Operations', ach_pct, status)
+        + kpi_row
+        + f'<div style="flex:1;overflow:hidden;">{chart_svg}</div>'
+    )
+    page1 = _tmo_page(context, page_number, body)
+
+    # Detail table (all feeders, paginated)
+    hdr = (
+        '<colgroup>'
+        '<col style="width:28%"><col style="width:12%"><col style="width:12%">'
+        '<col style="width:12%"><col style="width:10%"><col style="width:13%"><col style="width:13%">'
+        '</colgroup>'
+        '<thead><tr>'
+        '<th>Feeder</th>'
+        '<th style="text-align:right">Target (MWh)</th>'
+        '<th style="text-align:right">Actual (MWh)</th>'
+        '<th style="text-align:right">Variance (MWh)</th>'
+        '<th style="text-align:right">Var %</th>'
+        '<th style="text-align:right">Achievement %</th>'
+        '<th>Status</th>'
+        '</tr></thead>'
+    )
+    rows = []
+    for f in feeders:
+        vc  = '#15803d' if (f.get('variance_mwh') or 0) >= 0 else '#ef4444'
+        ac  = _STATUS_COLORS.get(f.get('status', ''), '#94a3b8')
+        rows.append(
+            f"<tr><td>{f.get('feeder_name','—')}</td>"
+            f"<td style='text-align:right'>{f.get('target_mwh',0):,.2f}</td>"
+            f"<td style='text-align:right'>{f.get('actual_mwh',0):,.2f}</td>"
+            f"<td style='text-align:right;color:{vc};font-weight:700'>{f.get('variance_mwh',0):+,.2f}</td>"
+            f"<td style='text-align:right'>{f.get('variance_pct',0):+.1f}%</td>"
+            f"<td style='text-align:right;font-weight:700;color:{ac}'>{f.get('achievement_pct',0):.1f}%</td>"
+            f"<td>{_status_badge(f.get('status',''))}</td></tr>"
+        )
+    tbl_html, tbl_pages = _paginate_table(
+        rows, hdr, 'Feeder Dispatch — Detail', context, page_number + 1, max_rows=14, landscape=True,
+    )
+    return page1 + tbl_html, 1 + tbl_pages
+
+
+# ── 2. Collection Performance ──────────────────────────────────────────────────
+
 def render_tmo_collection_performance(data, context, page_number):
-    """Collection Performance by Segment — paginated table."""
+    """Collection Performance — stacked bar chart slide + paginated detail table."""
     segments   = data.get('segments', [])
     tot_target = data.get('total_target', 0.0)
     tot_actual = data.get('total_actual', 0.0)
     ach_pct    = data.get('overall_achievement_pct', 0.0)
     status     = data.get('overall_status', '')
 
-    note_html = f"""
-    <div style="display:flex;gap:20px;margin-bottom:10px;align-items:center;flex-wrap:wrap;">
-        <div style="background:#f0f4f8;border-radius:8px;padding:8px 16px;text-align:center;">
-            <div style="font-size:8px;font-weight:700;text-transform:uppercase;opacity:0.6;margin-bottom:2px;">Total Target</div>
-            <div style="font-size:16px;font-weight:800;color:#002050;">&#8358;{tot_target:,.0f}</div>
-        </div>
-        <div style="background:#f0f4f8;border-radius:8px;padding:8px 16px;text-align:center;">
-            <div style="font-size:8px;font-weight:700;text-transform:uppercase;opacity:0.6;margin-bottom:2px;">Total Actual</div>
-            <div style="font-size:16px;font-weight:800;color:#002050;">&#8358;{tot_actual:,.0f}</div>
-        </div>
-        <div style="background:#f0f4f8;border-radius:8px;padding:8px 16px;text-align:center;">
-            <div style="font-size:8px;font-weight:700;text-transform:uppercase;opacity:0.6;margin-bottom:2px;">Overall Achievement</div>
-            <div style="font-size:16px;font-weight:800;color:#002050;">{ach_pct:.1f}%</div>
-        </div>
-        <div style="padding:4px 0;">{_status_badge(status)}</div>
-    </div>"""
-
-    header_html = """
-        <colgroup>
-            <col style="width:14%">
-            <col style="width:18%">
-            <col style="width:13%">
-            <col style="width:16%">
-            <col style="width:16%">
-            <col style="width:12%">
-            <col style="width:11%">
-        </colgroup>
-        <thead>
-            <tr>
-                <th>Segment</th>
-                <th>Sub-segment</th>
-                <th>Period</th>
-                <th style="text-align:right">Target (&#8358;)</th>
-                <th style="text-align:right">Actual (&#8358;)</th>
-                <th style="text-align:right">Achievement %</th>
-                <th>Status</th>
-            </tr>
-        </thead>"""
-
-    rows = []
+    # Aggregate by segment_code for the chart
+    seg_agg = {}
     for s in segments:
-        var_color = '#15803d' if s.get('actual_amount', 0) >= s.get('target_amount', 0) else '#ef4444'
-        rows.append(
-            f"<tr>"
-            f"<td>{s.get('segment_code','—')}</td>"
-            f"<td>{s.get('sub_segment','—')}</td>"
-            f"<td>{s.get('period_month','')[:7]}</td>"
-            f"<td style='text-align:right'>{s.get('target_amount',0):,.0f}</td>"
-            f"<td style='text-align:right;color:{var_color};font-weight:700'>{s.get('actual_amount',0):,.0f}</td>"
-            f"<td style='text-align:right;font-weight:700'>{s.get('achievement_pct',0):.1f}%</td>"
-            f"<td>{_status_badge(s.get('status',''))}</td>"
-            f"</tr>"
+        code = s.get('segment_code') or '—'
+        seg_agg.setdefault(code, {'target': 0.0, 'actual': 0.0})
+        seg_agg[code]['target'] += s.get('target_amount') or 0.0
+        seg_agg[code]['actual'] += s.get('actual_amount') or 0.0
+
+    chart_segs = sorted(seg_agg.items(), key=lambda x: x[1]['target'], reverse=True)[:14]
+    max_val = max((v['target'] for _, v in chart_segs), default=1) or 1
+
+    LW, BW, RH, RG = 90, 380, 22, 5
+    VW = LW + BW + 80
+    VH = 12 + len(chart_segs) * (RH + RG) + 26
+
+    svg_rows = ''
+    for i, (code, vals) in enumerate(chart_segs):
+        y     = 10 + i * (RH + RG)
+        tgt   = vals['target']
+        act   = vals['actual']
+        ach   = round(act / tgt * 100, 1) if tgt else 0
+        t_w   = round(BW * tgt / max_val) if tgt else 0
+        a_w   = round(BW * act / max_val) if act else 0
+        g_w   = max(t_w - a_w, 0)
+
+        svg_rows += (
+            f'<text x="{LW-5}" y="{y+RH-5}" text-anchor="end" font-size="9" fill="#444"'
+            f' font-family="Arial,sans-serif">{code}</text>'
+            # target background (pale yellow)
+            f'<rect x="{LW}" y="{y}" width="{t_w}" height="{RH}" fill="#FFF9C4" rx="3"/>'
+            # actual bar (blue)
+            f'<rect x="{LW}" y="{y}" width="{a_w}" height="{RH}" fill="#1976D2" rx="3"/>'
+            # gap portion (yellow-orange)
+            + (f'<rect x="{LW+a_w}" y="{y}" width="{g_w}" height="{RH}"'
+               f' fill="#FFC107" style="border-radius:0 3px 3px 0;"/>' if g_w > 2 else '')
+            # value label inside actual bar
+            + (f'<text x="{LW+5}" y="{y+RH-5}" font-size="8" fill="#fff"'
+               f' font-family="Arial,sans-serif">&#8358;{act/1e6:,.0f}M</text>' if a_w > 45 else '')
+            # achievement % label after bar
+            + f'<text x="{LW+t_w+4}" y="{y+RH-5}" font-size="9" fill="#333"'
+              f' font-weight="bold" font-family="Arial,sans-serif">{ach:.0f}%</text>'
         )
 
-    return _paginate_table(
-        rows, header_html, 'Collection Performance by Segment',
-        context, page_number, max_rows=14, landscape=True, note_html=note_html,
+    leg_y = VH - 14
+    legend = (
+        f'<rect x="{LW}" y="{leg_y}" width="12" height="9" fill="#1976D2" rx="2"/>'
+        f'<text x="{LW+16}" y="{leg_y+9}" font-size="8" fill="#555" font-family="Arial,sans-serif">Actual Collection</text>'
+        f'<rect x="{LW+128}" y="{leg_y}" width="12" height="9" fill="#FFC107" rx="2"/>'
+        f'<text x="{LW+144}" y="{leg_y+9}" font-size="8" fill="#555" font-family="Arial,sans-serif">Gap to Target</text>'
+    )
+
+    chart_svg = (
+        f'<svg width="100%" viewBox="0 0 {VW} {VH}" xmlns="http://www.w3.org/2000/svg"'
+        f' style="display:block;max-width:100%;">'
+        f'<rect width="{VW}" height="{VH}" fill="#f8fafc" rx="8"/>'
+        f'{svg_rows}{legend}</svg>'
+    )
+
+    variance  = tot_actual - tot_target
+    var_col   = '#15803d' if variance >= 0 else '#ef4444'
+    t_m  = tot_target / 1e6
+    a_m  = tot_actual / 1e6
+    v_m  = variance / 1e6
+    kpi_row = (
+        f'<div style="display:flex;margin-bottom:10px;">'
+        + _tmo_kpi('Total Target', f'&#8358;{t_m:,.1f}M')
+        + _tmo_kpi('Total Actual', f'&#8358;{a_m:,.1f}M')
+        + _tmo_kpi('Variance', f'&#8358;{v_m:+,.1f}M', color=var_col)
+        + _tmo_kpi('Segments', str(len(seg_agg)), accent=_ach_color(ach_pct))
+        + '</div>'
+    )
+
+    body = (
+        _tmo_banner('Collection Performance by Segment', 'Commercial Management Operations', ach_pct, status)
+        + kpi_row
+        + f'<div style="flex:1;overflow:hidden;">{chart_svg}</div>'
+    )
+    page1 = _tmo_page(context, page_number, body)
+
+    # Detail table
+    hdr = (
+        '<colgroup>'
+        '<col style="width:13%"><col style="width:18%"><col style="width:12%">'
+        '<col style="width:17%"><col style="width:17%"><col style="width:12%"><col style="width:11%">'
+        '</colgroup>'
+        '<thead><tr>'
+        '<th>Segment</th><th>Sub-segment</th><th>Period</th>'
+        '<th style="text-align:right">Target (&#8358;)</th>'
+        '<th style="text-align:right">Actual (&#8358;)</th>'
+        '<th style="text-align:right">Achievement %</th>'
+        '<th>Status</th>'
+        '</tr></thead>'
+    )
+    rows = []
+    for s in segments:
+        vc = '#15803d' if (s.get('actual_amount') or 0) >= (s.get('target_amount') or 0) else '#ef4444'
+        rows.append(
+            f"<tr><td>{s.get('segment_code','—')}</td>"
+            f"<td>{s.get('sub_segment','—')}</td>"
+            f"<td>{(s.get('period_month','') or '')[:7]}</td>"
+            f"<td style='text-align:right'>{s.get('target_amount',0):,.0f}</td>"
+            f"<td style='text-align:right;color:{vc};font-weight:700'>{s.get('actual_amount',0):,.0f}</td>"
+            f"<td style='text-align:right;font-weight:700'>{s.get('achievement_pct',0):.1f}%</td>"
+            f"<td>{_status_badge(s.get('status',''))}</td></tr>"
+        )
+    tbl_html, tbl_pages = _paginate_table(
+        rows, hdr, 'Collection Performance — Detail', context, page_number + 1, max_rows=14, landscape=True,
+    )
+    return page1 + tbl_html, 1 + tbl_pages
+
+
+# ── 3. Billing Efficiency ──────────────────────────────────────────────────────
+
+def _be_gauge_svg(pct, center_label, sub_label, size=170):
+    """SVG circular gauge — background ring + colored arc fill + center text."""
+    R   = size * 0.37
+    cx  = cy = size / 2
+    cir = 2 * 3.14159265 * R
+    filled = cir * min(max(pct, 0), 100) / 100
+    gap    = max(cir - filled, 0)
+    color  = _ach_color(pct)
+    return (
+        f'<svg width="{size}" height="{size}" viewBox="0 0 {size} {size}"'
+        f' xmlns="http://www.w3.org/2000/svg">'
+        # Track ring
+        f'<circle cx="{cx}" cy="{cy}" r="{R}" fill="none"'
+        f' stroke="#E3EAF2" stroke-width="15"/>'
+        # Filled arc
+        f'<circle cx="{cx}" cy="{cy}" r="{R}" fill="none"'
+        f' stroke="{color}" stroke-width="15"'
+        f' stroke-dasharray="{filled:.2f} {gap:.2f}"'
+        f' stroke-linecap="round"'
+        f' transform="rotate(-90 {cx} {cy})"/>'
+        # Percentage text
+        f'<text x="{cx}" y="{cy-6}" text-anchor="middle"'
+        f' font-size="20" font-weight="800" fill="#002050"'
+        f' font-family="Arial,sans-serif">{pct:.1f}%</text>'
+        # Label
+        f'<text x="{cx}" y="{cy+12}" text-anchor="middle"'
+        f' font-size="9" font-weight="700" fill="{color}"'
+        f' font-family="Arial,sans-serif">{center_label}</text>'
+        # Sub label
+        f'<text x="{cx}" y="{cy+24}" text-anchor="middle"'
+        f' font-size="8" fill="#999" font-family="Arial,sans-serif">{sub_label}</text>'
+        f'</svg>'
     )
 
 
 def render_tmo_billing_efficiency(data, context, page_number):
-    """Billing Efficiency (BE/FBE) — paginated table."""
+    """Billing Efficiency — circular gauge KPI slide + paginated detail table."""
     rows_data  = data.get('rows', [])
     tot_del    = data.get('total_energy_delivered_gwh', 0.0)
     tot_bil    = data.get('total_energy_billed_gwh', 0.0)
@@ -4275,83 +4475,112 @@ def render_tmo_billing_efficiency(data, context, page_number):
     tot_trev   = data.get('total_target_revenue', 0.0)
     tot_brev   = data.get('total_billed_amount', 0.0)
     overall_re = data.get('overall_revenue_eff_pct', 0.0)
+    be_status  = _tmo_compliance(overall_be)
+    re_status  = _tmo_compliance(overall_re)
 
-    note_html = f"""
-    <div style="display:flex;gap:14px;margin-bottom:10px;align-items:center;flex-wrap:wrap;">
-        <div style="background:#f0f4f8;border-radius:8px;padding:7px 14px;text-align:center;">
-            <div style="font-size:8px;font-weight:700;text-transform:uppercase;opacity:0.6;margin-bottom:2px;">Delivered</div>
-            <div style="font-size:15px;font-weight:800;color:#002050;">{tot_del:,.3f} GWh</div>
-        </div>
-        <div style="background:#f0f4f8;border-radius:8px;padding:7px 14px;text-align:center;">
-            <div style="font-size:8px;font-weight:700;text-transform:uppercase;opacity:0.6;margin-bottom:2px;">Billed</div>
-            <div style="font-size:15px;font-weight:800;color:#002050;">{tot_bil:,.3f} GWh</div>
-        </div>
-        <div style="background:#f0f4f8;border-radius:8px;padding:7px 14px;text-align:center;">
-            <div style="font-size:8px;font-weight:700;text-transform:uppercase;opacity:0.6;margin-bottom:2px;">Billing Eff.</div>
-            <div style="font-size:15px;font-weight:800;color:#002050;">{overall_be:.1f}%</div>
-        </div>
-        <div style="background:#f0f4f8;border-radius:8px;padding:7px 14px;text-align:center;">
-            <div style="font-size:8px;font-weight:700;text-transform:uppercase;opacity:0.6;margin-bottom:2px;">Target Rev.</div>
-            <div style="font-size:15px;font-weight:800;color:#002050;">&#8358;{tot_trev:,.0f}</div>
-        </div>
-        <div style="background:#f0f4f8;border-radius:8px;padding:7px 14px;text-align:center;">
-            <div style="font-size:8px;font-weight:700;text-transform:uppercase;opacity:0.6;margin-bottom:2px;">Billed Rev.</div>
-            <div style="font-size:15px;font-weight:800;color:#002050;">&#8358;{tot_brev:,.0f}</div>
-        </div>
-        <div style="background:#f0f4f8;border-radius:8px;padding:7px 14px;text-align:center;">
-            <div style="font-size:8px;font-weight:700;text-transform:uppercase;opacity:0.6;margin-bottom:2px;">Rev. Eff.</div>
-            <div style="font-size:15px;font-weight:800;color:#002050;">{overall_re:.1f}%</div>
-        </div>
-    </div>"""
+    be_gauge  = _be_gauge_svg(overall_be,  'BE %',     'Billing Efficiency',  size=170)
+    fbe_gauge = _be_gauge_svg(overall_re,  'Rev Eff %', 'Revenue Efficiency', size=170)
 
-    header_html = """
-        <colgroup>
-            <col style="width:10%">
-            <col style="width:18%">
-            <col style="width:10%">
-            <col style="width:11%">
-            <col style="width:11%">
-            <col style="width:9%">
-            <col style="width:12%">
-            <col style="width:10%">
-            <col style="width:9%">
-        </colgroup>
-        <thead>
-            <tr>
-                <th>Scope</th>
-                <th>Label</th>
-                <th>Period</th>
-                <th style="text-align:right">Del. (GWh)</th>
-                <th style="text-align:right">Billed (GWh)</th>
-                <th style="text-align:right">BE %</th>
-                <th style="text-align:right">Target Rev. (&#8358;)</th>
-                <th style="text-align:right">Billed Rev. (&#8358;)</th>
-                <th style="text-align:right">Rev Eff %</th>
-            </tr>
-        </thead>"""
+    # Gauge panel
+    gauge_panel = (
+        f'<div style="display:flex;margin-bottom:8px;align-items:stretch;">'
 
+        # ── BE gauge card ──
+        f'<div style="flex:1;background:#f8fafc;border-radius:12px;padding:10px 14px;'
+        f'margin-right:10px;text-align:center;">'
+        f'<div style="font-size:8px;font-weight:700;text-transform:uppercase;color:#888;margin-bottom:6px;">'
+        f'Energy Billing Efficiency (BE)</div>'
+        f'{be_gauge}'
+        f'<div style="margin-top:6px;">'
+        f'<div style="font-size:9px;color:#666;">Delivered: '
+        f'<strong style="color:#002050;">{tot_del:,.3f} GWh</strong></div>'
+        f'<div style="font-size:9px;color:#666;">Billed: '
+        f'<strong style="color:#002050;">{tot_bil:,.3f} GWh</strong></div>'
+        f'</div>'
+        f'<div style="margin-top:6px;">{_status_badge(be_status)}</div>'
+        f'</div>'
+
+        # ── Revenue gauge card ──
+        f'<div style="flex:1;background:#f8fafc;border-radius:12px;padding:10px 14px;'
+        f'margin-right:10px;text-align:center;">'
+        f'<div style="font-size:8px;font-weight:700;text-transform:uppercase;color:#888;margin-bottom:6px;">'
+        f'Revenue Billing Efficiency (FBE)</div>'
+        f'{fbe_gauge}'
+        f'<div style="margin-top:6px;">'
+        f'<div style="font-size:9px;color:#666;">Target Rev: '
+        f'<strong style="color:#002050;">&#8358;{tot_trev/1e6:,.1f}M</strong></div>'
+        f'<div style="font-size:9px;color:#666;">Billed Rev: '
+        f'<strong style="color:#002050;">&#8358;{tot_brev/1e6:,.1f}M</strong></div>'
+        f'</div>'
+        f'<div style="margin-top:6px;">{_status_badge(re_status)}</div>'
+        f'</div>'
+
+        # ── Right KPI column ──
+        f'<div style="flex:1;display:flex;flex-direction:column;">'
+        f'<div style="background:#1565C0;border-radius:10px;padding:13px 15px;margin-bottom:8px;flex:1;">'
+        f'<div style="color:rgba(255,255,255,0.65);font-size:7px;font-weight:700;'
+        f'text-transform:uppercase;margin-bottom:3px;">Energy Delivered</div>'
+        f'<div style="color:#FFC107;font-size:22px;font-weight:800;">{tot_del:,.2f}'
+        f'<span style="font-size:11px;color:rgba(255,255,255,0.75);margin-left:3px;">GWh</span></div>'
+        f'</div>'
+        f'<div style="background:#f0f4f8;border-radius:10px;padding:13px 15px;margin-bottom:8px;flex:1;">'
+        f'<div style="color:#999;font-size:7px;font-weight:700;text-transform:uppercase;margin-bottom:3px;">Energy Billed</div>'
+        f'<div style="color:#002050;font-size:22px;font-weight:800;">{tot_bil:,.2f}'
+        f'<span style="font-size:11px;color:#aaa;margin-left:3px;">GWh</span></div>'
+        f'</div>'
+        f'<div style="background:#f0f4f8;border-radius:10px;padding:13px 15px;flex:1;">'
+        f'<div style="color:#999;font-size:7px;font-weight:700;text-transform:uppercase;margin-bottom:3px;">Target Revenue</div>'
+        f'<div style="color:#002050;font-size:18px;font-weight:800;">&#8358;{tot_trev/1e6:,.1f}M</div>'
+        f'<div style="color:#888;font-size:9px;margin-top:3px;">Billed: &#8358;{tot_brev/1e6:,.1f}M</div>'
+        f'</div>'
+        f'</div>'
+
+        f'</div>'
+    )
+
+    body = (
+        _tmo_banner('Billing Efficiency (BE / FBE)', 'Commercial Management Operations', overall_be, be_status)
+        + gauge_panel
+    )
+    page1 = _tmo_page(context, page_number, body)
+
+    # Detail table
+    hdr = (
+        '<colgroup>'
+        '<col style="width:10%"><col style="width:18%"><col style="width:10%">'
+        '<col style="width:11%"><col style="width:11%"><col style="width:9%">'
+        '<col style="width:12%"><col style="width:10%"><col style="width:9%">'
+        '</colgroup>'
+        '<thead><tr>'
+        '<th>Scope</th><th>Label</th><th>Period</th>'
+        '<th style="text-align:right">Del. (GWh)</th>'
+        '<th style="text-align:right">Billed (GWh)</th>'
+        '<th style="text-align:right">BE %</th>'
+        '<th style="text-align:right">Target Rev (&#8358;)</th>'
+        '<th style="text-align:right">Billed Rev (&#8358;)</th>'
+        '<th style="text-align:right">Rev Eff %</th>'
+        '</tr></thead>'
+    )
     rows = []
     for r in rows_data:
-        be_color  = _STATUS_COLORS.get(r.get('be_status', ''), '#94a3b8')
-        rr_color  = _STATUS_COLORS.get(r.get('rr_status', ''), '#94a3b8')
+        bc = _STATUS_COLORS.get(r.get('be_status', ''), '#94a3b8')
+        rc = _STATUS_COLORS.get(r.get('rr_status', ''), '#94a3b8')
         rows.append(
-            f"<tr>"
-            f"<td>{r.get('scope_type','—').title()}</td>"
+            f"<tr><td>{(r.get('scope_type') or '—').title()}</td>"
             f"<td>{r.get('scope_label','—')}</td>"
-            f"<td>{r.get('period_month','')[:7]}</td>"
+            f"<td>{(r.get('period_month','') or '')[:7]}</td>"
             f"<td style='text-align:right'>{r.get('energy_delivered_gwh',0):,.3f}</td>"
             f"<td style='text-align:right'>{r.get('energy_billed_gwh',0):,.3f}</td>"
-            f"<td style='text-align:right;font-weight:700;color:{be_color}'>{r.get('billing_efficiency_pct',0):.1f}%</td>"
+            f"<td style='text-align:right;font-weight:700;color:{bc}'>{r.get('billing_efficiency_pct',0):.1f}%</td>"
             f"<td style='text-align:right'>{r.get('target_revenue_amount',0):,.0f}</td>"
             f"<td style='text-align:right'>{r.get('billed_amount',0):,.0f}</td>"
-            f"<td style='text-align:right;font-weight:700;color:{rr_color}'>{r.get('revenue_efficiency_pct',0):.1f}%</td>"
+            f"<td style='text-align:right;font-weight:700;color:{rc}'>{r.get('revenue_efficiency_pct',0):.1f}%</td>"
             f"</tr>"
         )
-
-    return _paginate_table(
-        rows, header_html, 'Billing Efficiency (BE / FBE)',
-        context, page_number, max_rows=12, landscape=True, note_html=note_html,
+    tbl_html, tbl_pages = _paginate_table(
+        rows, hdr, 'Billing Efficiency — Detail', context, page_number + 1, max_rows=12, landscape=True,
     )
+    return page1 + tbl_html, 1 + tbl_pages
 
 
 # =============================================================================
