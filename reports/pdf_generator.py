@@ -85,6 +85,10 @@ SECTION_DISPLAY_NAMES = {
     'segment_voltage_energy':       'Energy by Segment & Voltage',
     'energy_md_nmd_mix':            'MD vs NMD Energy Mix',
     'segment_compliance_trend':     'Segment Compliance Trend',
+    # TMO
+    'tmo_feeder_dispatch':        'Feeder Dispatch Targets vs Actuals',
+    'tmo_collection_performance': 'Collection Performance by Segment',
+    'tmo_billing_efficiency':     'Billing Efficiency (BE/FBE)',
 }
 
 
@@ -4107,6 +4111,250 @@ def _inject_description(html, description, primary_color):
 
 
 # =============================================================================
+# TMO SECTION RENDERERS
+# =============================================================================
+
+_STATUS_COLORS = {
+    'on_target':    '#15803d',
+    'below_target': '#f59e0b',
+    'poor':         '#f97316',
+    'critical':     '#ef4444',
+}
+
+def _status_badge(status):
+    color = _STATUS_COLORS.get(status, '#94a3b8')
+    label = status.replace('_', ' ').title()
+    return (
+        f'<span style="display:inline-block;padding:2px 7px;border-radius:4px;'
+        f'background:{color};color:#fff;font-size:9px;font-weight:700;">{label}</span>'
+    )
+
+
+def render_tmo_feeder_dispatch(data, context, page_number):
+    """Feeder Dispatch Targets vs Actuals — paginated landscape table + summary KPIs."""
+    feeders     = data.get('feeders', [])
+    tot_target  = data.get('total_target_mwh', 0.0)
+    tot_actual  = data.get('total_actual_mwh', 0.0)
+    ach_pct     = data.get('overall_achievement_pct', 0.0)
+    status      = data.get('overall_status', '')
+
+    note_html = f"""
+    <div style="display:flex;gap:20px;margin-bottom:10px;align-items:center;flex-wrap:wrap;">
+        <div style="background:#f0f4f8;border-radius:8px;padding:8px 16px;text-align:center;">
+            <div style="font-size:8px;font-weight:700;text-transform:uppercase;opacity:0.6;margin-bottom:2px;">Total Target</div>
+            <div style="font-size:16px;font-weight:800;color:#002050;">{tot_target:,.2f} MWh</div>
+        </div>
+        <div style="background:#f0f4f8;border-radius:8px;padding:8px 16px;text-align:center;">
+            <div style="font-size:8px;font-weight:700;text-transform:uppercase;opacity:0.6;margin-bottom:2px;">Total Actual</div>
+            <div style="font-size:16px;font-weight:800;color:#002050;">{tot_actual:,.2f} MWh</div>
+        </div>
+        <div style="background:#f0f4f8;border-radius:8px;padding:8px 16px;text-align:center;">
+            <div style="font-size:8px;font-weight:700;text-transform:uppercase;opacity:0.6;margin-bottom:2px;">Overall Achievement</div>
+            <div style="font-size:16px;font-weight:800;color:#002050;">{ach_pct:.1f}%</div>
+        </div>
+        <div style="padding:4px 0;">{_status_badge(status)}</div>
+    </div>"""
+
+    header_html = """
+        <colgroup>
+            <col style="width:28%">
+            <col style="width:12%">
+            <col style="width:12%">
+            <col style="width:12%">
+            <col style="width:10%">
+            <col style="width:13%">
+            <col style="width:13%">
+        </colgroup>
+        <thead>
+            <tr>
+                <th>Feeder</th>
+                <th style="text-align:right">Target (MWh)</th>
+                <th style="text-align:right">Actual (MWh)</th>
+                <th style="text-align:right">Variance (MWh)</th>
+                <th style="text-align:right">Var %</th>
+                <th style="text-align:right">Achievement %</th>
+                <th>Status</th>
+            </tr>
+        </thead>"""
+
+    rows = []
+    for f in feeders:
+        var_color = '#15803d' if f.get('variance_mwh', 0) >= 0 else '#ef4444'
+        rows.append(
+            f"<tr>"
+            f"<td>{f.get('feeder_name','—')}</td>"
+            f"<td style='text-align:right'>{f.get('target_mwh',0):,.2f}</td>"
+            f"<td style='text-align:right'>{f.get('actual_mwh',0):,.2f}</td>"
+            f"<td style='text-align:right;color:{var_color};font-weight:700'>{f.get('variance_mwh',0):+,.2f}</td>"
+            f"<td style='text-align:right'>{f.get('variance_pct',0):+.1f}%</td>"
+            f"<td style='text-align:right;font-weight:700'>{f.get('achievement_pct',0):.1f}%</td>"
+            f"<td>{_status_badge(f.get('status',''))}</td>"
+            f"</tr>"
+        )
+
+    return _paginate_table(
+        rows, header_html, 'Feeder Dispatch — Targets vs Actuals',
+        context, page_number, max_rows=14, landscape=True, note_html=note_html,
+    )
+
+
+def render_tmo_collection_performance(data, context, page_number):
+    """Collection Performance by Segment — paginated table."""
+    segments   = data.get('segments', [])
+    tot_target = data.get('total_target', 0.0)
+    tot_actual = data.get('total_actual', 0.0)
+    ach_pct    = data.get('overall_achievement_pct', 0.0)
+    status     = data.get('overall_status', '')
+
+    note_html = f"""
+    <div style="display:flex;gap:20px;margin-bottom:10px;align-items:center;flex-wrap:wrap;">
+        <div style="background:#f0f4f8;border-radius:8px;padding:8px 16px;text-align:center;">
+            <div style="font-size:8px;font-weight:700;text-transform:uppercase;opacity:0.6;margin-bottom:2px;">Total Target</div>
+            <div style="font-size:16px;font-weight:800;color:#002050;">&#8358;{tot_target:,.0f}</div>
+        </div>
+        <div style="background:#f0f4f8;border-radius:8px;padding:8px 16px;text-align:center;">
+            <div style="font-size:8px;font-weight:700;text-transform:uppercase;opacity:0.6;margin-bottom:2px;">Total Actual</div>
+            <div style="font-size:16px;font-weight:800;color:#002050;">&#8358;{tot_actual:,.0f}</div>
+        </div>
+        <div style="background:#f0f4f8;border-radius:8px;padding:8px 16px;text-align:center;">
+            <div style="font-size:8px;font-weight:700;text-transform:uppercase;opacity:0.6;margin-bottom:2px;">Overall Achievement</div>
+            <div style="font-size:16px;font-weight:800;color:#002050;">{ach_pct:.1f}%</div>
+        </div>
+        <div style="padding:4px 0;">{_status_badge(status)}</div>
+    </div>"""
+
+    header_html = """
+        <colgroup>
+            <col style="width:14%">
+            <col style="width:18%">
+            <col style="width:13%">
+            <col style="width:16%">
+            <col style="width:16%">
+            <col style="width:12%">
+            <col style="width:11%">
+        </colgroup>
+        <thead>
+            <tr>
+                <th>Segment</th>
+                <th>Sub-segment</th>
+                <th>Period</th>
+                <th style="text-align:right">Target (&#8358;)</th>
+                <th style="text-align:right">Actual (&#8358;)</th>
+                <th style="text-align:right">Achievement %</th>
+                <th>Status</th>
+            </tr>
+        </thead>"""
+
+    rows = []
+    for s in segments:
+        var_color = '#15803d' if s.get('actual_amount', 0) >= s.get('target_amount', 0) else '#ef4444'
+        rows.append(
+            f"<tr>"
+            f"<td>{s.get('segment_code','—')}</td>"
+            f"<td>{s.get('sub_segment','—')}</td>"
+            f"<td>{s.get('period_month','')[:7]}</td>"
+            f"<td style='text-align:right'>{s.get('target_amount',0):,.0f}</td>"
+            f"<td style='text-align:right;color:{var_color};font-weight:700'>{s.get('actual_amount',0):,.0f}</td>"
+            f"<td style='text-align:right;font-weight:700'>{s.get('achievement_pct',0):.1f}%</td>"
+            f"<td>{_status_badge(s.get('status',''))}</td>"
+            f"</tr>"
+        )
+
+    return _paginate_table(
+        rows, header_html, 'Collection Performance by Segment',
+        context, page_number, max_rows=14, landscape=True, note_html=note_html,
+    )
+
+
+def render_tmo_billing_efficiency(data, context, page_number):
+    """Billing Efficiency (BE/FBE) — paginated table."""
+    rows_data  = data.get('rows', [])
+    tot_del    = data.get('total_energy_delivered_gwh', 0.0)
+    tot_bil    = data.get('total_energy_billed_gwh', 0.0)
+    overall_be = data.get('overall_billing_eff_pct', 0.0)
+    tot_trev   = data.get('total_target_revenue', 0.0)
+    tot_brev   = data.get('total_billed_amount', 0.0)
+    overall_re = data.get('overall_revenue_eff_pct', 0.0)
+
+    note_html = f"""
+    <div style="display:flex;gap:14px;margin-bottom:10px;align-items:center;flex-wrap:wrap;">
+        <div style="background:#f0f4f8;border-radius:8px;padding:7px 14px;text-align:center;">
+            <div style="font-size:8px;font-weight:700;text-transform:uppercase;opacity:0.6;margin-bottom:2px;">Delivered</div>
+            <div style="font-size:15px;font-weight:800;color:#002050;">{tot_del:,.3f} GWh</div>
+        </div>
+        <div style="background:#f0f4f8;border-radius:8px;padding:7px 14px;text-align:center;">
+            <div style="font-size:8px;font-weight:700;text-transform:uppercase;opacity:0.6;margin-bottom:2px;">Billed</div>
+            <div style="font-size:15px;font-weight:800;color:#002050;">{tot_bil:,.3f} GWh</div>
+        </div>
+        <div style="background:#f0f4f8;border-radius:8px;padding:7px 14px;text-align:center;">
+            <div style="font-size:8px;font-weight:700;text-transform:uppercase;opacity:0.6;margin-bottom:2px;">Billing Eff.</div>
+            <div style="font-size:15px;font-weight:800;color:#002050;">{overall_be:.1f}%</div>
+        </div>
+        <div style="background:#f0f4f8;border-radius:8px;padding:7px 14px;text-align:center;">
+            <div style="font-size:8px;font-weight:700;text-transform:uppercase;opacity:0.6;margin-bottom:2px;">Target Rev.</div>
+            <div style="font-size:15px;font-weight:800;color:#002050;">&#8358;{tot_trev:,.0f}</div>
+        </div>
+        <div style="background:#f0f4f8;border-radius:8px;padding:7px 14px;text-align:center;">
+            <div style="font-size:8px;font-weight:700;text-transform:uppercase;opacity:0.6;margin-bottom:2px;">Billed Rev.</div>
+            <div style="font-size:15px;font-weight:800;color:#002050;">&#8358;{tot_brev:,.0f}</div>
+        </div>
+        <div style="background:#f0f4f8;border-radius:8px;padding:7px 14px;text-align:center;">
+            <div style="font-size:8px;font-weight:700;text-transform:uppercase;opacity:0.6;margin-bottom:2px;">Rev. Eff.</div>
+            <div style="font-size:15px;font-weight:800;color:#002050;">{overall_re:.1f}%</div>
+        </div>
+    </div>"""
+
+    header_html = """
+        <colgroup>
+            <col style="width:10%">
+            <col style="width:18%">
+            <col style="width:10%">
+            <col style="width:11%">
+            <col style="width:11%">
+            <col style="width:9%">
+            <col style="width:12%">
+            <col style="width:10%">
+            <col style="width:9%">
+        </colgroup>
+        <thead>
+            <tr>
+                <th>Scope</th>
+                <th>Label</th>
+                <th>Period</th>
+                <th style="text-align:right">Del. (GWh)</th>
+                <th style="text-align:right">Billed (GWh)</th>
+                <th style="text-align:right">BE %</th>
+                <th style="text-align:right">Target Rev. (&#8358;)</th>
+                <th style="text-align:right">Billed Rev. (&#8358;)</th>
+                <th style="text-align:right">Rev Eff %</th>
+            </tr>
+        </thead>"""
+
+    rows = []
+    for r in rows_data:
+        be_color  = _STATUS_COLORS.get(r.get('be_status', ''), '#94a3b8')
+        rr_color  = _STATUS_COLORS.get(r.get('rr_status', ''), '#94a3b8')
+        rows.append(
+            f"<tr>"
+            f"<td>{r.get('scope_type','—').title()}</td>"
+            f"<td>{r.get('scope_label','—')}</td>"
+            f"<td>{r.get('period_month','')[:7]}</td>"
+            f"<td style='text-align:right'>{r.get('energy_delivered_gwh',0):,.3f}</td>"
+            f"<td style='text-align:right'>{r.get('energy_billed_gwh',0):,.3f}</td>"
+            f"<td style='text-align:right;font-weight:700;color:{be_color}'>{r.get('billing_efficiency_pct',0):.1f}%</td>"
+            f"<td style='text-align:right'>{r.get('target_revenue_amount',0):,.0f}</td>"
+            f"<td style='text-align:right'>{r.get('billed_amount',0):,.0f}</td>"
+            f"<td style='text-align:right;font-weight:700;color:{rr_color}'>{r.get('revenue_efficiency_pct',0):.1f}%</td>"
+            f"</tr>"
+        )
+
+    return _paginate_table(
+        rows, header_html, 'Billing Efficiency (BE / FBE)',
+        context, page_number, max_rows=12, landscape=True, note_html=note_html,
+    )
+
+
+# =============================================================================
 # MAIN PDF GENERATOR CLASS
 # =============================================================================
 
@@ -4161,6 +4409,10 @@ class PDFGenerator:
         'segment_voltage_energy':       render_segment_voltage_energy,
         'energy_md_nmd_mix':            render_energy_md_nmd_mix,
         'segment_compliance_trend':     render_segment_compliance_trend,
+        # TMO
+        'tmo_feeder_dispatch':        render_tmo_feeder_dispatch,
+        'tmo_collection_performance': render_tmo_collection_performance,
+        'tmo_billing_efficiency':     render_tmo_billing_efficiency,
     }
 
     def __init__(self, report_config, data_service):
