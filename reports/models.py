@@ -145,6 +145,11 @@ class ReportSection(UUIDModel):
         ('entity_comparison', 'Entity Comparison'),
         ('period_comparison', 'Period Comparison'),
         ('customer_comparison', 'Customer Comparison'),
+
+        # TMO sections
+        ('tmo_feeder_dispatch',        'TMO Feeder Dispatch Targets vs Actuals'),
+        ('tmo_collection_performance', 'TMO Collection Performance by Segment'),
+        ('tmo_billing_efficiency',     'TMO Billing Efficiency (BE/FBE)'),
     ]
 
     template = models.ForeignKey(

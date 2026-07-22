@@ -323,6 +323,28 @@ SECTION_DEFINITIONS = {
         'supports_chart': True,
         'config_options': {},
     },
+    # ── TMO sections ─────────────────────────────────────────────────────────
+    'tmo_feeder_dispatch': {
+        'display_name': 'Feeder Dispatch Targets vs Actuals',
+        'description': 'Per-feeder MWh dispatch targets from DataNest vs actual energy delivered from Raven',
+        'category': 'tmo',
+        'supports_chart': True,
+        'config_options': {},
+    },
+    'tmo_collection_performance': {
+        'display_name': 'Collection Performance by Segment',
+        'description': 'Target vs actual collection amounts by segment and sub-segment from DataNest',
+        'category': 'tmo',
+        'supports_chart': True,
+        'config_options': {},
+    },
+    'tmo_billing_efficiency': {
+        'display_name': 'Billing Efficiency (BE/FBE)',
+        'description': 'Energy delivered vs billed and revenue targets vs actuals by scope from DataNest',
+        'category': 'tmo',
+        'supports_chart': True,
+        'config_options': {},
+    },
     # ── DSO Compliance sections ───────────────────────────────────────────────
     'dso_compliance_overview': {
         'display_name': 'DSO Compliance Overview',
@@ -1469,6 +1491,16 @@ class ReportDataService:
             self._financial_service_instance = FinancialReportDataService(self._financial_filters)
         return self._financial_service_instance
 
+    def _get_tmo_service(self):
+        if not hasattr(self, '_tmo_service_instance'):
+            from reports.tmo_service import TMOReportService
+            self._tmo_service_instance = TMOReportService({
+                'from_date':  self.filters.get('from_date'),
+                'to_date':    self.filters.get('to_date'),
+                'feeder_ids': self.feeder_ids,
+            })
+        return self._tmo_service_instance
+
     # =========================================================================
     # MASTER DISPATCHER
     # =========================================================================
@@ -1479,6 +1511,7 @@ class ReportDataService:
     _COMMERCIAL_SECTIONS = {'commercial_overview', 'revenue_by_district', 'customer_type_summary'}
     _FINANCIAL_SECTIONS  = {'financial_overview', 'opex_by_category', 'opex_by_district'}
     _COMPARISON_SECTIONS = {'entity_comparison', 'period_comparison', 'customer_comparison'}
+    _TMO_SECTIONS        = {'tmo_feeder_dispatch', 'tmo_collection_performance', 'tmo_billing_efficiency'}
 
     def get_feeder_segment_compliance(self):
         """
@@ -1781,6 +1814,8 @@ class ReportDataService:
             return self._get_commercial_service().get_all_section_data(section_type, config)
         if section_type in self._FINANCIAL_SECTIONS:
             return self._get_financial_service().get_all_section_data(section_type, config)
+        if section_type in self._TMO_SECTIONS:
+            return self._get_tmo_service().get_all_section_data(section_type, config)
 
         # ── Comparison sections — require user in context ─────────────────────
         if section_type in self._COMPARISON_SECTIONS:
