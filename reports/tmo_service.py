@@ -77,12 +77,13 @@ class TMOReportService:
             targets_qs = targets_qs.filter(feeder_id__in=self.feeder_ids)
 
         targets_by_code = {}
-        for row in targets_qs.values('feeder_code', 'feeder__name', 'feeder_id').annotate(
+        for row in targets_qs.values('feeder_code', 'feeder__name', 'feeder__slug', 'feeder_id').annotate(
             total_target=Sum('target_mwh')
         ):
             targets_by_code[row['feeder_code']] = {
                 'feeder_id':   str(row['feeder_id']) if row['feeder_id'] else row['feeder_code'],
                 'feeder_name': row['feeder__name'] or row['feeder_code'],
+                'feeder_slug': row['feeder__slug'] or '',
                 'target_mwh':  float(row['total_target'] or 0),
             }
 
@@ -93,21 +94,33 @@ class TMOReportService:
         if self.feeder_ids:
             actuals_qs = actuals_qs.filter(feeder_id__in=self.feeder_ids)
 
-        actuals_by_slug = {
-            row['feeder__slug']: float(row['total'] or 0)
-            for row in actuals_qs.values('feeder__slug').annotate(total=Sum('energy_mwh'))
-        }
+        actuals_by_slug = {}
+        for row in actuals_qs.values('feeder__slug', 'feeder__name').annotate(total=Sum('energy_mwh')):
+            slug = row['feeder__slug'] or ''
+            actuals_by_slug[slug] = {
+                'total': float(row['total'] or 0),
+                'name':  row['feeder__name'] or slug,
+            }
 
-        all_codes = set(targets_by_code) | set(actuals_by_slug)
+        # merge: targets keyed by feeder_code; actuals keyed by feeder slug
+        # build a slug -> targets_by_code entry map so both sides can join
+        slug_to_code = {v['feeder_slug']: k for k, v in targets_by_code.items() if v['feeder_slug']}
+        all_keys = set(targets_by_code) | {slug_to_code.get(s, s) for s in actuals_by_slug}
+
         rows = []
-        for code in sorted(all_codes):
-            info       = targets_by_code.get(code, {'feeder_id': code, 'feeder_name': code, 'target_mwh': 0.0})
-            target_mwh = info['target_mwh']
-            actual_mwh = actuals_by_slug.get(code, 0.0)
+        for code in sorted(all_keys):
+            info = targets_by_code.get(code, {})
+            slug = info.get('feeder_slug', code)
+            actual_entry = actuals_by_slug.get(slug, {})
+
+            feeder_name = info.get('feeder_name') or actual_entry.get('name') or code
+            target_mwh  = info.get('target_mwh', 0.0)
+            actual_mwh  = actual_entry.get('total', 0.0)
+            feeder_id   = info.get('feeder_id', code)
             ach        = _pct(actual_mwh, target_mwh) if target_mwh else 0.0
             rows.append({
-                'feeder_id':       info['feeder_id'],
-                'feeder_name':     info['feeder_name'],
+                'feeder_id':       feeder_id,
+                'feeder_name':     feeder_name,
                 'target_mwh':      target_mwh,
                 'actual_mwh':      actual_mwh,
                 'variance_mwh':    round(actual_mwh - target_mwh, 4),
