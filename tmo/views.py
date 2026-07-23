@@ -1,4 +1,6 @@
 # tmo/views.py
+from datetime import date, timedelta
+
 from django.core.exceptions import ObjectDoesNotExist
 
 from rest_framework.permissions import IsAuthenticated
@@ -69,12 +71,25 @@ class TMOSupplyComplianceView(APIView):
     """
     GET /api/tmo/supply/compliance/
     Per-feeder hours of supply compliance against NERC Band minimums.
+    Default period: current month MTD — compliance is a period metric,
+    not meaningful for a single day.
     """
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
         try:
-            data = _make_service(request).get_supply_compliance()
+            p = request.query_params
+            if not any(p.get(k) for k in ('date', 'month', 'from_date', 'to_date')):
+                today     = date.today()
+                from_date = today.replace(day=1)
+                to_date   = today - timedelta(days=1)
+                if to_date < from_date:
+                    to_date = from_date
+                filters = _filters_from_request(request)
+                service = TMOService(from_date, to_date, filters)
+            else:
+                service = _make_service(request)
+            data = service.get_supply_compliance()
             return Response(data)
         except Exception as exc:
             return Response({'error': str(exc)}, status=500)
@@ -193,16 +208,28 @@ class TMOPEARView(APIView):
 
 class TMOComplianceSummaryView(APIView):
     """
-    GET /api/tmo/compliance/summary/
+    GET /api/tmo/supply/compliance/summary/
     Feeder count bucketed by compliance status (Exceeding/OnTarget/BelowTarget/Poor/Critical)
     per segment (MDI, Non-MDI Band A, Non-MDI Non-Band A).
+    Default period: current month MTD.
     Covers Slide 6.
     """
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
         try:
-            data = _make_service(request).get_compliance_summary()
+            p = request.query_params
+            if not any(p.get(k) for k in ('date', 'month', 'from_date', 'to_date')):
+                today     = date.today()
+                from_date = today.replace(day=1)
+                to_date   = today - timedelta(days=1)
+                if to_date < from_date:
+                    to_date = from_date
+                filters = _filters_from_request(request)
+                service = TMOService(from_date, to_date, filters)
+            else:
+                service = _make_service(request)
+            data = service.get_compliance_summary()
             return Response(data)
         except Exception as exc:
             return Response({'error': str(exc)}, status=500)
@@ -230,12 +257,25 @@ class TMOIncidentsView(APIView):
     Techno-Commercial Incidence report: faults per feeder with financial loss,
     status (Rectified/Lingering) and rectification rate.
     Covers Slide 16.
+    Default period: current month MTD (incidents are episodic, not daily).
     """
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
         try:
-            data = _make_service(request).get_incidents()
+            p = request.query_params
+            # If no explicit date params, default to current-month MTD instead of T-1.
+            if not any(p.get(k) for k in ('date', 'month', 'from_date', 'to_date')):
+                today = date.today()
+                from_date = today.replace(day=1)
+                to_date   = today - timedelta(days=1)
+                if to_date < from_date:
+                    to_date = from_date
+                filters = _filters_from_request(request)
+                service = TMOService(from_date, to_date, filters)
+            else:
+                service = _make_service(request)
+            data = service.get_incidents()
             return Response(data)
         except Exception as exc:
             return Response({'error': str(exc)}, status=500)
