@@ -183,6 +183,16 @@ class Feeder(UUIDModel, models.Model):
         help_text="True for solar/minigrid feeders (e.g. Haske Solar) — tracked separately in TMO"
     )
 
+    monitoring_end_date = models.DateField(
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text=(
+            "If set, this feeder is under active monitoring until this date. "
+            "Used for newly commissioned feeders tracked in the TMO dashboard."
+        ),
+    )
+
     objects = FeederManager()
 
     def save(self, *args, **kwargs):

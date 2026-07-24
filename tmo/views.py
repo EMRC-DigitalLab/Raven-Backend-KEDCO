@@ -3,6 +3,8 @@ from datetime import date, timedelta
 
 from django.core.exceptions import ObjectDoesNotExist
 
+from datetime import date, timedelta
+
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -12,7 +14,7 @@ from .services import TMOService, resolve_date_params
 
 def _filters_from_request(request):
     p = request.query_params
-    return {k: p.get(k) for k in ('segment', 'state', 'district', 'band', 'voltage', 'feeder') if p.get(k)}
+    return {k: p.get(k) for k in ('segment', 'state', 'district', 'band', 'voltage', 'feeder', 'coordinate', 'region', 'status') if p.get(k)}
 
 
 def _make_service(request):
@@ -189,6 +191,34 @@ class TMODailyEnergyView(APIView):
             return Response({'error': str(exc)}, status=500)
 
 
+class TMODailyEnergyBySegmentView(APIView):
+    """
+    GET /api/tmo/energy/daily/by-segment/
+    Per-segment daily energy forecast vs actual.
+    Forecast = TMOMonthlySegmentTarget.target_energy_mwh / days_in_month.
+    Actual uses balloon+system fallback.
+    Default: current month MTD.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        try:
+            p = request.query_params
+            if not any(p.get(k) for k in ('date', 'month', 'from_date', 'to_date')):
+                today     = date.today()
+                from_date = today.replace(day=1)
+                to_date   = today - timedelta(days=1)
+                if to_date < from_date:
+                    to_date = from_date
+                service = TMOService(from_date, to_date, _filters_from_request(request))
+            else:
+                service = _make_service(request)
+            data = service.get_daily_energy_by_segment()
+            return Response(data)
+        except Exception as exc:
+            return Response({'error': str(exc)}, status=500)
+
+
 class TMOPEARView(APIView):
     """
     GET /api/tmo/pear/
@@ -309,6 +339,78 @@ class TMOVolatilityView(APIView):
     def get(self, request):
         try:
             data = _make_service(request).get_volatility()
+            return Response(data)
+        except Exception as exc:
+            return Response({'error': str(exc)}, status=500)
+
+
+class TMOMonitoredFeedersView(APIView):
+    """
+    GET /api/tmo/feeders/monitored/
+    Newly commissioned feeders currently under active monitoring
+    (Feeder.monitoring_end_date >= today).
+    Returns per-feeder daily MWh from onboarded_at to today.
+    Admin sets monitoring_end_date when commissioning a feeder.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        try:
+            data = _make_service(request).get_monitored_feeders()
+            return Response(data)
+        except Exception as exc:
+            return Response({'error': str(exc)}, status=500)
+
+
+class TMOMinigridsSSFView(APIView):
+    """
+    GET /api/tmo/minigrids/daily/
+    Haske Solar Supplementation Factor (SSF):
+    - feeders[]: per-minigrid daily MWh array → one bar chart each
+    - summary: all minigrids combined per day + grand total → summary table
+    Default: current month MTD.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        try:
+            p = request.query_params
+            if not any(p.get(k) for k in ('date', 'month', 'from_date', 'to_date')):
+                today     = date.today()
+                from_date = today.replace(day=1)
+                to_date   = today - timedelta(days=1)
+                if to_date < from_date:
+                    to_date = from_date
+                service = TMOService(from_date, to_date, _filters_from_request(request))
+            else:
+                service = _make_service(request)
+            data = service.get_minigrids_daily()
+            return Response(data)
+        except Exception as exc:
+            return Response({'error': str(exc)}, status=500)
+
+
+class TMODailyAllocationView(APIView):
+    """
+    GET /api/tmo/allocation/daily/
+    Per-day: TCN expected allocation (MW) vs actual avg consumption (MW) vs unpicked gap.
+    Default: current month MTD.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        try:
+            p = request.query_params
+            if not any(p.get(k) for k in ('date', 'month', 'from_date', 'to_date')):
+                today     = date.today()
+                from_date = today.replace(day=1)
+                to_date   = today - timedelta(days=1)
+                if to_date < from_date:
+                    to_date = from_date
+                service = TMOService(from_date, to_date, _filters_from_request(request))
+            else:
+                service = _make_service(request)
+            data = service.get_daily_allocation()
             return Response(data)
         except Exception as exc:
             return Response({'error': str(exc)}, status=500)

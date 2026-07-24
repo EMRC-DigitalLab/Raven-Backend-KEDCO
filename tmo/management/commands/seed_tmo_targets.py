@@ -59,7 +59,7 @@ class Command(BaseCommand):
             year=year, month=month,
             defaults={
                 'target_md_share_pct':      65.0,
-                'monthly_energy_target_gwh': 45.0,   # 45 GWh/month across the network
+                'monthly_energy_target_gwh': 155.0,
             },
         )
         verb = "Created" if created else "Updated"
