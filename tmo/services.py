@@ -853,9 +853,10 @@ class TMOService:
         Compares against daily target derived from monthly GWh target in TMONetworkConfig.
         Covers Slides 2 & 3 (Daily Energy Forecast / Daily Energy Allocation).
         """
-        feeder_ids = list(self._base_feeder_qs().values_list('id', flat=True))
+        feeder_ids = list(self._base_feeder_qs().filter(voltage_level='33kv').values_list('id', flat=True))
 
-        daily_map = _daily_energy_breakdown(self._energy_ids(feeder_ids), self.from_date, self.to_date)
+        # 33KV-only: no double-count risk from upstream/downstream pairs, skip _energy_ids()
+        daily_map = _daily_energy_breakdown(feeder_ids, self.from_date, self.to_date)
         daily = [{'date': date.fromisoformat(d), 'total_mwh': v} for d, v in sorted(daily_map.items())]
 
         config = TMONetworkConfig.objects.filter(
@@ -866,10 +867,22 @@ class TMOService:
         monthly_target_gwh = float(config.monthly_energy_target_gwh) if config else 0.0
 
         days_in_month = calendar.monthrange(self.from_date.year, self.from_date.month)[1]
-        daily_target_gwh = monthly_target_gwh / days_in_month if days_in_month else 0.0
+        flat_daily_target_gwh = monthly_target_gwh / days_in_month if days_in_month else 0.0
+
+        # Per-day targets from TMODailyAllocation (populated by Excel import).
+        # expected_mw × 24 hours / 1000 = daily GWh allocation.
+        # Falls back to flat monthly ÷ days when no allocation row exists.
+        alloc_map = {
+            str(a.date): float(a.expected_mw) * 24.0 / 1000.0
+            for a in TMODailyAllocation.objects.filter(
+                date__gte=self.from_date,
+                date__lte=self.to_date,
+            )
+        }
 
         days = []
         for row in daily:
+            daily_target_gwh = alloc_map.get(str(row['date']), flat_daily_target_gwh)
             actual_gwh = float(row['total_mwh'] or 0) / 1000
             ach = _pct(actual_gwh, daily_target_gwh)
             days.append({
@@ -903,7 +916,7 @@ class TMOService:
         Daily forecast = TMOMonthlySegmentTarget.target_energy_mwh / days_in_month.
         Actual uses balloon+system fallback via _daily_energy_breakdown.
         """
-        feeder_qs  = self._base_feeder_qs()
+        feeder_qs  = self._base_feeder_qs().filter(voltage_level='33kv')
         feeder_ids = set(feeder_qs.values_list('id', flat=True))
 
         mdi_ids    = self.mdi_ids & feeder_ids
@@ -925,8 +938,9 @@ class TMOService:
         }
 
         # Daily actuals per segment using balloon+system fallback
+        # 33KV-only: skip _energy_ids() — no 11KV feeders in set, no double-count risk
         seg_daily = {
-            seg: _daily_energy_breakdown(self._energy_ids(list(cfg['ids'])), self.from_date, self.to_date)
+            seg: _daily_energy_breakdown(list(cfg['ids']), self.from_date, self.to_date)
             if cfg['ids'] else {}
             for seg, cfg in seg_config.items()
         }
