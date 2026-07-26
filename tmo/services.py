@@ -529,6 +529,8 @@ class TMOService:
             rows.append({
                 'feeder_id':          str(fid),
                 'feeder_name':        feeder.name if feeder else str(fid),
+                'feeder_slug':        feeder.slug if feeder else '',
+                'voltage_level':      feeder.voltage_level if feeder else '',
                 'segment':            self._segment_label(fid),
                 'dm_status':          _dm_status(fid, feeder),
                 'band':               feeder.band.name if feeder and feeder.band else '',
