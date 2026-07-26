@@ -183,6 +183,19 @@ class Feeder(UUIDModel, models.Model):
         help_text="True for solar/minigrid feeders (e.g. Haske Solar) — tracked separately in TMO"
     )
 
+    PL_SEGMENT_CHOICES = [
+        ('MDI',     'MD Industrial'),
+        ('MDNI',    'MD Non-Industrial'),
+        ('Regions', 'Regions'),
+    ]
+    pl_segment = models.CharField(
+        max_length=10,
+        choices=PL_SEGMENT_CHOICES,
+        null=True, blank=True,
+        db_index=True,
+        help_text="P&L segment: MDI / MDNI / Regions — imported from Feeders Segmentation Excel"
+    )
+
     monitoring_end_date = models.DateField(
         null=True,
         blank=True,

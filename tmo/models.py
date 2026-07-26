@@ -20,9 +20,9 @@ class TMOMonthlySegmentTarget(models.Model):
     target_energy_mwh        = models.DecimalField(max_digits=14, decimal_places=4, default=0)
     target_revenue_ngn       = models.DecimalField(max_digits=18, decimal_places=2, default=0)
     target_collection_ngn    = models.DecimalField(max_digits=18, decimal_places=2, default=0)
-    average_tariff_ngn_per_mwh = models.DecimalField(
-        max_digits=12, decimal_places=2, default=0,
-        help_text="Average tariff in ₦/MWh for this segment (used for GCR billing value calc)"
+    average_tariff_per_kwh = models.DecimalField(
+        max_digits=10, decimal_places=2, default=0,
+        help_text="Average electricity price in ₦/kWh for this segment (e.g. 225 for MDI, 52 for Regions)"
     )
 
     created_at = models.DateTimeField(auto_now_add=True)
@@ -92,6 +92,98 @@ class TMOIncident(models.Model):
 
     def __str__(self):
         return f"{self.feeder.name} — {self.nature_of_fault[:50]} ({self.status})"
+
+
+class TMONetworkDispatch(models.Model):
+    """
+    Daily 33KV network dispatch reconciliation (from TCN monthly load-flow Excel).
+    Drives the "KEDCO Daily Real-time Allocation Based on Available Generation" chart.
+
+      kedco_allocation_mw  — what TCN allocated to KEDCO   (blue bar)
+      disco_offtake_mw     — what DISCO/KEDCO actually consumed (yellow bar)
+      variance_mw          — kedco_allocation − disco_offtake
+                             positive → GREEN (KEDCO over-took)
+                             negative → RED   (KEDCO under-took / loss)
+      available_generation_mw — national available generation that day
+    """
+    SOURCE_CHOICES = [
+        ('manual',   'Manual / Excel Import'),
+        ('datanest', 'DataNest Sync'),
+    ]
+
+    date                    = models.DateField(unique=True, db_index=True)
+    kedco_allocation_mw     = models.DecimalField(max_digits=10, decimal_places=4)
+    disco_offtake_mw        = models.DecimalField(max_digits=10, decimal_places=4)
+    variance_mw             = models.DecimalField(max_digits=10, decimal_places=4)
+    available_generation_mw = models.DecimalField(max_digits=12, decimal_places=4, default=0)
+    source                  = models.CharField(max_length=10, choices=SOURCE_CHOICES, default='manual')
+    notes                   = models.TextField(blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['date']
+
+    def __str__(self):
+        status = 'GREEN' if self.variance_mw >= 0 else 'RED'
+        return f"{self.date} | alloc={self.kedco_allocation_mw} MW | disco={self.disco_offtake_mw} MW [{status}]"
+
+
+class TMOSupplyHoursTarget(models.Model):
+    """
+    Admin-configurable monthly supply hours target per DM segment.
+    Overrides feeder.band.minimum_hours in the supply compliance calculation.
+    If no row exists for a segment/month, the band default is used as fallback.
+    """
+    SEGMENT_CHOICES = [
+        ('MDI',              'MDI'),
+        ('Non-MDI Band A',   'Non-MDI Band A'),
+        ('Non-MDI, Non-Band A', 'Non-MDI, Non-Band A'),
+    ]
+
+    segment      = models.CharField(max_length=30, choices=SEGMENT_CHOICES, db_index=True)
+    year         = models.PositiveSmallIntegerField()
+    month        = models.PositiveSmallIntegerField()
+    target_hours = models.DecimalField(
+        max_digits=5, decimal_places=2,
+        help_text="Daily hours-of-supply target for feeders in this segment (e.g. 20.00)"
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ('segment', 'year', 'month')
+        ordering = ['-year', '-month', 'segment']
+
+    def __str__(self):
+        return f"{self.segment} {self.year}-{self.month:02d} → {self.target_hours} hrs"
+
+
+class TMONetworkDispatchHourly(models.Model):
+    """
+    24-hour breakdown for each day's 33KV dispatch reconciliation.
+    Linked to the parent TMONetworkDispatch daily summary.
+    hour = 1–24 (represents 01:00–24:00 from the TCN load-flow Excel).
+    """
+    dispatch = models.ForeignKey(
+        TMONetworkDispatch, on_delete=models.CASCADE, related_name='hourly_readings'
+    )
+    date  = models.DateField(db_index=True)
+    hour  = models.PositiveSmallIntegerField(help_text="1=01:00, 2=02:00, … 24=24:00")
+
+    kedco_allocation_mw     = models.DecimalField(max_digits=10, decimal_places=4, null=True)
+    disco_offtake_mw        = models.DecimalField(max_digits=10, decimal_places=4, null=True)
+    variance_mw             = models.DecimalField(max_digits=10, decimal_places=4, null=True)
+    available_generation_mw = models.DecimalField(max_digits=12, decimal_places=4, null=True)
+
+    class Meta:
+        unique_together = ('date', 'hour')
+        ordering = ['date', 'hour']
+
+    def __str__(self):
+        return f"{self.date} {self.hour:02d}:00 | alloc={self.kedco_allocation_mw} MW"
 
 
 class TMODailyAllocation(models.Model):

@@ -17,10 +17,15 @@ from .views import (
     TMOMonitoredFeedersView,
     TMOMinigridsSSFView,
     TMOMinigridsView,
+    TMONetworkConfigView,
+    TMONetworkDispatchHourlyView,
+    TMONetworkDispatchView,
     TMOOverviewView,
     TMOPEARView,
     TMOPnLTargetsView,
+    TMOSegmentTargetsView,
     TMOSupplyComplianceView,
+    TMOSupplyHoursTargetView,
     TMOVolatilityView,
 )
 
@@ -59,9 +64,18 @@ urlpatterns = [
     # P&L Mix Volatility Index
     path('volatility/',          TMOVolatilityView.as_view(),        name='volatility'),
 
+    # Network dispatch (33KV allocation vs DISCO offtake)
+    path('network/dispatch/',         TMONetworkDispatchView.as_view(),        name='network-dispatch'),
+    path('network/dispatch/hourly/',  TMONetworkDispatchHourlyView.as_view(),  name='network-dispatch-hourly'),
+
     # GCR & Incidents
     path('gcr/',                 TMOGCRView.as_view(),               name='gcr'),
     path('incidents/',           TMOIncidentsView.as_view(),         name='incidents'),
+
+    # Settings — team fills these from the app each month
+    path('settings/segment-targets/', TMOSegmentTargetsView.as_view(),   name='settings-segment-targets'),
+    path('settings/network-config/',  TMONetworkConfigView.as_view(),    name='settings-network-config'),
+    path('settings/supply-hours/',    TMOSupplyHoursTargetView.as_view(), name='settings-supply-hours'),
 
     # Feeder list + detail
     path('feeders/',                      TMOFeedersView.as_view(),          name='feeders'),
