@@ -1,10 +1,10 @@
 from django.contrib import admin
-from .models import TMODailyAllocation, TMOIncident, TMOMonthlySegmentTarget, TMONetworkConfig
+from .models import TMODailyAllocation, TMOIncident, TMOMonthlySegmentTarget, TMONetworkConfig, TMOSupplyHoursTarget
 
 
 @admin.register(TMOMonthlySegmentTarget)
 class TMOMonthlySegmentTargetAdmin(admin.ModelAdmin):
-    list_display  = ('segment', 'year', 'month', 'target_energy_mwh', 'target_revenue_ngn', 'target_collection_ngn', 'average_tariff_ngn_per_mwh')
+    list_display  = ('segment', 'year', 'month', 'target_energy_mwh', 'target_revenue_ngn', 'target_collection_ngn', 'average_tariff_per_kwh')
     list_filter   = ('segment', 'year')
     ordering      = ('-year', '-month', 'segment')
 
@@ -31,3 +31,10 @@ class TMOIncidentAdmin(admin.ModelAdmin):
     list_filter   = ('status', 'coordinate')
     search_fields = ('feeder__name', 'nature_of_fault', 'region')
     ordering      = ('-incident_date',)
+
+
+@admin.register(TMOSupplyHoursTarget)
+class TMOSupplyHoursTargetAdmin(admin.ModelAdmin):
+    list_display  = ('segment', 'year', 'month', 'target_hours', 'updated_at')
+    list_filter   = ('segment', 'year')
+    ordering      = ('-year', '-month', 'segment')

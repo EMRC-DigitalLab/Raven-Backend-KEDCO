@@ -78,21 +78,21 @@ class Command(BaseCommand):
                 'target_energy_mwh':        28_000,
                 'target_revenue_ngn':       4_340_000_000,   # ₦4.34B
                 'target_collection_ngn':    3_906_000_000,   # 90% collection
-                'average_tariff_ngn_per_mwh': 155_000,
+                'average_tariff_per_kwh': 155,   # ₦155/kWh
             },
             {
                 'segment':                  'MDNI',
                 'target_energy_mwh':        18_000,
                 'target_revenue_ngn':       1_980_000_000,
                 'target_collection_ngn':    1_782_000_000,
-                'average_tariff_ngn_per_mwh': 110_000,
+                'average_tariff_per_kwh': 110,   # ₦110/kWh
             },
             {
                 'segment':                  'Regions',
                 'target_energy_mwh':        13_000,
                 'target_revenue_ngn':       1_105_000_000,
                 'target_collection_ngn':     994_500_000,
-                'average_tariff_ngn_per_mwh': 85_000,
+                'average_tariff_per_kwh': 85,    # ₦85/kWh
             },
         ]
         for s in segments:
