@@ -7,6 +7,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from .permissions import HasTMOAccess, HasTMOAdminAccess
 from .models import (
     TMOMonthlySegmentTarget,
     TMONetworkConfig,
@@ -34,7 +35,7 @@ class TMOOverviewView(APIView):
     Top-level KPI summary: total energy dispatch achievement + supply compliance.
     Supports: ?date=, ?month=, ?from_date=&to_date=, ?state=, ?district=, ?band=, ?segment=
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [HasTMOAccess]
 
     def get(self, request):
         try:
@@ -49,7 +50,7 @@ class TMOFeederDispatchView(APIView):
     GET /api/tmo/energy/dispatch/
     Per-feeder energy dispatch: target vs actual MWh, sorted by achievement % ascending (worst first).
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [HasTMOAccess]
 
     def get(self, request):
         try:
@@ -64,7 +65,7 @@ class TMOEnergyBySegmentView(APIView):
     GET /api/tmo/energy/by-segment/
     Energy delivered grouped by MDI, MDNI, Minigrid segments.
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [HasTMOAccess]
 
     def get(self, request):
         try:
@@ -81,7 +82,7 @@ class TMOSupplyComplianceView(APIView):
     Default period: current month MTD — compliance is a period metric,
     not meaningful for a single day.
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [HasTMOAccess]
 
     def get(self, request):
         try:
@@ -108,7 +109,7 @@ class TMOCollectionView(APIView):
     Collection performance: target vs actual by segment and period.
     Supports: ?segment=MDI|MDNI
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [HasTMOAccess]
 
     def get(self, request):
         try:
@@ -123,7 +124,7 @@ class TMOBillingEfficiencyView(APIView):
     GET /api/tmo/billing/
     Billing efficiency % and revenue realisation % by scope.
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [HasTMOAccess]
 
     def get(self, request):
         try:
@@ -139,7 +140,7 @@ class TMOPnLTargetsView(APIView):
     P&L segment analysis: MDI and MDNI energy targets vs actuals,
     plus revenue and collection targets from TMOMonthlySegmentTarget.
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [HasTMOAccess]
 
     def get(self, request):
         try:
@@ -154,7 +155,7 @@ class TMOMinigridsView(APIView):
     GET /api/tmo/minigrids/
     Minigrid feeder performance: energy dispatch + hours of supply.
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [HasTMOAccess]
 
     def get(self, request):
         try:
@@ -170,7 +171,7 @@ class TMOFeedersView(APIView):
     All onboarded feeders with energy + hours data for the selected period.
     Supports all filters: ?segment=, ?state=, ?district=, ?band=, ?voltage=
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [HasTMOAccess]
 
     def get(self, request):
         try:
@@ -186,7 +187,7 @@ class TMODailyEnergyView(APIView):
     Daily total network energy (GWh) for the selected period vs monthly target.
     Covers Slides 2 & 3.
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [HasTMOAccess]
 
     def get(self, request):
         try:
@@ -204,7 +205,7 @@ class TMODailyEnergyBySegmentView(APIView):
     Actual uses balloon+system fallback.
     Default: current month MTD.
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [HasTMOAccess]
 
     def get(self, request):
         try:
@@ -231,7 +232,7 @@ class TMOPEARView(APIView):
     compared against configured target mix (default 65% MD / 35% NMD).
     Covers Slide 10.
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [HasTMOAccess]
 
     def get(self, request):
         try:
@@ -249,7 +250,7 @@ class TMOComplianceSummaryView(APIView):
     Default period: current month MTD.
     Covers Slide 6.
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [HasTMOAccess]
 
     def get(self, request):
         try:
@@ -276,7 +277,7 @@ class TMOEnergyByVoltageView(APIView):
     Per-segment daily energy split by 33KV vs 11KV, plus current vs previous month totals.
     Covers Slides 13, 14, 15.
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [HasTMOAccess]
 
     def get(self, request):
         try:
@@ -294,7 +295,7 @@ class TMOIncidentsView(APIView):
     Covers Slide 16.
     Default period: current month MTD (incidents are episodic, not daily).
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [HasTMOAccess]
 
     def get(self, request):
         try:
@@ -323,7 +324,7 @@ class TMOGCRView(APIView):
     with expected bill value, MTD bill value, and gap.
     Covers Slide 18.
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [HasTMOAccess]
 
     def get(self, request):
         try:
@@ -339,7 +340,7 @@ class TMOVolatilityView(APIView):
     P&L Mix Volatility Index: each segment's share of total energy for
     the selected day vs month-to-date, with Decline/Growth/Stable remark.
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [HasTMOAccess]
 
     def get(self, request):
         try:
@@ -357,7 +358,7 @@ class TMOMonitoredFeedersView(APIView):
     Returns per-feeder daily MWh from onboarded_at to today.
     Admin sets monitoring_end_date when commissioning a feeder.
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [HasTMOAccess]
 
     def get(self, request):
         try:
@@ -375,7 +376,7 @@ class TMOMinigridsSSFView(APIView):
     - summary: all minigrids combined per day + grand total → summary table
     Default: current month MTD.
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [HasTMOAccess]
 
     def get(self, request):
         try:
@@ -401,7 +402,7 @@ class TMODailyAllocationView(APIView):
     Per-day: TCN expected allocation (MW) vs actual avg consumption (MW) vs unpicked gap.
     Default: current month MTD.
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [HasTMOAccess]
 
     def get(self, request):
         try:
@@ -426,7 +427,7 @@ class TMOFeederDetailView(APIView):
     GET /api/tmo/feeders/<feeder_slug>/
     Daily breakdown for a single feeder over the selected period.
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [HasTMOAccess]
 
     def get(self, request, feeder_slug):
         try:
@@ -458,7 +459,7 @@ class TMONetworkDispatchView(APIView):
         ]
       }
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [HasTMOAccess]
 
     def get(self, request):
         try:
@@ -520,7 +521,7 @@ class TMONetworkDispatchHourlyView(APIView):
         ]
       }
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [HasTMOAccess]
 
     def get(self, request):
         date_str = request.query_params.get('date')
@@ -571,9 +572,14 @@ class TMOSegmentTargetsView(APIView):
     GET  /api/tmo/settings/segment-targets/?month=2026-07
          Returns current targets for all 3 segments for that month.
     POST /api/tmo/settings/segment-targets/
-         Upsert targets for one or more segments.
+         Upsert targets for one or more segments (admin/manager only).
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [HasTMOAccess]
+
+    def get_permissions(self):
+        if self.request.method == 'POST':
+            return [HasTMOAdminAccess()]
+        return [HasTMOAccess()]
 
     def get(self, request):
         month_str = request.query_params.get('month')
@@ -657,9 +663,14 @@ class TMONetworkConfigView(APIView):
     """
     GET  /api/tmo/settings/network-config/?month=2026-07
     POST /api/tmo/settings/network-config/
-         Set total monthly energy target (GWh) and MD share target (%).
+         Set total monthly energy target (GWh) and MD share target (%) (admin/manager only).
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [HasTMOAccess]
+
+    def get_permissions(self):
+        if self.request.method == 'POST':
+            return [HasTMOAdminAccess()]
+        return [HasTMOAccess()]
 
     def get(self, request):
         month_str = request.query_params.get('month')
@@ -723,9 +734,14 @@ class TMOSupplyHoursTargetView(APIView):
     """
     GET  /api/tmo/settings/supply-hours/?month=2026-07
     POST /api/tmo/settings/supply-hours/
-         Set monthly supply hours target per DM segment.
+         Set monthly supply hours target per DM segment (admin/manager only).
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [HasTMOAccess]
+
+    def get_permissions(self):
+        if self.request.method == 'POST':
+            return [HasTMOAdminAccess()]
+        return [HasTMOAccess()]
 
     VALID_SEGMENTS = {'MDI', 'Non-MDI Band A', 'Non-MDI, Non-Band A'}
 
