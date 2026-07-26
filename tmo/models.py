@@ -92,3 +92,45 @@ class TMOIncident(models.Model):
 
     def __str__(self):
         return f"{self.feeder.name} — {self.nature_of_fault[:50]} ({self.status})"
+
+
+class TMODailyAllocation(models.Model):
+    """
+    Daily network-level allocation from TCN/NERC (MW).
+    Source can be manual admin entry OR a DataNest sync (2-way until DataNest is wired up).
+      Blue   = expected_mw  (what TCN allocated)
+      Yellow = actual_mw    (avg consumption from HourlyLoad — computed, not stored)
+      Red    = unpicked_mw  = expected_mw − actual_mw
+
+    DataNest sync uses tmo_id as the upsert key and sets source='datanest'.
+    Manual entry leaves tmo_id=None and source='manual'.
+    DataNest values take precedence: if tmo_id is set, admin edits are overwritten on next sync.
+    """
+    SOURCE_CHOICES = [
+        ('manual',   'Manual Entry'),
+        ('datanest', 'DataNest Sync'),
+    ]
+
+    date        = models.DateField(unique=True, db_index=True)
+    expected_mw = models.DecimalField(
+        max_digits=10, decimal_places=2,
+        help_text="Daily average MW allocation from TCN/NERC generation schedule"
+    )
+    tmo_id      = models.BigIntegerField(
+        unique=True, null=True, blank=True, db_index=True,
+        help_text="DataNest record ID — populated when synced; null for manual entries"
+    )
+    source      = models.CharField(
+        max_length=10, choices=SOURCE_CHOICES, default='manual',
+        help_text="How this record was created: manual admin entry or DataNest sync"
+    )
+    notes       = models.TextField(blank=True, help_text="Optional: source reference or remarks")
+
+    created_at  = models.DateTimeField(auto_now_add=True)
+    updated_at  = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['date']
+
+    def __str__(self):
+        return f"{self.date} — {self.expected_mw} MW [{self.source}]"

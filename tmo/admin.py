@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import TMOIncident, TMOMonthlySegmentTarget, TMONetworkConfig
+from .models import TMODailyAllocation, TMOIncident, TMOMonthlySegmentTarget, TMONetworkConfig
 
 
 @admin.register(TMOMonthlySegmentTarget)
@@ -13,6 +13,16 @@ class TMOMonthlySegmentTargetAdmin(admin.ModelAdmin):
 class TMONetworkConfigAdmin(admin.ModelAdmin):
     list_display  = ('year', 'month', 'target_md_share_pct', 'monthly_energy_target_gwh')
     ordering      = ('-year', '-month')
+
+
+@admin.register(TMODailyAllocation)
+class TMODailyAllocationAdmin(admin.ModelAdmin):
+    list_display   = ('date', 'expected_mw', 'source', 'tmo_id', 'notes')
+    list_filter    = ('source',)
+    ordering       = ('-date',)
+    search_fields  = ('date',)
+    date_hierarchy = 'date'
+    readonly_fields = ('tmo_id', 'source', 'created_at', 'updated_at')
 
 
 @admin.register(TMOIncident)

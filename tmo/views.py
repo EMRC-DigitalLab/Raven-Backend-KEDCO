@@ -1,5 +1,9 @@
 # tmo/views.py
+from datetime import date, timedelta
+
 from django.core.exceptions import ObjectDoesNotExist
+
+from datetime import date, timedelta
 
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -10,7 +14,7 @@ from .services import TMOService, resolve_date_params
 
 def _filters_from_request(request):
     p = request.query_params
-    return {k: p.get(k) for k in ('segment', 'state', 'district', 'band', 'voltage', 'feeder') if p.get(k)}
+    return {k: p.get(k) for k in ('segment', 'state', 'district', 'band', 'voltage', 'feeder', 'coordinate', 'region', 'status') if p.get(k)}
 
 
 def _make_service(request):
@@ -69,12 +73,25 @@ class TMOSupplyComplianceView(APIView):
     """
     GET /api/tmo/supply/compliance/
     Per-feeder hours of supply compliance against NERC Band minimums.
+    Default period: current month MTD — compliance is a period metric,
+    not meaningful for a single day.
     """
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
         try:
-            data = _make_service(request).get_supply_compliance()
+            p = request.query_params
+            if not any(p.get(k) for k in ('date', 'month', 'from_date', 'to_date')):
+                today     = date.today()
+                from_date = today.replace(day=1)
+                to_date   = today - timedelta(days=1)
+                if to_date < from_date:
+                    to_date = from_date
+                filters = _filters_from_request(request)
+                service = TMOService(from_date, to_date, filters)
+            else:
+                service = _make_service(request)
+            data = service.get_supply_compliance()
             return Response(data)
         except Exception as exc:
             return Response({'error': str(exc)}, status=500)
@@ -174,6 +191,34 @@ class TMODailyEnergyView(APIView):
             return Response({'error': str(exc)}, status=500)
 
 
+class TMODailyEnergyBySegmentView(APIView):
+    """
+    GET /api/tmo/energy/daily/by-segment/
+    Per-segment daily energy forecast vs actual.
+    Forecast = TMOMonthlySegmentTarget.target_energy_mwh / days_in_month.
+    Actual uses balloon+system fallback.
+    Default: current month MTD.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        try:
+            p = request.query_params
+            if not any(p.get(k) for k in ('date', 'month', 'from_date', 'to_date')):
+                today     = date.today()
+                from_date = today.replace(day=1)
+                to_date   = today - timedelta(days=1)
+                if to_date < from_date:
+                    to_date = from_date
+                service = TMOService(from_date, to_date, _filters_from_request(request))
+            else:
+                service = _make_service(request)
+            data = service.get_daily_energy_by_segment()
+            return Response(data)
+        except Exception as exc:
+            return Response({'error': str(exc)}, status=500)
+
+
 class TMOPEARView(APIView):
     """
     GET /api/tmo/pear/
@@ -193,16 +238,28 @@ class TMOPEARView(APIView):
 
 class TMOComplianceSummaryView(APIView):
     """
-    GET /api/tmo/compliance/summary/
+    GET /api/tmo/supply/compliance/summary/
     Feeder count bucketed by compliance status (Exceeding/OnTarget/BelowTarget/Poor/Critical)
     per segment (MDI, Non-MDI Band A, Non-MDI Non-Band A).
+    Default period: current month MTD.
     Covers Slide 6.
     """
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
         try:
-            data = _make_service(request).get_compliance_summary()
+            p = request.query_params
+            if not any(p.get(k) for k in ('date', 'month', 'from_date', 'to_date')):
+                today     = date.today()
+                from_date = today.replace(day=1)
+                to_date   = today - timedelta(days=1)
+                if to_date < from_date:
+                    to_date = from_date
+                filters = _filters_from_request(request)
+                service = TMOService(from_date, to_date, filters)
+            else:
+                service = _make_service(request)
+            data = service.get_compliance_summary()
             return Response(data)
         except Exception as exc:
             return Response({'error': str(exc)}, status=500)
@@ -230,12 +287,25 @@ class TMOIncidentsView(APIView):
     Techno-Commercial Incidence report: faults per feeder with financial loss,
     status (Rectified/Lingering) and rectification rate.
     Covers Slide 16.
+    Default period: current month MTD (incidents are episodic, not daily).
     """
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
         try:
-            data = _make_service(request).get_incidents()
+            p = request.query_params
+            # If no explicit date params, default to current-month MTD instead of T-1.
+            if not any(p.get(k) for k in ('date', 'month', 'from_date', 'to_date')):
+                today = date.today()
+                from_date = today.replace(day=1)
+                to_date   = today - timedelta(days=1)
+                if to_date < from_date:
+                    to_date = from_date
+                filters = _filters_from_request(request)
+                service = TMOService(from_date, to_date, filters)
+            else:
+                service = _make_service(request)
+            data = service.get_incidents()
             return Response(data)
         except Exception as exc:
             return Response({'error': str(exc)}, status=500)
@@ -269,6 +339,78 @@ class TMOVolatilityView(APIView):
     def get(self, request):
         try:
             data = _make_service(request).get_volatility()
+            return Response(data)
+        except Exception as exc:
+            return Response({'error': str(exc)}, status=500)
+
+
+class TMOMonitoredFeedersView(APIView):
+    """
+    GET /api/tmo/feeders/monitored/
+    Newly commissioned feeders currently under active monitoring
+    (Feeder.monitoring_end_date >= today).
+    Returns per-feeder daily MWh from onboarded_at to today.
+    Admin sets monitoring_end_date when commissioning a feeder.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        try:
+            data = _make_service(request).get_monitored_feeders()
+            return Response(data)
+        except Exception as exc:
+            return Response({'error': str(exc)}, status=500)
+
+
+class TMOMinigridsSSFView(APIView):
+    """
+    GET /api/tmo/minigrids/daily/
+    Haske Solar Supplementation Factor (SSF):
+    - feeders[]: per-minigrid daily MWh array → one bar chart each
+    - summary: all minigrids combined per day + grand total → summary table
+    Default: current month MTD.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        try:
+            p = request.query_params
+            if not any(p.get(k) for k in ('date', 'month', 'from_date', 'to_date')):
+                today     = date.today()
+                from_date = today.replace(day=1)
+                to_date   = today - timedelta(days=1)
+                if to_date < from_date:
+                    to_date = from_date
+                service = TMOService(from_date, to_date, _filters_from_request(request))
+            else:
+                service = _make_service(request)
+            data = service.get_minigrids_daily()
+            return Response(data)
+        except Exception as exc:
+            return Response({'error': str(exc)}, status=500)
+
+
+class TMODailyAllocationView(APIView):
+    """
+    GET /api/tmo/allocation/daily/
+    Per-day: TCN expected allocation (MW) vs actual avg consumption (MW) vs unpicked gap.
+    Default: current month MTD.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        try:
+            p = request.query_params
+            if not any(p.get(k) for k in ('date', 'month', 'from_date', 'to_date')):
+                today     = date.today()
+                from_date = today.replace(day=1)
+                to_date   = today - timedelta(days=1)
+                if to_date < from_date:
+                    to_date = from_date
+                service = TMOService(from_date, to_date, _filters_from_request(request))
+            else:
+                service = _make_service(request)
+            data = service.get_daily_allocation()
             return Response(data)
         except Exception as exc:
             return Response({'error': str(exc)}, status=500)

@@ -4,6 +4,8 @@ from .views import (
     TMOBillingEfficiencyView,
     TMOCollectionView,
     TMOComplianceSummaryView,
+    TMODailyAllocationView,
+    TMODailyEnergyBySegmentView,
     TMODailyEnergyView,
     TMOEnergyBySegmentView,
     TMOEnergyByVoltageView,
@@ -12,6 +14,8 @@ from .views import (
     TMOFeedersView,
     TMOGCRView,
     TMOIncidentsView,
+    TMOMonitoredFeedersView,
+    TMOMinigridsSSFView,
     TMOMinigridsView,
     TMOOverviewView,
     TMOPEARView,
@@ -27,7 +31,9 @@ urlpatterns = [
     path('overview/',            TMOOverviewView.as_view(),         name='overview'),
 
     # Energy
-    path('energy/daily/',        TMODailyEnergyView.as_view(),      name='energy-daily'),
+    path('allocation/daily/',            TMODailyAllocationView.as_view(),        name='allocation-daily'),
+    path('energy/daily/',                TMODailyEnergyView.as_view(),            name='energy-daily'),
+    path('energy/daily/by-segment/',     TMODailyEnergyBySegmentView.as_view(),   name='energy-daily-by-segment'),
     path('energy/dispatch/',     TMOFeederDispatchView.as_view(),    name='energy-dispatch'),
     path('energy/by-segment/',   TMOEnergyBySegmentView.as_view(),   name='energy-by-segment'),
     path('energy/by-voltage/',   TMOEnergyByVoltageView.as_view(),   name='energy-by-voltage'),
@@ -48,6 +54,7 @@ urlpatterns = [
 
     # Minigrids
     path('minigrids/',           TMOMinigridsView.as_view(),        name='minigrids'),
+    path('minigrids/daily/',     TMOMinigridsSSFView.as_view(),     name='minigrids-daily'),
 
     # P&L Mix Volatility Index
     path('volatility/',          TMOVolatilityView.as_view(),        name='volatility'),
@@ -57,6 +64,7 @@ urlpatterns = [
     path('incidents/',           TMOIncidentsView.as_view(),         name='incidents'),
 
     # Feeder list + detail
-    path('feeders/',             TMOFeedersView.as_view(),          name='feeders'),
-    path('feeders/<slug:feeder_slug>/', TMOFeederDetailView.as_view(), name='feeder-detail'),
+    path('feeders/',                      TMOFeedersView.as_view(),          name='feeders'),
+    path('feeders/monitored/',            TMOMonitoredFeedersView.as_view(), name='feeders-monitored'),
+    path('feeders/<slug:feeder_slug>/',   TMOFeederDetailView.as_view(),     name='feeder-detail'),
 ]
