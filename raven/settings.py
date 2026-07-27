@@ -352,3 +352,8 @@ RESEND_FROM_EMAIL = config('RESEND_FROM_EMAIL', default='Raven EMRC <noreply@rav
 
 # In staging, all outgoing emails are redirected to this address instead of real recipients
 RESEND_TEST_EMAIL = config('RESEND_TEST_EMAIL', default='test@raven-emrc.com')
+
+# Recipients for Google Sheet feed alerts (missing link, monthly reminder)
+# Comma-separated in .env: TMO_SHEET_ALERT_EMAILS=ops@kedco.ng,tech@kedco.ng
+_tmo_alert_raw = config('TMO_SHEET_ALERT_EMAILS', default='')
+TMO_SHEET_ALERT_EMAILS = [e.strip() for e in _tmo_alert_raw.split(',') if e.strip()]

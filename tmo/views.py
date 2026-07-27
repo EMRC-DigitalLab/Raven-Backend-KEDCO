@@ -807,3 +807,150 @@ class TMOSupplyHoursTargetView(APIView):
             updated.append({'segment': obj.segment, 'target_hours': float(obj.target_hours)})
 
         return Response({'year': year, 'month': month, 'updated': updated})
+
+
+class GoogleSheetFeedView(APIView):
+    """
+    Manage monthly Google Sheet feed URLs for the live data pipeline.
+    Requires technical module access.
+
+    GET  /api/tmo/sheet-feeds/      — list all registered feeds
+    POST /api/tmo/sheet-feeds/      — register/update a monthly URL
+                                      body: {feed_type, year, month, url}
+    POST /api/tmo/sheet-feeds/      — trigger manual sync
+                                      body: {action:'sync', feed_type, year, month}
+    """
+    VALID_FEED_TYPES = ('33kv_load_flow', '33kv_energy_accounting', '11kv_load_flow', '11kv_energy_accounting')
+
+    def get_permissions(self):
+        from technical.permissions import HasTechnicalAccess
+        return [HasTechnicalAccess()]
+
+    def get(self, request):
+        from tmo.models import GoogleSheetFeed
+        feeds = GoogleSheetFeed.objects.all().order_by('-year', '-month', 'feed_type')
+        return Response([
+            {
+                'id':              f.id,
+                'feed_type':       f.feed_type,
+                'feed_type_label': f.get_feed_type_display(),
+                'year':            f.year,
+                'month':           f.month,
+                'spreadsheet_id':  f.spreadsheet_id,
+                'spreadsheet_url': f.spreadsheet_url,
+                'is_active':       f.is_active,
+                'last_synced_at':  f.last_synced_at,
+                'last_sync_log':   f.last_sync_log,
+            }
+            for f in feeds
+        ])
+
+    def post(self, request):
+        from datetime import date as _date
+        from tmo.models import GoogleSheetFeed
+
+        # ── Manual sync trigger ──────────────────────────────────────────────
+        if request.data.get('action') == 'sync':
+            feed_type = request.data.get('feed_type', '33kv_load_flow')
+            today     = _date.today()
+            year      = int(request.data.get('year',  today.year))
+            month_val = int(request.data.get('month', today.month))
+
+            feed = GoogleSheetFeed.objects.filter(
+                feed_type=feed_type, year=year, month=month_val, is_active=True
+            ).first()
+            if not feed:
+                return Response(
+                    {'error': f'No active {feed_type} feed for {year}-{month_val:02d}'},
+                    status=404
+                )
+            from tmo.tasks import sync_33kv_sheet_task
+            sync_33kv_sheet_task.delay()
+            return Response({'status': 'queued', 'feed': str(feed)})
+
+        # ── Register / update feed URL ────────────────────────────────────────
+        feed_type = request.data.get('feed_type')
+        year      = request.data.get('year')
+        month_val = request.data.get('month')
+        url       = request.data.get('url')
+
+        if not all([feed_type, year, month_val, url]):
+            return Response(
+                {'error': 'feed_type, year, month and url are required'},
+                status=400
+            )
+        if feed_type not in self.VALID_FEED_TYPES:
+            return Response({
+                'error': f'feed_type must be one of: {", ".join(self.VALID_FEED_TYPES)}'
+            }, status=400)
+
+        spreadsheet_id = GoogleSheetFeed.extract_spreadsheet_id(url)
+        if not spreadsheet_id:
+            return Response(
+                {'error': 'Could not extract spreadsheet ID from URL'}, status=400
+            )
+
+        feed, created = GoogleSheetFeed.objects.update_or_create(
+            feed_type=feed_type, year=int(year), month=int(month_val),
+            defaults={
+                'spreadsheet_id':  spreadsheet_id,
+                'spreadsheet_url': url,
+                'is_active':       True,
+            }
+        )
+        return Response({
+            'status':         'created' if created else 'updated',
+            'feed':           str(feed),
+            'feed_type':      feed.feed_type,
+            'feed_type_label': feed.get_feed_type_display(),
+            'year':           feed.year,
+            'month':          feed.month,
+            'spreadsheet_id': feed.spreadsheet_id,
+        }, status=201 if created else 200)
+
+
+class SheetAlertEmailView(APIView):
+    """
+    Manage alert email recipients for Google Sheet feed notifications.
+    Requires technical module access.
+
+    GET    /api/tmo/sheet-feeds/alert-emails/   — list active recipients
+    POST   body: {email, name}                  — add/re-activate a recipient
+    DELETE body: {email}                        — remove a recipient
+    """
+    def get_permissions(self):
+        from technical.permissions import HasTechnicalAccess
+        return [HasTechnicalAccess()]
+
+    def get(self, request):
+        from tmo.models import SheetAlertEmail
+        return Response([
+            {'id': e.id, 'email': e.email, 'name': e.name, 'is_active': e.is_active}
+            for e in SheetAlertEmail.objects.all()
+        ])
+
+    def post(self, request):
+        from tmo.models import SheetAlertEmail
+        email = (request.data.get('email') or '').strip().lower()
+        name  = (request.data.get('name') or '').strip()
+        if not email:
+            return Response({'error': 'email is required'}, status=400)
+
+        obj, created = SheetAlertEmail.objects.update_or_create(
+            email=email,
+            defaults={'name': name, 'is_active': True},
+        )
+        return Response(
+            {'status': 'added' if created else 'updated', 'email': obj.email, 'name': obj.name},
+            status=201 if created else 200,
+        )
+
+    def delete(self, request):
+        from tmo.models import SheetAlertEmail
+        email = (request.data.get('email') or '').strip().lower()
+        if not email:
+            return Response({'error': 'email is required'}, status=400)
+        deleted, _ = SheetAlertEmail.objects.filter(email=email).delete()
+        if deleted:
+            return Response({'status': 'deleted', 'email': email})
+        return Response({'error': 'Email not found'}, status=404)

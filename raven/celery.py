@@ -167,6 +167,19 @@ app.conf.update(
             'schedule': crontab(minute=45),
         },
 
+        # ── Google Sheet Live Feeds ───────────────────────────────────────────
+        # 33KV load-flow: every hour at minute 30
+        'sync-33kv-google-sheet': {
+            'task': 'tmo.tasks.sync_33kv_sheet_task',
+            'schedule': crontab(minute=30),
+        },
+        # End-of-month reminder: 25th at 08:00 Lagos time
+        # Alerts ops team to register next month's Google Sheet links
+        'monthly-sheet-feed-reminder': {
+            'task': 'tmo.tasks.send_monthly_sheet_reminder_task',
+            'schedule': crontab(day_of_month=25, hour=8, minute=0),
+        },
+
         # ── DataNest -> Raven TMO Sync ────────────────────────────────────────
         # TMO data changes infrequently (monthly targets) — sync every 30 min
         'tmo-sync-feeder-targets': {

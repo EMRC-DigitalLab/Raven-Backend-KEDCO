@@ -226,3 +226,66 @@ class TMODailyAllocation(models.Model):
 
     def __str__(self):
         return f"{self.date} — {self.expected_mw} MW [{self.source}]"
+
+
+class GoogleSheetFeed(models.Model):
+    """
+    Monthly Google Sheets URL registry for live data pipeline.
+
+    Each month, ops team POSTs the new spreadsheet URL here.
+    The hourly Celery task reads the active feed and syncs any missing days.
+
+    feed_type '33kv' → HourlyLoad + TMONetworkDispatch(Hourly)
+    feed_type '11kv' → HourlyLoad (gap-fill only — DataNest takes priority)
+    """
+    FEED_TYPE_CHOICES = [
+        ('33kv_load_flow',          '33KV Load Flow'),
+        ('33kv_energy_accounting',  '33KV Energy Accounting'),
+        ('11kv_load_flow',          '11KV Load Flow'),
+        ('11kv_energy_accounting',  '11KV Energy Accounting'),
+    ]
+
+    feed_type       = models.CharField(max_length=30, choices=FEED_TYPE_CHOICES, db_index=True)
+    year            = models.PositiveSmallIntegerField()
+    month           = models.PositiveSmallIntegerField()
+    spreadsheet_id  = models.CharField(max_length=100, help_text='Google Sheets file ID')
+    spreadsheet_url = models.URLField(max_length=600, help_text='Full Google Sheets URL')
+    is_active       = models.BooleanField(default=True)
+
+    last_synced_at  = models.DateTimeField(null=True, blank=True)
+    last_sync_log   = models.TextField(blank=True, help_text='Output from last sync run')
+
+    created_at      = models.DateTimeField(auto_now_add=True)
+    updated_at      = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ('feed_type', 'year', 'month')
+        ordering = ['-year', '-month', 'feed_type']
+
+    def __str__(self):
+        return f"{self.get_feed_type_display()} {self.year}-{self.month:02d}"
+
+    @staticmethod
+    def extract_spreadsheet_id(url):
+        import re
+        m = re.search(r'/spreadsheets/d/([a-zA-Z0-9-_]+)', url)
+        return m.group(1) if m else None
+
+
+class SheetAlertEmail(models.Model):
+    """
+    Recipients for Google Sheet feed alert emails.
+
+    Managed via POST /api/tmo/sheet-feeds/alert-emails/ (technical access required).
+    The hourly Celery sync task and monthly reminder task both read from this table.
+    """
+    email      = models.EmailField(unique=True)
+    name       = models.CharField(max_length=100, blank=True)
+    is_active  = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['email']
+
+    def __str__(self):
+        return f"{self.name} <{self.email}>" if self.name else self.email
