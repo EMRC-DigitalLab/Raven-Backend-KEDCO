@@ -1,6 +1,8 @@
 from django.urls import path
 
 from .views import (
+    GoogleSheetFeedView,
+    SheetAlertEmailView,
     TMOBillingEfficiencyView,
     TMOCollectionView,
     TMOComplianceSummaryView,
@@ -76,6 +78,10 @@ urlpatterns = [
     path('settings/segment-targets/', TMOSegmentTargetsView.as_view(),   name='settings-segment-targets'),
     path('settings/network-config/',  TMONetworkConfigView.as_view(),    name='settings-network-config'),
     path('settings/supply-hours/',    TMOSupplyHoursTargetView.as_view(), name='settings-supply-hours'),
+
+    # Google Sheet live feed registry
+    path('sheet-feeds/',               GoogleSheetFeedView.as_view(),      name='sheet-feeds'),
+    path('sheet-feeds/alert-emails/',  SheetAlertEmailView.as_view(),      name='sheet-alert-emails'),
 
     # Feeder list + detail
     path('feeders/',                      TMOFeedersView.as_view(),          name='feeders'),

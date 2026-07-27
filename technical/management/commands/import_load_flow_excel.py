@@ -95,7 +95,7 @@ NAME_MAP = {
     "DR. JIMETA":             "DR JIMETA",
 }
 
-# Fault codes — non-numeric strings treated as "no load" (skip the hour)
+# Fault codes — explicit outage/load-shed strings that mean 0 MW supply
 FAULT_PREFIXES = ('OC', 'E/', 'LS', 'L/', 'EMG', 'EMRG', 'L/S', 'L/L', 'ON ')
 
 
@@ -109,15 +109,22 @@ def _safe_float(val):
         return None
 
 
-def _is_fault(val):
+def _is_blank(val):
+    """True for empty/null/NaN — genuinely missing or not yet submitted."""
     if val is None:
         return True
     s = str(val).strip().upper()
+    return not s or s == 'NAN'
+
+
+def _is_explicit_fault(val):
+    """True for explicit fault/outage/load-shed code strings (e.g. OC/EF, LS/GS)."""
+    if val is None:
+        return False
+    s = str(val).strip().upper()
     if not s or s == 'NAN':
-        return True
-    if any(s.startswith(p) for p in FAULT_PREFIXES):
-        return True
-    return _safe_float(val) is None
+        return False
+    return any(s.startswith(p) for p in FAULT_PREFIXES)
 
 
 def _sheet_day(name):
@@ -236,11 +243,14 @@ class Command(BaseCommand):
                         if col >= df.shape[1]:
                             continue
                         val = df.iloc[r, col]
-                        if _is_fault(val):
-                            continue
-                        mw = _safe_float(val)
-                        if mw is None:
-                            continue
+                        if _is_blank(val):
+                            continue                 # genuinely no data — skip
+                        if _is_explicit_fault(val):
+                            mw = 0.0                # feeder on fault/outage = 0 MW
+                        else:
+                            mw = _safe_float(val)
+                            if mw is None:
+                                continue            # unrecognised string — skip
                         hl_rows.append((feeder, h_idx, round(max(mw, 0.0), 4)))
 
             # ── 2. Dispatch (offtake / allocation / generation) ─────────────

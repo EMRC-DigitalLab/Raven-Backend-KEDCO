@@ -92,6 +92,12 @@ local_settings.py
 .env
 .env.staging
 .env.prod
+
+# Google OAuth credentials — never commit these
+./google_token.json
+./google_client_secret.json
+google_token.json
+google_client_secret.json
 db.sqlite3
 
 media
