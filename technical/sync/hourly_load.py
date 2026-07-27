@@ -177,10 +177,11 @@ def run_sync(override_start=None, override_end=None) -> dict:
     # ── DELETE pass ───────────────────────────────────────────────────────────
     # Any Raven record in the window whose key was NOT seen in DataNest
     # no longer exists upstream — delete it.
+    # admin_override rows are from Google Sheet / manual imports — never stale.
     stale_ids = [
         row['id']
         for key, row in existing.items()
-        if key not in seen_keys
+        if key not in seen_keys and row['submission_type'] != 'admin_override'
     ]
     if stale_ids:
         try:
