@@ -544,7 +544,14 @@ class TMOService:
                 'is_minigrid':        feeder.is_minigrid if feeder else False,
             })
 
-        rows.sort(key=lambda r: r['compliance_pct'])
+        # Disambiguate duplicate feeder names by appending the slug
+        from collections import Counter
+        name_counts = Counter(r['feeder_name'] for r in rows)
+        for r in rows:
+            if name_counts[r['feeder_name']] > 1 and r['feeder_slug']:
+                r['feeder_name'] = f"{r['feeder_name']} ({r['feeder_slug']})"
+
+        rows.sort(key=lambda r: (r['avg_daily_hours'] == 0, -r['compliance_pct'] if r['avg_daily_hours'] == 0 else r['compliance_pct']))
         compliant = sum(1 for r in rows if r['compliance_pct'] >= 100)
         total     = len(rows)
 

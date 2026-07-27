@@ -63,7 +63,7 @@ class HasTMOAdminAccess(BasePermission):
         if getattr(user, 'role', None) in MANAGER_ROLES:
             return True
         if UserSectionAccess.objects.filter(
-            user=user, section__name='tmo', is_active=True, is_manager=True
+            user=user, section__name='tmo', is_active=True
         ).exists():
             return True
         return False
