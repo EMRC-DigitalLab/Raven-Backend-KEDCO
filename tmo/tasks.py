@@ -93,6 +93,122 @@ def sync_33kv_sheet_task(self):
         raise self.retry(exc=exc)
 
 
+@shared_task(bind=True, max_retries=3, default_retry_delay=300)
+def sync_11kv_sheet_task(self):
+    """
+    Hourly Celery task: sync the active 11KV Load Flow Google Sheet for the current month.
+
+    Only fills slots that DataNest has not already provided — dso submissions are never
+    overwritten. Both 11KV and 33KV feeder rows in the sheet are processed.
+    """
+    today = date.today()
+    year, month = today.year, today.month
+
+    try:
+        from tmo.models import GoogleSheetFeed
+        from tmo.sheet_sync import sync_11kv_sheet
+
+        feed = GoogleSheetFeed.objects.filter(
+            feed_type='11kv_load_flow', year=year, month=month, is_active=True
+        ).first()
+
+        if not feed:
+            msg = (
+                f'No active 11KV Load Flow Google Sheet registered for '
+                f'{year}-{month:02d}.\n\n'
+                f'Please register the link at POST /api/tmo/sheet-feeds/ '
+                f'with feed_type=11kv_load_flow.'
+            )
+            logger.warning('sync_11kv_sheet_task: %s', msg)
+            _send_resend_email(
+                subject=f'[Raven] ALERT: No 11KV sheet registered for {year}-{month:02d}',
+                body=msg,
+            )
+            return {'status': 'no_feed'}
+
+        logger.info('sync_11kv_sheet_task: starting for %s', feed)
+
+        result = sync_11kv_sheet(
+            spreadsheet_id=feed.spreadsheet_id,
+            year=year,
+            month=month,
+            force=False,
+            dry_run=False,
+        )
+
+        feed.last_synced_at = timezone.now()
+        feed.last_sync_log  = str(result)
+        feed.save(update_fields=['last_synced_at', 'last_sync_log'])
+
+        logger.info(
+            'sync_11kv_sheet_task done: %d days, %d HL rows',
+            result['days_synced'], result['hl_rows'],
+        )
+        return result
+
+    except Exception as exc:
+        logger.exception('sync_11kv_sheet_task failed')
+        raise self.retry(exc=exc)
+
+
+@shared_task(bind=True, max_retries=3, default_retry_delay=300)
+def sync_33kv_energy_sheet_task(self):
+    """
+    Hourly Celery task: sync the active 33KV Energy Accounting Google Sheet for the
+    current month into CumulativeMeterReading + EnergyDelivered.
+
+    DSO data wins: existing 'dso' readings are never overwritten by sheet data.
+    """
+    today = date.today()
+    year, month = today.year, today.month
+
+    try:
+        from tmo.models import GoogleSheetFeed
+        from tmo.sheet_sync import sync_33kv_energy_sheet
+
+        feed = GoogleSheetFeed.objects.filter(
+            feed_type='33kv_energy_accounting', year=year, month=month, is_active=True
+        ).first()
+
+        if not feed:
+            msg = (
+                f'No active 33KV Energy Accounting Google Sheet registered for '
+                f'{year}-{month:02d}.\n\n'
+                f'Please register the link at POST /api/tmo/sheet-feeds/ '
+                f'with feed_type=33kv_energy_accounting.'
+            )
+            logger.warning('sync_33kv_energy_sheet_task: %s', msg)
+            _send_resend_email(
+                subject=f'[Raven] ALERT: No 33KV energy sheet registered for {year}-{month:02d}',
+                body=msg,
+            )
+            return {'status': 'no_feed'}
+
+        logger.info('sync_33kv_energy_sheet_task: starting for %s', feed)
+
+        result = sync_33kv_energy_sheet(
+            spreadsheet_id=feed.spreadsheet_id,
+            year=year,
+            month=month,
+            force=False,
+            dry_run=False,
+        )
+
+        feed.last_synced_at = timezone.now()
+        feed.last_sync_log  = str(result)
+        feed.save(update_fields=['last_synced_at', 'last_sync_log'])
+
+        logger.info(
+            'sync_33kv_energy_sheet_task done: %d days, %d CMR rows',
+            result['days_synced'], result['cmr_rows'],
+        )
+        return result
+
+    except Exception as exc:
+        logger.exception('sync_33kv_energy_sheet_task failed')
+        raise self.retry(exc=exc)
+
+
 @shared_task
 def send_monthly_sheet_reminder_task():
     """

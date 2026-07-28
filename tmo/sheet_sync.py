@@ -22,7 +22,7 @@ from google.auth.transport.requests import Request as GoogleRequest
 from google.oauth2.credentials import Credentials
 
 from common.models import Feeder
-from technical.models import DailyHoursOfSupply, HourlyLoad
+from technical.models import CumulativeMeterReading, DailyHoursOfSupply, HourlyLoad
 from tmo.models import TMONetworkDispatch, TMONetworkDispatchHourly
 
 logger = logging.getLogger(__name__)
@@ -393,4 +393,434 @@ def sync_33kv_sheet(spreadsheet_id: str, year: int, month: int,
         'dispatch_days':  total_dispatch,
         'unmatched':      sorted(unmatched),
         'errors':         errors,
+    }
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 11KV LOAD FLOW SYNC
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Column layout for the 11KV Google Sheet
+# Row 0: headers  — col 0=STATION, col 1=TR RATING, col 2=TR PEAK LOAD,
+#                   col 3=Feeder, col 4=Band,
+#                   cols 5-28 = hours 1:00…0:00  (h_idx 0-23 → HourlyLoad.hour 0-23)
+#                   cols 29-34 = MIN/AVE/PEAK/PREV ENERGY/PRESENT ENERGY/VARIANCE (skip)
+FEEDER_COL_11KV = 3
+HOUR_COLS_11KV  = list(range(5, 29))   # 24 hour columns
+
+# Rows to ignore — transformer instrument rows and summary totals
+SKIP_NAMES_11KV = frozenset({
+    'WINDING TEMP.', 'OIL TEMP.', 'TAP POSITION', 'TAP/WINDING/OIL',
+    'TOTAL 11KV FEEDER LOAD', 'TOTAL FEEDER LOAD',
+})
+
+# Known sheet-name → DB-name aliases for 11KV feeders (add as needed)
+NAME_MAP_11KV: dict[str, str] = {}
+
+
+def _clean_11kv_name(raw: str) -> str:
+    """Strip '11KV '/'33KV ' voltage prefix and upper-case."""
+    s = raw.strip()
+    for prefix in ('11KV ', '33KV ', '11 KV ', '33 KV '):
+        if s.upper().startswith(prefix):
+            s = s[len(prefix):]
+            break
+    return s.strip().upper()
+
+
+def _sheet_day_11kv(title: str) -> int | None:
+    """
+    Return day number only for sheets named like '01', '28th', '29'.
+    Rejects 'Copy of 18', 'SheetXX', 'Dashboard', '000', etc.
+    """
+    m = re.fullmatch(r'(\d+)(st|nd|rd|th)?', title.strip(), re.IGNORECASE)
+    if not m:
+        return None
+    n = int(m.group(1))
+    return n if 1 <= n <= 31 else None
+
+
+def _days_needing_sync_11kv(worksheets, year, month, force=False, only_day=None):
+    today = date.today()
+    recency_cutoff = today - timedelta(days=RECENT_RESYNC_DAYS - 1)
+    from common.models import Feeder as _Feeder
+    total_11kv = _Feeder.objects.filter(voltage_level='11kv').count()
+    min_feeders = max(10, int(total_11kv * 0.70))
+
+    needs = []
+    for ws in worksheets:
+        day = _sheet_day_11kv(ws.title)
+        if not day:
+            continue
+        try:
+            d = date(year, month, day)
+        except ValueError:
+            continue
+        if d > today:
+            continue
+        if only_day and day != only_day:
+            continue
+        if not force and d < recency_cutoff:
+            count = (
+                HourlyLoad.objects
+                .filter(date=d, feeder__voltage_level='11kv', submission_type='admin_override')
+                .values('feeder_id').distinct().count()
+            )
+            if count >= min_feeders:
+                continue
+        needs.append((ws, d))
+    return needs
+
+
+def sync_11kv_sheet(spreadsheet_id: str, year: int, month: int,
+                    force: bool = False, dry_run: bool = False,
+                    only_day: int = None, log_fn=None) -> dict:
+    """
+    Sync the 11KV load-flow Google Sheet into HourlyLoad + DailyHoursOfSupply.
+
+    Rules:
+    - Any non-numeric cell value → 0 MW (blank, fault code, any string)
+    - Both 11KV and 33KV feeder rows in the sheet are processed
+    - Slots that already have a 'dso' (DataNest) submission are skipped —
+      DataNest owns those; we only fill gaps for non-DataNest feeders
+    - DailyHoursOfSupply is updated for every feeder we write
+
+    Returns: {'days_synced', 'hl_rows', 'unmatched', 'errors'}
+    """
+    if log_fn is None:
+        log_fn = logger.info
+
+    feeder_map = {
+        f.name.upper(): f
+        for f in Feeder.objects.filter(is_onboarded=True)
+    }
+
+    gc = _get_gspread_client()
+    sh = gc.open_by_key(spreadsheet_id)
+    worksheets = sh.worksheets()
+
+    needs = _days_needing_sync_11kv(worksheets, year, month, force=force, only_day=only_day)
+    log_fn(f'11KV sync: {len(needs)} day(s) to process for {year}-{month:02d}')
+
+    days_synced = 0
+    total_hl    = 0
+    unmatched:  set  = set()
+    errors:     list = []
+
+    for ws, reading_date in needs:
+        try:
+            rows = ws.get_all_values()
+        except Exception as exc:
+            errors.append(f'{reading_date}: fetch error: {exc}')
+            continue
+
+        if not rows:
+            continue
+
+        # ── Parse feeder rows ────────────────────────────────────────────────
+        hl_rows: list[tuple] = []   # (feeder, h_idx, mw)
+        day_unmatched: list  = []
+
+        for row in rows[1:]:
+            if len(row) <= FEEDER_COL_11KV:
+                continue
+            raw_name = row[FEEDER_COL_11KV].strip()
+            if not raw_name:
+                continue
+
+            clean = _clean_11kv_name(raw_name)
+            if clean in SKIP_NAMES_11KV or clean.startswith('TOTAL'):
+                continue
+
+            clean = NAME_MAP_11KV.get(clean, clean)
+            feeder = feeder_map.get(clean)
+            if not feeder:
+                if clean not in day_unmatched:
+                    day_unmatched.append(clean)
+                continue
+
+            for h_idx, col in enumerate(HOUR_COLS_11KV):
+                val = row[col] if col < len(row) else ''
+                mw  = _safe_float(val)
+                if mw is None:
+                    mw = 0.0        # non-numeric (blank, fault code, etc.) → 0
+                hl_rows.append((feeder, h_idx, round(max(mw, 0.0), 4)))
+
+        unmatched.update(day_unmatched)
+
+        if dry_run:
+            log_fn(
+                f'  [DRY] {reading_date}: {len(hl_rows)} HL rows'
+                + (f'  | unmatched: {day_unmatched}' if day_unmatched else '')
+            )
+            days_synced += 1
+            continue
+
+        # ── Write ────────────────────────────────────────────────────────────
+        try:
+            with transaction.atomic():
+                rows_written = 0
+
+                if hl_rows:
+                    all_feeder_ids = {r[0].id for r in hl_rows}
+
+                    # Slots already owned by DataNest — never overwrite
+                    existing_dso_keys = set(
+                        HourlyLoad.objects
+                        .filter(
+                            date=reading_date,
+                            feeder_id__in=all_feeder_ids,
+                            submission_type='dso',
+                        )
+                        .values_list('feeder_id', 'hour')
+                    )
+
+                    rows_to_write = [
+                        (f, h, mw) for f, h, mw in hl_rows
+                        if (f.id, h) not in existing_dso_keys
+                    ]
+
+                    if rows_to_write:
+                        write_feeder_ids = list({r[0].id for r in rows_to_write})
+
+                        # Replace our own admin_override rows for this date
+                        HourlyLoad.objects.filter(
+                            date=reading_date,
+                            feeder_id__in=write_feeder_ids,
+                            submission_type='admin_override',
+                        ).delete()
+
+                        HourlyLoad.objects.bulk_create([
+                            HourlyLoad(
+                                feeder=feeder,
+                                date=reading_date,
+                                hour=h_idx,
+                                load_mw=Decimal(str(mw)),
+                                submission_type='admin_override',
+                            )
+                            for feeder, h_idx, mw in rows_to_write
+                        ], batch_size=500)
+                        rows_written = len(rows_to_write)
+                        total_hl += rows_written
+
+                        # Update DailyHoursOfSupply for feeders we wrote
+                        supply_hrs: dict = {}
+                        for feeder, h_idx, mw in rows_to_write:
+                            if mw > 0:
+                                supply_hrs[feeder] = supply_hrs.get(feeder, 0) + 1
+                        # Feeders with all-zero/fault hours still get 0 hours recorded
+                        for feeder in {r[0] for r in rows_to_write}:
+                            DailyHoursOfSupply.objects.update_or_create(
+                                feeder=feeder, date=reading_date,
+                                defaults={'hours_supplied': supply_hrs.get(feeder, 0)},
+                            )
+
+            days_synced += 1
+            log_fn(
+                f'  {reading_date}: {rows_written} HL'
+                + (f'  | unmatched: {day_unmatched}' if day_unmatched else '')
+            )
+        except Exception as exc:
+            errors.append(f'{reading_date}: {exc}')
+            logger.exception(f'11KV error syncing {reading_date}')
+
+    return {
+        'days_synced': days_synced,
+        'hl_rows':     total_hl,
+        'unmatched':   sorted(unmatched),
+        'errors':      errors,
+    }
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 33KV ENERGY ACCOUNTING SYNC
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# Sheet layout (per day tab — e.g. "1st", "2nd", …):
+#   Row 0: blank
+#   Row 1: hour labels (01:00 … 24:00) — informational only
+#   Row 2: column headers
+#   Row 3+: one data row per 33KV feeder
+#
+#   Col 0:  REGION          (skip row if starts with 'TOTAL')
+#   Col 7:  ASSOCIATED 33KV FEEDER  ← feeder name
+#   Col 11: METER READING AT 00:00HRS MWH  ← what we store
+#
+# We store col 11 as CumulativeMeterReading(feeder, reading_date).
+# CumulativeMeterReading.save() automatically creates/updates EnergyDelivered
+# by differencing today's reading from yesterday's.
+#
+# DSO data wins: if a 'dso' CumulativeMeterReading already exists for the
+# same (feeder, date), we skip that row — the DSO submission is authoritative.
+
+_ENERGY_FEEDER_COL  = 7   # "ASSOCIATED 33KV FEEDER"
+_ENERGY_READING_COL = 11  # "METER READING AT 00:00HRS MWH"
+
+
+def _days_needing_sync_33kv_energy(worksheets, year, month, force=False, only_day=None):
+    today = date.today()
+    recency_cutoff = today - timedelta(days=RECENT_RESYNC_DAYS - 1)
+    total_33kv = Feeder.objects.filter(voltage_level='33kv').count()
+    min_feeders = max(5, int(total_33kv * 0.70))
+
+    needs = []
+    for ws in worksheets:
+        day = _sheet_day(ws.title)
+        if not day:
+            continue
+        try:
+            d = date(year, month, day)
+        except ValueError:
+            continue
+        if d > today:
+            continue
+        if only_day and day != only_day:
+            continue
+        if not force and d < recency_cutoff:
+            count = (
+                CumulativeMeterReading.objects
+                .filter(reading_date=d, feeder__voltage_level='33kv',
+                        submission_type='admin_override')
+                .count()
+            )
+            if count >= min_feeders:
+                continue
+        needs.append((ws, d))
+    return needs
+
+
+def sync_33kv_energy_sheet(spreadsheet_id: str, year: int, month: int,
+                            force: bool = False, dry_run: bool = False,
+                            only_day: int = None, log_fn=None) -> dict:
+    """
+    Sync the 33KV Energy Accounting Google Sheet into CumulativeMeterReading
+    (and via its save(), into EnergyDelivered).
+
+    Rules:
+    - One row per 33KV feeder; col 7 = feeder name, col 11 = 00:00 cumulative MWh
+    - Rows where col 0 starts with 'TOTAL', or col 7/11 is blank, are skipped
+    - Feeders not in Raven DB are logged as unmatched (non-KEDCO feeders)
+    - DSO submission wins: existing 'dso' CumulativeMeterReading is never overwritten
+    - Otherwise: update_or_create with submission_type='admin_override'
+
+    Returns: {'days_synced', 'cmr_rows', 'unmatched', 'errors'}
+    """
+    if log_fn is None:
+        log_fn = logger.info
+
+    feeder_lookup = _build_feeder_lookup()   # 33KV feeders only
+
+    gc = _get_gspread_client()
+    sh = gc.open_by_key(spreadsheet_id)
+    worksheets = sh.worksheets()
+
+    needs = _days_needing_sync_33kv_energy(
+        worksheets, year, month, force=force, only_day=only_day
+    )
+    log_fn(f'33KV energy sync: {len(needs)} day(s) to process for {year}-{month:02d}')
+
+    days_synced = 0
+    total_cmr   = 0
+    unmatched:  set  = set()
+    errors:     list = []
+
+    for ws, reading_date in needs:
+        try:
+            rows = ws.get_all_values()
+        except Exception as exc:
+            errors.append(f'{reading_date}: fetch error: {exc}')
+            continue
+
+        # Data starts at row 3 (0-indexed) — rows 0-2 are headers
+        data_rows = rows[3:] if len(rows) > 3 else []
+        if not data_rows:
+            continue
+
+        # ── Parse ─────────────────────────────────────────────────────────────
+        parsed: list[tuple] = []   # (feeder, cumulative_mwh)
+        day_unmatched: list = []
+
+        for row in data_rows:
+            # Skip total/summary rows
+            region_cell = row[0].strip().upper() if row else ''
+            if not region_cell or region_cell.startswith('TOTAL'):
+                continue
+
+            if len(row) <= _ENERGY_FEEDER_COL:
+                continue
+            raw_name = row[_ENERGY_FEEDER_COL].strip()
+            if not raw_name:
+                continue
+
+            if len(row) <= _ENERGY_READING_COL:
+                continue
+            raw_reading = row[_ENERGY_READING_COL].strip()
+            if not raw_reading:
+                continue
+
+            mwh = _safe_float(raw_reading)
+            if mwh is None:
+                continue   # blank or non-numeric — no reading yet for this day
+
+            feeder = _find_feeder(raw_name, feeder_lookup)
+            if not feeder:
+                if raw_name.upper() not in day_unmatched:
+                    day_unmatched.append(raw_name.upper())
+                continue
+
+            parsed.append((feeder, Decimal(str(round(mwh, 4)))))
+
+        unmatched.update(day_unmatched)
+
+        if dry_run:
+            log_fn(
+                f'  [DRY] {reading_date}: {len(parsed)} CMR rows'
+                + (f'  | unmatched: {day_unmatched}' if day_unmatched else '')
+            )
+            days_synced += 1
+            continue
+
+        # ── Write ─────────────────────────────────────────────────────────────
+        written = 0
+        try:
+            # Fetch existing DSO readings for this date+feeder set in one query
+            feeder_ids = [f.id for f, _ in parsed]
+            dso_feeder_ids = set(
+                CumulativeMeterReading.objects
+                .filter(reading_date=reading_date, feeder_id__in=feeder_ids,
+                        submission_type='dso')
+                .values_list('feeder_id', flat=True)
+            )
+
+            for feeder, cumulative_mwh in parsed:
+                if feeder.id in dso_feeder_ids:
+                    continue   # DSO owns this slot
+
+                CumulativeMeterReading.objects.update_or_create(
+                    feeder=feeder,
+                    reading_date=reading_date,
+                    defaults={
+                        'cumulative_mwh':  cumulative_mwh,
+                        'submission_type': 'admin_override',
+                        'is_estimated':    False,
+                        'notes':           'Synced from 33KV Energy Accounting Google Sheet',
+                    },
+                )
+                written += 1
+
+            total_cmr   += written
+            days_synced += 1
+            log_fn(
+                f'  {reading_date}: {written} CMR rows'
+                + (f'  | unmatched: {day_unmatched}' if day_unmatched else '')
+            )
+        except Exception as exc:
+            errors.append(f'{reading_date}: {exc}')
+            logger.exception(f'33KV energy error syncing {reading_date}')
+
+    return {
+        'days_synced': days_synced,
+        'cmr_rows':    total_cmr,
+        'unmatched':   sorted(unmatched),
+        'errors':      errors,
     }

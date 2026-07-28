@@ -7,7 +7,9 @@ Rules:
   - Non-numeric LoadS values (fault codes) → load_mw = 0
   - Every 5 minutes via Celery Beat
   - Window = [watermark - look_back, now]
-  - DELETE: Raven records in the window that no longer exist in DataNest are removed
+  - UPDATE: DSO (dso) submissions overwrite admin_override (sheet) rows — DSO is authoritative
+  - DELETE: Raven records in the window that no longer exist in DataNest are removed,
+    EXCEPT admin_override rows which are never deleted by DataNest sync
 """
 
 from datetime import datetime
