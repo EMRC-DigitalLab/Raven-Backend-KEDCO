@@ -1,44 +1,88 @@
 from django.core.management.base import BaseCommand
-from django.db.models import Count, Sum, Avg
-from technical.models import HourlyLoad, DailyHoursOfSupply
-import datetime
+import re, openpyxl
+from common.models import Feeder
+from tmo.models import TMOFeederSupplyTarget
+
+
+def normalise(name):
+    return re.sub(r'\s+', ' ', name.strip().upper())
+
+def strip_prefix(name):
+    name = normalise(name)
+    for prefix in ('33KV ', '11KV ', '33 KV ', '11 KV '):
+        if name.startswith(prefix):
+            return name[len(prefix):].strip()
+    return name
+
+ALIASES = {
+    'NB CEREMIC': 'NB CERAMIC',
+    'RUMMAWA': 'RUMAWA',
+    'CHALLAWA WATER PLANT': 'CHALLAWA WATER WORKS',
+    'BATA': 'SHARADA BATA',
+}
 
 
 class Command(BaseCommand):
-    help = 'Check 33KV data counts'
+    help = 'Load Feeders TARGET.xlsx into TMOFeederSupplyTarget for a given month'
+
+    def add_arguments(self, parser):
+        parser.add_argument('--month', type=str, required=True, help='YYYY-MM')
 
     def handle(self, *args, **options):
-        today = datetime.date.today()
-        month_start = today.replace(day=1)
-        week_ago = today - datetime.timedelta(days=6)
+        EXCEL = r'C:\Users\TriumphAdeniran\Downloads\Feeders TARGET.xlsx'
 
-        # ── HourlyLoad full month by day ──────────────────────────────────────
-        self.stdout.write("=== HourlyLoad July 2026 by day (33kv) ===")
-        for row in HourlyLoad.objects.filter(
-            feeder__voltage_level='33kv', date__gte=month_start, date__lte=today
-        ).values('date', 'submission_type').annotate(cnt=Count('id')).order_by('date', 'submission_type'):
-            self.stdout.write(
-                "  " + str(row['date']) + " | " + str(row['submission_type']) + ": " + str(row['cnt'])
+        try:
+            year, month = (int(x) for x in options['month'].split('-'))
+        except ValueError:
+            self.stderr.write('--month must be YYYY-MM')
+            return
+
+        feeder_lookup = {normalise(f.name): f for f in Feeder.objects.all()}
+
+        wb = openpyxl.load_workbook(EXCEL, data_only=True)
+        ws = wb.active
+
+        created = updated = unmatched_count = 0
+        unmatched = []
+
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            raw_name, raw_target = row[0], row[1]
+            if not raw_name or raw_target is None:
+                continue
+            stripped = strip_prefix(str(raw_name))
+            feeder = feeder_lookup.get(stripped)
+            if feeder is None:
+                feeder = feeder_lookup.get(ALIASES.get(stripped, ''))
+            if feeder is None:
+                for suffix in (' AUTORECLOSER', ' AUTO RECLOSER', ' RECLOSER', ' AR'):
+                    if stripped.endswith(suffix):
+                        feeder = feeder_lookup.get(stripped[:-len(suffix)].strip())
+                        if feeder:
+                            break
+            if feeder is None:
+                unmatched.append(str(raw_name))
+                unmatched_count += 1
+                continue
+
+            try:
+                target_hours = round(float(raw_target), 2)
+            except (TypeError, ValueError):
+                continue
+
+            _, was_created = TMOFeederSupplyTarget.objects.update_or_create(
+                feeder=feeder, year=year, month=month,
+                defaults={'target_hours': target_hours},
             )
+            if was_created:
+                created += 1
+            else:
+                updated += 1
 
-        # ── Today feeder breakdown ─────────────────────────────────────────────
-        self.stdout.write("\n=== Today's 33kv feeders — hours logged ===")
-        for row in HourlyLoad.objects.filter(
-            feeder__voltage_level='33kv', date=today
-        ).values('feeder__name', 'submission_type').annotate(
-            hours=Count('id'), total_mw=Sum('load_mw')
-        ).order_by('feeder__name'):
-            self.stdout.write(
-                "  " + str(row['feeder__name']) + " [" + str(row['submission_type']) + "]: " +
-                str(row['hours']) + " hours | " + str(round(row['total_mw'] or 0, 1)) + " MW total"
-            )
+        self.stdout.write(self.style.SUCCESS(
+            f'Done: {created} created | {updated} updated | {unmatched_count} unmatched'
+        ))
+        if unmatched:
+            self.stdout.write(self.style.WARNING('Unmatched: ' + ', '.join(unmatched)))
 
-        self.stdout.write("\n=== 33kv feeders with NO data today ===")
-        from technical.models import Feeder
-        feeders_with_today = HourlyLoad.objects.filter(
-            feeder__voltage_level='33kv', date=today
-        ).values_list('feeder_id', flat=True).distinct()
-        missing = Feeder.objects.filter(voltage_level='33kv').exclude(id__in=feeders_with_today)
-        self.stdout.write("Count: " + str(missing.count()))
-        for f in missing:
-            self.stdout.write("  - " + str(f.name))
+        total = TMOFeederSupplyTarget.objects.filter(year=year, month=month).count()
+        self.stdout.write('Total in DB for ' + options['month'] + ': ' + str(total))
