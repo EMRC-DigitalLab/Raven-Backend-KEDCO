@@ -326,8 +326,19 @@ def sync_33kv_sheet(spreadsheet_id: str, year: int, month: int,
             with transaction.atomic():
                 if hl_rows:
                     feeder_ids = list({r[0].id for r in hl_rows})
+                    # Protect DSO submissions: only remove stale admin_override rows.
+                    # DSO data wins — never overwrite it with sheet data.
+                    existing_dso_keys = set(
+                        HourlyLoad.objects.filter(
+                            date=reading_date,
+                            feeder_id__in=feeder_ids,
+                            submission_type='dso',
+                        ).values_list('feeder_id', 'hour')
+                    )
                     HourlyLoad.objects.filter(
-                        date=reading_date, feeder_id__in=feeder_ids
+                        date=reading_date,
+                        feeder_id__in=feeder_ids,
+                        submission_type='admin_override',
                     ).delete()
                     HourlyLoad.objects.bulk_create([
                         HourlyLoad(
@@ -338,6 +349,7 @@ def sync_33kv_sheet(spreadsheet_id: str, year: int, month: int,
                             submission_type='admin_override',
                         )
                         for feeder, hour, mw in hl_rows
+                        if (feeder.id, hour) not in existing_dso_keys
                     ], batch_size=500)
                     total_hl += len(hl_rows)
 
