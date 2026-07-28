@@ -32,6 +32,8 @@ urlpatterns = [
     path('generate/management/preview/', views.generate_management_html_preview, name='generate-management-preview'),
     path('generate/management/commercial/', views.generate_commercial_management_report, name='generate-commercial-management'),
     path('generate/management/commercial/preview/', views.generate_commercial_management_html_preview, name='generate-commercial-management-preview'),
+    path('generate/management/tmo/', views.generate_tmo_management_report, name='generate-tmo-management'),
+    path('generate/management/tmo/preview/', views.generate_tmo_management_html_preview, name='generate-tmo-management-preview'),
     path('generate/management/<str:job_id>/', views.management_report_status, name='management-report-status'),
     
     # History
