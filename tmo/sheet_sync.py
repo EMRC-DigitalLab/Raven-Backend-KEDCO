@@ -22,7 +22,7 @@ from google.auth.transport.requests import Request as GoogleRequest
 from google.oauth2.credentials import Credentials
 
 from common.models import Feeder
-from technical.models import HourlyLoad
+from technical.models import DailyHoursOfSupply, HourlyLoad
 from tmo.models import TMONetworkDispatch, TMONetworkDispatchHourly
 
 logger = logging.getLogger(__name__)
@@ -71,6 +71,14 @@ SKIP_PREFIXES = (
     'DAKATA', 'KANKIA', 'KATSINA 132', 'KWANAR', 'TAMBURAWA 132',
     'HADEIJA', 'DUTSE 132', 'FUNTUA', 'DAURA 132', 'WUDIL 132',
     'GAGARAWA', 'BICHI', 'TOTAL',
+    'ON SOAK',   # operational-state annotation, not a feeder
+    'WIND FARM', # generation source row, not a distribution feeder
+    # Non-KEDCO feeders — Bauchi/Yobe state (YEDC territory), appear in sheet but not KEDCO assets
+    'NGURU',
+    'MISAU',
+    'AZARE',
+    "JAMA'ARE",
+    'JAMAARE',
 )
 
 SUMMARY_ROW_LABELS = {
@@ -332,6 +340,17 @@ def sync_33kv_sheet(spreadsheet_id: str, year: int, month: int,
                         for feeder, hour, mw in hl_rows
                     ], batch_size=500)
                     total_hl += len(hl_rows)
+
+                    # Derive supply hours: count hours with load_mw > 0 per feeder
+                    supply_hrs: dict = {}
+                    for feeder, hour, mw in hl_rows:
+                        if mw > 0:
+                            supply_hrs[feeder] = supply_hrs.get(feeder, 0) + 1
+                    for feeder, hrs in supply_hrs.items():
+                        DailyHoursOfSupply.objects.update_or_create(
+                            feeder=feeder, date=reading_date,
+                            defaults={'hours_supplied': hrs},
+                        )
 
                 if dispatch_daily:
                     daily_obj, _ = TMONetworkDispatch.objects.update_or_create(
