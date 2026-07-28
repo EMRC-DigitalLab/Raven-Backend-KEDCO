@@ -576,6 +576,7 @@ class TMOService:
                 'days_recorded':      s.get('days', 0),
                 'compliance_pct':     round(c_pct, 1),
                 'status':             _compliance(c_pct),
+                'bucket':             _compliance(c_pct),   # alias used by frontend RAG coloring
                 'is_minigrid':        feeder.is_minigrid if feeder else False,
             })
 
@@ -1609,10 +1610,18 @@ class TMOService:
         )
         targets = {t.segment: t for t in target_qs}
 
+        # GCR measures energy at the 33KV level only — 11KV distribution feeders
+        # are downstream of these and would double-count if included.
+        kv33_ids = set(
+            Feeder.objects.filter(id__in=feeder_ids, voltage_level='33kv')
+            .values_list('id', flat=True)
+        )
+
         def _actual(ids):
-            if not ids:
+            ids_33 = ids & kv33_ids
+            if not ids_33:
                 return 0.0
-            return calculate_energy_delivered(self._energy_ids(list(ids)), self.from_date, self.to_date)['total_mwh']
+            return calculate_energy_delivered(list(ids_33), self.from_date, self.to_date)['total_mwh']
 
         regional_ids = feeder_ids - self.mdi_ids - self.mdni_ids
 
@@ -1673,8 +1682,9 @@ class TMOService:
         })
 
         return {
-            'period': {'from': str(self.from_date), 'to': str(self.to_date)},
-            'rows':   rows,
+            'period':   {'from': str(self.from_date), 'to': str(self.to_date)},
+            'rows':     rows,
+            'segments': rows,   # alias used by report renderers and GCR slide
         }
 
     # ── 17. Monitored New Feeders — daily energy from commissioning date ─────
