@@ -173,6 +173,16 @@ app.conf.update(
             'task': 'tmo.tasks.sync_33kv_sheet_task',
             'schedule': crontab(minute=30),
         },
+        # 11KV load-flow: every hour at minute 45
+        'sync-11kv-google-sheet': {
+            'task': 'tmo.tasks.sync_11kv_sheet_task',
+            'schedule': crontab(minute=45),
+        },
+        # 33KV energy accounting: every hour at minute 50
+        'sync-33kv-energy-sheet': {
+            'task': 'tmo.tasks.sync_33kv_energy_sheet_task',
+            'schedule': crontab(minute=50),
+        },
         # End-of-month reminder: 25th at 08:00 Lagos time
         # Alerts ops team to register next month's Google Sheet links
         'monthly-sheet-feed-reminder': {
