@@ -27,6 +27,7 @@ app.conf.update(
         'technical.tasks.*':        {'queue': 'datanest_sync'},
         'energy_account.tasks.*':   {'queue': 'datanest_sync'},
         'commercial.tasks.*':       {'queue': 'datanest_sync'},
+        'tmo.tasks.*':              {'queue': 'datanest_sync'},
     },
     # Retry settings
     task_acks_late=True,

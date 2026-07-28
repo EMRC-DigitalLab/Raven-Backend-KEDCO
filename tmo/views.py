@@ -8,6 +8,8 @@ from rest_framework.views import APIView
 
 from .permissions import HasTMOAccess, HasTMOAdminAccess
 from .models import (
+    TMODailyAllocation,
+    TMOFeederSupplyTarget,
     TMOMonthlySegmentTarget,
     TMONetworkConfig,
     TMONetworkDispatch,
@@ -370,10 +372,12 @@ class TMOMonitoredFeedersView(APIView):
 class TMOMinigridsSSFView(APIView):
     """
     GET /api/tmo/minigrids/daily/
-    Haske Solar Supplementation Factor (SSF):
-    - feeders[]: per-minigrid daily MWh array → one bar chart each
-    - summary: all minigrids combined per day + grand total → summary table
-    Default: current month MTD.
+    Per-feeder daily MWh chart.
+    Optional params: feeder_slug, q (name search), band (slug), segment (pl_segment).
+    Default (no feeder params): minigrid feeders only (SSF behaviour).
+    - feeders[]: per-feeder daily MWh array → one bar chart each
+    - summary: all matched feeders combined per day + grand total
+    Default period: current month MTD.
     """
     permission_classes = [HasTMOAccess]
 
@@ -389,7 +393,12 @@ class TMOMinigridsSSFView(APIView):
                 service = TMOService(from_date, to_date, _filters_from_request(request))
             else:
                 service = _make_service(request)
-            data = service.get_minigrids_daily()
+            data = service.get_minigrids_daily(
+                feeder_slug=p.get('feeder_slug') or None,
+                q=p.get('q') or None,
+                band=p.get('band') or None,
+                segment=p.get('segment') or None,
+            )
             return Response(data)
         except Exception as exc:
             return Response({'error': str(exc)}, status=500)
@@ -566,6 +575,164 @@ class TMONetworkDispatchHourlyView(APIView):
 
 # ── Settings views ────────────────────────────────────────────────────────────
 
+class TMOFeederTargetUploadView(APIView):
+    """
+    GET    /api/tmo/settings/feeder-targets/?month=2026-07
+           Returns all per-feeder supply hours targets set for the month.
+
+    POST   /api/tmo/settings/feeder-targets/
+           Upload an Excel file (multipart/form-data, field name "file") with columns:
+             A: Feeder name  (e.g. "33KV JODA" or "11KV KOFAR NASSARAWA")
+             B: Target hours (daily hours-of-supply target, e.g. 22.37)
+           Body params: month=2026-07
+
+    DELETE /api/tmo/settings/feeder-targets/?month=2026-07
+           Removes all per-feeder targets for the month → reverts to segment defaults.
+    """
+    permission_classes = [HasTMOAccess]
+
+    # Known name differences between the Excel and the DB feeder names
+    _ALIASES = {
+        'NB CEREMIC':           'NB CERAMIC',
+        'RUMMAWA':              'RUMAWA',
+        'CHALLAWA WATER PLANT': 'CHALLAWA WATER WORKS',
+        'BATA':                 'SHARADA BATA',
+    }
+
+    @staticmethod
+    def _normalise(name: str) -> str:
+        import re
+        return re.sub(r'\s+', ' ', name.strip().upper())
+
+    def _strip_prefix(self, name: str) -> str:
+        name = self._normalise(name)
+        for prefix in ('33KV ', '11KV ', '33 KV ', '11 KV '):
+            if name.startswith(prefix):
+                return name[len(prefix):].strip()
+        return name
+
+    def get(self, request):
+        month_str = request.query_params.get('month')
+        if month_str:
+            try:
+                year, month = map(int, month_str.split('-'))
+            except ValueError:
+                return Response({'error': 'month must be YYYY-MM'}, status=400)
+        else:
+            today = date.today()
+            year, month = today.year, today.month
+
+        rows = []
+        for t in TMOFeederSupplyTarget.objects.filter(year=year, month=month).select_related('feeder'):
+            rows.append({
+                'feeder_id':    str(t.feeder_id),
+                'feeder_name':  t.feeder.name,
+                'voltage_level': t.feeder.voltage_level,
+                'target_hours': float(t.target_hours),
+                'updated_at':   t.updated_at.isoformat(),
+            })
+
+        return Response({'year': year, 'month': month, 'count': len(rows), 'feeders': rows})
+
+    def post(self, request):
+        import io
+        import openpyxl
+        from common.models import Feeder
+
+        month_str = request.data.get('month') or request.query_params.get('month')
+        if not month_str:
+            return Response({'error': 'month is required (e.g. 2026-07)'}, status=400)
+        try:
+            year, month = map(int, month_str.split('-'))
+        except (ValueError, AttributeError):
+            return Response({'error': 'month must be YYYY-MM'}, status=400)
+
+        uploaded_file = request.FILES.get('file')
+        if not uploaded_file:
+            return Response({'error': '"file" is required (Excel upload)'}, status=400)
+
+        try:
+            wb = openpyxl.load_workbook(io.BytesIO(uploaded_file.read()), data_only=True)
+        except Exception as exc:
+            return Response({'error': f'Could not read Excel file: {exc}'}, status=400)
+
+        ws = wb.active
+
+        # Build feeder lookup: normalised-name → feeder object
+        feeder_lookup = {}
+        for f in Feeder.objects.all():
+            feeder_lookup[self._normalise(f.name)] = f
+
+        matched, unmatched, errors = [], [], []
+
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            raw_name = row[0]
+            raw_target = row[1]
+            if not raw_name or raw_target is None:
+                continue
+
+            stripped = self._strip_prefix(str(raw_name))
+
+            # 1. Exact match (normalised)
+            feeder = feeder_lookup.get(stripped)
+            # 2. Alias map (known Excel ↔ DB name differences)
+            if feeder is None:
+                feeder = feeder_lookup.get(self._ALIASES.get(stripped, ''))
+            # 3. Strip AUTORECLOSER / RECLOSER suffixes
+            if feeder is None:
+                for suffix in (' AUTORECLOSER', ' AUTO RECLOSER', ' RECLOSER', ' AR'):
+                    if stripped.endswith(suffix):
+                        feeder = feeder_lookup.get(stripped[:-len(suffix)].strip())
+                        if feeder:
+                            break
+
+            if feeder is None:
+                unmatched.append(str(raw_name))
+                continue
+
+            try:
+                target_hours = float(raw_target)
+                if target_hours < 0 or target_hours > 24:
+                    errors.append(f'{raw_name}: target {raw_target} out of range (0–24)')
+                    continue
+            except (TypeError, ValueError):
+                errors.append(f'{raw_name}: invalid target "{raw_target}"')
+                continue
+
+            TMOFeederSupplyTarget.objects.update_or_create(
+                feeder=feeder, year=year, month=month,
+                defaults={'target_hours': round(target_hours, 2)},
+            )
+            matched.append({'feeder': feeder.name, 'target_hours': target_hours})
+
+        return Response({
+            'year':      year,
+            'month':     month,
+            'matched':   len(matched),
+            'unmatched': unmatched,
+            'errors':    errors,
+        }, status=200 if matched else 400)
+
+    def delete(self, request):
+        month_str = request.query_params.get('month')
+        if month_str:
+            try:
+                year, month = map(int, month_str.split('-'))
+            except ValueError:
+                return Response({'error': 'month must be YYYY-MM'}, status=400)
+        else:
+            today = date.today()
+            year, month = today.year, today.month
+
+        deleted, _ = TMOFeederSupplyTarget.objects.filter(year=year, month=month).delete()
+        return Response({
+            'year':    year,
+            'month':   month,
+            'deleted': deleted,
+            'message': f'Removed {deleted} feeder targets for {year}-{month:02d} — reverted to segment defaults.',
+        })
+
+
 class TMOSegmentTargetsView(APIView):
     """
     GET  /api/tmo/settings/segment-targets/?month=2026-07
@@ -726,6 +893,176 @@ class TMONetworkConfigView(APIView):
             'month': obj.month,
             'monthly_energy_target_gwh': float(obj.monthly_energy_target_gwh),
             'target_md_share_pct':       float(obj.target_md_share_pct),
+        })
+
+
+class TMODailyForecastView(APIView):
+    """
+    GET  /api/tmo/settings/daily-forecast/?month=2026-07
+         Returns per-day energy forecast for every day of the month.
+         If a day has a TMODailyAllocation row (set manually or imported), its value is used.
+         Otherwise the day shows the flat fallback: monthly_target_gwh / days_in_month.
+
+    POST /api/tmo/settings/daily-forecast/
+         Bulk-set per-day forecast values for a month (any TMO user).
+         Body:
+         {
+           "year": 2026, "month": 7,
+           "days": [
+             {"day": 1, "forecast_gwh": 6.20},
+             {"day": 2, "forecast_gwh": 5.80}
+           ]
+         }
+         Omitted days are left unchanged. To reset a day to the flat default,
+         pass "forecast_gwh": null — this removes its TMODailyAllocation row.
+
+    DELETE /api/tmo/settings/daily-forecast/?month=2026-07
+           Removes all manual TMODailyAllocation rows for the month,
+           reverting every day back to the flat monthly default.
+    """
+    permission_classes = [HasTMOAccess]
+
+    def get(self, request):
+        import calendar
+        from datetime import date as _date
+
+        month_str = request.query_params.get('month')
+        if month_str:
+            try:
+                year, month = map(int, month_str.split('-'))
+            except ValueError:
+                return Response({'error': 'month must be YYYY-MM'}, status=400)
+        else:
+            today = date.today()
+            year, month = today.year, today.month
+
+        days_in_month = calendar.monthrange(year, month)[1]
+
+        config = TMONetworkConfig.objects.filter(year=year, month=month).first()
+        monthly_target_gwh = float(config.monthly_energy_target_gwh) if config else 0.0
+        flat_daily_gwh = round(monthly_target_gwh / days_in_month, 4) if days_in_month else 0.0
+
+        # Load all allocation rows for this month into a day→row map
+        month_start = _date(year, month, 1)
+        month_end   = _date(year, month, days_in_month)
+        alloc_rows  = {
+            a.date.day: a
+            for a in TMODailyAllocation.objects.filter(
+                date__gte=month_start, date__lte=month_end
+            )
+        }
+
+        from tmo.constants import STANDARD_DAILY_FORECAST_GWH
+
+        days = []
+        for day in range(1, days_in_month + 1):
+            d = _date(year, month, day)
+            row = alloc_rows.get(day)
+            if row:
+                forecast_gwh = round(float(row.expected_mw) * 24.0 / 1000.0, 4)
+                source = row.source  # 'manual' or 'datanest'
+            else:
+                # Standard pattern is the default; flat monthly is last resort
+                forecast_gwh = STANDARD_DAILY_FORECAST_GWH.get(day, flat_daily_gwh)
+                source = 'standard_default'
+            days.append({
+                'day':          day,
+                'date':         str(d),
+                'forecast_gwh': forecast_gwh,
+                'source':       source,
+            })
+
+        return Response({
+            'year':               year,
+            'month':              month,
+            'days_in_month':      days_in_month,
+            'monthly_target_gwh': round(monthly_target_gwh, 4),
+            'flat_daily_gwh':     flat_daily_gwh,
+            'days':               days,
+        })
+
+    def post(self, request):
+        import calendar
+        from datetime import date as _date
+
+        body  = request.data
+        year  = body.get('year')
+        month = body.get('month')
+        if not year or not month:
+            return Response({'error': 'year and month are required'}, status=400)
+        try:
+            year, month = int(year), int(month)
+            days_in_month = calendar.monthrange(year, month)[1]
+        except (ValueError, TypeError):
+            return Response({'error': 'year and month must be integers'}, status=400)
+
+        days_input = body.get('days')
+        if not isinstance(days_input, list):
+            return Response({'error': '"days" must be a list'}, status=400)
+
+        updated, reset = [], []
+        for entry in days_input:
+            day = entry.get('day')
+            forecast_gwh = entry.get('forecast_gwh')
+            if not isinstance(day, int) or day < 1 or day > days_in_month:
+                continue
+            target_date = _date(year, month, day)
+
+            if forecast_gwh is None:
+                # Reset this day → remove allocation row so flat default kicks in
+                deleted, _ = TMODailyAllocation.objects.filter(
+                    date=target_date, source='manual'
+                ).delete()
+                if deleted:
+                    reset.append(day)
+            else:
+                try:
+                    gwh = float(forecast_gwh)
+                    if gwh < 0:
+                        continue
+                except (TypeError, ValueError):
+                    continue
+                expected_mw = round(gwh * 1000.0 / 24.0, 2)
+                TMODailyAllocation.objects.update_or_create(
+                    date=target_date,
+                    defaults={'expected_mw': expected_mw, 'source': 'manual'},
+                )
+                updated.append(day)
+
+        return Response({
+            'year':    year,
+            'month':   month,
+            'updated': sorted(updated),
+            'reset':   sorted(reset),
+        })
+
+    def delete(self, request):
+        import calendar
+        from datetime import date as _date
+
+        month_str = request.query_params.get('month')
+        if month_str:
+            try:
+                year, month = map(int, month_str.split('-'))
+            except ValueError:
+                return Response({'error': 'month must be YYYY-MM'}, status=400)
+        else:
+            today = date.today()
+            year, month = today.year, today.month
+
+        days_in_month = calendar.monthrange(year, month)[1]
+        month_start = _date(year, month, 1)
+        month_end   = _date(year, month, days_in_month)
+
+        deleted, _ = TMODailyAllocation.objects.filter(
+            date__gte=month_start, date__lte=month_end, source='manual'
+        ).delete()
+
+        return Response({
+            'year':    year,
+            'month':   month,
+            'deleted': deleted,
+            'message': f'Reset {deleted} manual forecast rows — all days now use flat monthly default.',
         })
 
 

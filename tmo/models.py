@@ -161,6 +161,32 @@ class TMOSupplyHoursTarget(models.Model):
         return f"{self.segment} {self.year}-{self.month:02d} → {self.target_hours} hrs"
 
 
+class TMOFeederSupplyTarget(models.Model):
+    """
+    Per-feeder monthly supply hours target, uploaded via Excel.
+    Takes priority over the segment-level TMOSupplyHoursTarget.
+    Falls back to segment target → band minimum_hours if no row exists.
+    """
+    feeder       = models.ForeignKey(
+        'common.Feeder', on_delete=models.CASCADE, related_name='supply_targets'
+    )
+    year         = models.PositiveSmallIntegerField(db_index=True)
+    month        = models.PositiveSmallIntegerField()
+    target_hours = models.DecimalField(
+        max_digits=5, decimal_places=2,
+        help_text="Daily hours-of-supply target for this feeder"
+    )
+    uploaded_at  = models.DateTimeField(auto_now_add=True)
+    updated_at   = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ('feeder', 'year', 'month')
+        ordering = ['year', 'month', 'feeder__name']
+
+    def __str__(self):
+        return f"{self.feeder.name} {self.year}-{self.month:02d} → {self.target_hours} hrs"
+
+
 class TMONetworkDispatchHourly(models.Model):
     """
     24-hour breakdown for each day's 33KV dispatch reconciliation.

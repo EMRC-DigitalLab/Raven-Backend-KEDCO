@@ -891,6 +891,127 @@ def generate_commercial_management_html_preview(request):
 
 
 # =============================================================================
+# TMO DASHBOARD MANAGEMENT REPORT
+# =============================================================================
+
+@api_view(['POST'])
+def generate_tmo_management_report(request):
+    """
+    POST /api/reports/generate/management/tmo/
+
+    Generates a full TMO dashboard management report as a PDF (or base64),
+    including ARIA narrative commentary on every section.
+
+    Body:
+    {
+        "report_title":  "July 2026 TMO Dashboard Report",
+        "report_subtitle": "",
+        "company_name":  "KANO ELECTRICITY DISTRIBUTION COMPANY",
+        "theme":         {},
+        "include_ai":    true,
+        "return_base64": false,
+        "sections": [                    // optional — omit for all 14 sections
+            "tmo_overview",
+            "tmo_daily_network_energy",
+            "tmo_daily_allocation",
+            "tmo_feeder_compliance_table",
+            "tmo_compliance_by_segment",
+            "tmo_pear",
+            "tmo_energy_pnl_donut",
+            "tmo_energy_by_voltage",
+            "tmo_incidents",
+            "tmo_pnl_deficit",
+            "tmo_gcr",
+            "tmo_volatility"
+        ],
+        "filters": {
+            "from_date": "2026-07-01",
+            "to_date":   "2026-07-27"
+        }
+    }
+    """
+    from .tmo_service import TMOReportService
+    from .tmo_management_report import TMOManagementPDFGenerator
+
+    filters = request.data.get('filters', {})
+    if not filters.get('from_date') or not filters.get('to_date'):
+        return Response(
+            {'error': 'from_date and to_date are required in filters'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        tmo_service = TMOReportService({
+            'from_date': filters['from_date'],
+            'to_date':   filters['to_date'],
+        })
+
+        report_config = {
+            'report_title':    request.data.get('report_title', 'TMO Dashboard Report'),
+            'report_subtitle': request.data.get('report_subtitle', ''),
+            'company_name':    request.data.get('company_name', 'KANO ELECTRICITY DISTRIBUTION COMPANY'),
+            'theme':           request.data.get('theme', {}),
+            'include_ai':      bool(request.data.get('include_ai', True)),
+            'sections':        request.data.get('sections') or None,
+        }
+
+        generator = TMOManagementPDFGenerator(report_config, tmo_service, user=request.user)
+
+        if request.data.get('return_base64', False):
+            pdf_b64  = generator.generate_pdf_base64()
+            filename = report_config['report_title'].replace(' ', '_') + '.pdf'
+            return Response({'pdf_base64': pdf_b64, 'filename': filename})
+
+        pdf_buffer = generator.generate_pdf()
+        filename   = report_config['report_title'].replace(' ', '_') + '.pdf'
+        response   = HttpResponse(pdf_buffer.read(), content_type='application/pdf')
+        response['Content-Disposition'] = f'attachment; filename="{filename}"'
+        return response
+
+    except Exception as exc:
+        logger.error('TMO management report failed: %s', exc)
+        import traceback; traceback.print_exc()
+        return Response({'error': str(exc)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['POST'])
+def generate_tmo_management_html_preview(request):
+    """
+    POST /api/reports/generate/management/tmo/preview/
+    Returns raw HTML of the TMO report for frontend preview.
+    include_ai defaults to false for speed.
+    """
+    from .tmo_service import TMOReportService
+    from .tmo_management_report import TMOManagementPDFGenerator
+
+    filters = request.data.get('filters', {})
+    if not filters.get('from_date') or not filters.get('to_date'):
+        return Response(
+            {'error': 'from_date and to_date are required in filters'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        tmo_service = TMOReportService({
+            'from_date': filters['from_date'],
+            'to_date':   filters['to_date'],
+        })
+        report_config = {
+            'report_title':    request.data.get('report_title', 'TMO Dashboard Report'),
+            'report_subtitle': request.data.get('report_subtitle', ''),
+            'company_name':    request.data.get('company_name', 'KANO ELECTRICITY DISTRIBUTION COMPANY'),
+            'theme':           request.data.get('theme', {}),
+            'include_ai':      False,
+            'sections':        request.data.get('sections') or None,
+        }
+        generator = TMOManagementPDFGenerator(report_config, tmo_service, user=request.user)
+        return Response({'html': generator.generate_html()})
+    except Exception as exc:
+        logger.error('TMO management preview failed: %s', exc)
+        return Response({'error': str(exc)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+# =============================================================================
 # GENERATED REPORTS HISTORY
 # =============================================================================
 

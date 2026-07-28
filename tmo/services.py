@@ -18,7 +18,8 @@ from technical.utils.energy_utils import (
     calculate_energy_delivered,
     calculate_energy_delivered_per_feeder,
 )
-from tmo.models import TMODailyAllocation, TMOIncident, TMOMonthlySegmentTarget, TMONetworkConfig, TMOSupplyHoursTarget
+from tmo.constants import STANDARD_DAILY_FORECAST_GWH
+from tmo.models import TMODailyAllocation, TMOFeederSupplyTarget, TMOIncident, TMOMonthlySegmentTarget, TMONetworkConfig, TMOSupplyHoursTarget
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -414,7 +415,16 @@ class TMOService:
 
     def get_energy_by_segment(self):
         feeder_qs  = self._base_feeder_qs()
-        feeder_ids = set(feeder_qs.values_list('id', flat=True))
+        all_ids    = set(feeder_qs.values_list('id', flat=True))
+
+        # Exclude 33KV feeders that supply downstream 11KV feeders — their energy
+        # is already captured at the 11KV meter level; including both = double-count
+        upstream_33kv = set(
+            FeederSupplyRelationship.objects
+            .filter(supplier_feeder__voltage_level='33kv', status='active')
+            .values_list('supplier_feeder_id', flat=True)
+        )
+        feeder_ids = all_ids - upstream_33kv
 
         mdi_ids    = self.mdi_ids  & feeder_ids
         mdni_ids   = self.mdni_ids & feeder_ids
@@ -505,6 +515,29 @@ class TMOService:
             )
         }
 
+        # Per-feeder targets — current month first, then most-recent upload as base default
+        month_targets = {
+            str(row.feeder_id): float(row.target_hours)
+            for row in TMOFeederSupplyTarget.objects.filter(
+                year=self.from_date.year,
+                month=self.from_date.month,
+                feeder_id__in=feeder_ids,
+            )
+        }
+        missing_ids = [fid for fid in feeder_ids if str(fid) not in month_targets]
+        base_targets = {}
+        if missing_ids:
+            # PostgreSQL DISTINCT ON: picks the latest (year DESC, month DESC) row per feeder
+            for row in (
+                TMOFeederSupplyTarget.objects
+                .filter(feeder_id__in=missing_ids)
+                .order_by('feeder_id', '-year', '-month')
+                .distinct('feeder_id')
+                .values('feeder_id', 'target_hours')
+            ):
+                base_targets[str(row['feeder_id'])] = float(row['target_hours'])
+        feeder_target_map = {**base_targets, **month_targets}
+
         def _dm_status(fid, feeder):
             if fid in self.mdi_ids:
                 return 'MDI'
@@ -520,8 +553,10 @@ class TMOService:
             s       = supply_map.get(fid, {})
             avg_h   = float(s.get('avg_hours') or 0)
             dm_seg  = _dm_status(fid, feeder)
-            # Admin override first, fall back to band minimum_hours
-            if dm_seg in segment_target_map:
+            # Priority: per-feeder upload > segment admin target > band minimum
+            if str(fid) in feeder_target_map:
+                min_h = feeder_target_map[str(fid)]
+            elif dm_seg in segment_target_map:
                 min_h = segment_target_map[dm_seg]
             else:
                 min_h = float(feeder.band.minimum_hours) if feeder and feeder.band else 0.0
@@ -914,9 +949,9 @@ class TMOService:
         days_in_month = calendar.monthrange(self.from_date.year, self.from_date.month)[1]
         flat_daily_target_gwh = monthly_target_gwh / days_in_month if days_in_month else 0.0
 
-        # Per-day targets from TMODailyAllocation (populated by Excel import).
-        # expected_mw × 24 hours / 1000 = daily GWh allocation.
-        # Falls back to flat monthly ÷ days when no allocation row exists.
+        # Per-day targets: admin override from TMODailyAllocation takes priority.
+        # Falls back to the standard day-of-month pattern (STANDARD_DAILY_FORECAST_GWH),
+        # then to flat monthly ÷ days as the last resort when no monthly target is set.
         alloc_map = {
             str(a.date): float(a.expected_mw) * 24.0 / 1000.0
             for a in TMODailyAllocation.objects.filter(
@@ -927,7 +962,8 @@ class TMOService:
 
         days = []
         for row in daily:
-            daily_target_gwh = alloc_map.get(str(row['date']), flat_daily_target_gwh)
+            standard_gwh = STANDARD_DAILY_FORECAST_GWH.get(row['date'].day, flat_daily_target_gwh)
+            daily_target_gwh = alloc_map.get(str(row['date']), standard_gwh)
             actual_gwh = float(row['total_mwh'] or 0) / 1000
             ach = _pct(actual_gwh, daily_target_gwh)
             days.append({
@@ -977,10 +1013,15 @@ class TMOService:
             if seg in seg_voltage:
                 seg_voltage[seg][vlt].append(row['id'])
 
-        # Strip upstream 33KV feeders (those that supply downstream 11KV feeders)
-        # to avoid double-counting when both are in the same segment.
+        # 33KV feeders that supply downstream 11KV feeders — exclude to avoid double-counting
+        upstream_33kv_ids = set(
+            FeederSupplyRelationship.objects
+            .filter(supplier_feeder__voltage_level='33kv', status='active')
+            .values_list('supplier_feeder_id', flat=True)
+        )
+
         def _safe_33kv(ids):
-            return _energy_feeder_ids(ids) if ids else []
+            return [fid for fid in ids if fid not in upstream_33kv_ids] if ids else []
 
         def _breakdown(ids, fd, td):
             return _daily_energy_breakdown(ids, fd, td) if ids else {}
@@ -1205,6 +1246,28 @@ class TMOService:
             )
         }
 
+        # Per-feeder targets — current month first, then most-recent upload as base default
+        month_targets = {
+            str(row.feeder_id): float(row.target_hours)
+            for row in TMOFeederSupplyTarget.objects.filter(
+                year=self.from_date.year,
+                month=self.from_date.month,
+                feeder_id__in=feeder_ids,
+            )
+        }
+        missing_ids = [fid for fid in feeder_ids if str(fid) not in month_targets]
+        base_targets = {}
+        if missing_ids:
+            for row in (
+                TMOFeederSupplyTarget.objects
+                .filter(feeder_id__in=missing_ids)
+                .order_by('feeder_id', '-year', '-month')
+                .distinct('feeder_id')
+                .values('feeder_id', 'target_hours')
+            ):
+                base_targets[str(row['feeder_id'])] = float(row['target_hours'])
+        feeder_target_map = {**base_targets, **month_targets}
+
         def _dm_status(fid, feeder):
             if fid in self.mdi_ids:
                 return 'MDI'
@@ -1233,7 +1296,10 @@ class TMOService:
             feeder  = feeders.get(fid)
             avg_h   = supply_map.get(fid, 0.0)
             seg     = _dm_status(fid, feeder)
-            if seg in segment_target_map:
+            # Priority: per-feeder upload > segment admin target > band minimum
+            if str(fid) in feeder_target_map:
+                min_h = feeder_target_map[str(fid)]
+            elif seg in segment_target_map:
                 min_h = segment_target_map[seg]
             else:
                 min_h = float(feeder.band.minimum_hours) if feeder and feeder.band else 0.0
@@ -1674,14 +1740,24 @@ class TMOService:
 
     # ── 18. Minigrids Daily (SSF — per-feeder daily MWh + summary table) ────
 
-    def get_minigrids_daily(self):
+    def get_minigrids_daily(self, feeder_slug=None, q=None, band=None, segment=None):
         """
-        Haske Solar Supplementation Factor (SSF) view.
-        Returns every minigrid feeder's daily MWh for the period (balloon+system fallback)
-        plus a summary table aggregating all minigrids together.
-        Frontend renders one bar chart per feeder (5A style) + one combined table (5B style).
+        Per-feeder daily MWh chart.
+        If feeder_slug / q / band / segment provided → any matching feeder.
+        Default (no params): minigrid feeders only (original SSF behaviour).
         """
-        feeder_qs  = self._base_feeder_qs().filter(is_minigrid=True)
+        feeder_qs = self._base_feeder_qs()
+        if feeder_slug:
+            feeder_qs = feeder_qs.filter(slug=feeder_slug)
+        elif q or band or segment:
+            if q:
+                feeder_qs = feeder_qs.filter(name__icontains=q)
+            if band:
+                feeder_qs = feeder_qs.filter(band__slug__iexact=band)
+            if segment:
+                feeder_qs = feeder_qs.filter(pl_segment__iexact=segment)
+        else:
+            feeder_qs = feeder_qs.filter(is_minigrid=True)
         feeder_ids = list(feeder_qs.values_list('id', flat=True))
 
         if not feeder_ids:

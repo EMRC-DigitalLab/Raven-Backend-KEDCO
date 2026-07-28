@@ -9,10 +9,12 @@ from .views import (
     TMODailyAllocationView,
     TMODailyEnergyBySegmentView,
     TMODailyEnergyView,
+    TMODailyForecastView,
     TMOEnergyBySegmentView,
     TMOEnergyByVoltageView,
     TMOFeederDetailView,
     TMOFeederDispatchView,
+    TMOFeederTargetUploadView,
     TMOFeedersView,
     TMOGCRView,
     TMOIncidentsView,
@@ -75,9 +77,11 @@ urlpatterns = [
     path('incidents/',           TMOIncidentsView.as_view(),         name='incidents'),
 
     # Settings — team fills these from the app each month
-    path('settings/segment-targets/', TMOSegmentTargetsView.as_view(),   name='settings-segment-targets'),
-    path('settings/network-config/',  TMONetworkConfigView.as_view(),    name='settings-network-config'),
-    path('settings/supply-hours/',    TMOSupplyHoursTargetView.as_view(), name='settings-supply-hours'),
+    path('settings/segment-targets/', TMOSegmentTargetsView.as_view(),      name='settings-segment-targets'),
+    path('settings/network-config/',  TMONetworkConfigView.as_view(),       name='settings-network-config'),
+    path('settings/supply-hours/',    TMOSupplyHoursTargetView.as_view(),   name='settings-supply-hours'),
+    path('settings/daily-forecast/',  TMODailyForecastView.as_view(),       name='settings-daily-forecast'),
+    path('settings/feeder-targets/',  TMOFeederTargetUploadView.as_view(),  name='settings-feeder-targets'),
 
     # Google Sheet live feed registry
     path('sheet-feeds/',               GoogleSheetFeedView.as_view(),      name='sheet-feeds'),

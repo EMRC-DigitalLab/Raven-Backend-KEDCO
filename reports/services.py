@@ -324,25 +324,107 @@ SECTION_DEFINITIONS = {
         'config_options': {},
     },
     # ── TMO sections ─────────────────────────────────────────────────────────
-    'tmo_feeder_dispatch': {
-        'display_name': 'Feeder Dispatch Targets vs Actuals',
-        'description': 'Per-feeder MWh dispatch targets from DataNest vs actual energy delivered from Raven',
+    'tmo_overview': {
+        'display_name': 'TMO Overview',
+        'description': 'Top-level KPI summary: total energy dispatch achievement and supply compliance',
+        'category': 'tmo',
+        'supports_chart': False,
+        'config_options': {},
+    },
+    'tmo_daily_network_energy': {
+        'display_name': 'Daily Energy Forecast vs Actual',
+        'description': 'Stacked bar — daily forecast GWh vs actual energy consumed GWh for the period',
         'category': 'tmo',
         'supports_chart': True,
         'config_options': {},
     },
-    'tmo_collection_performance': {
-        'display_name': 'Collection Performance by Segment',
-        'description': 'Target vs actual collection amounts by segment and sub-segment from DataNest',
+    'tmo_daily_energy_consumed': {
+        'display_name': 'Daily Energy Consumed',
+        'description': 'Single-series bar chart of daily energy allocation (GWh)',
         'category': 'tmo',
         'supports_chart': True,
         'config_options': {},
     },
-    'tmo_billing_efficiency': {
-        'display_name': 'Billing Efficiency (BE/FBE)',
-        'description': 'Energy delivered vs billed and revenue targets vs actuals by scope from DataNest',
+    'tmo_daily_allocation': {
+        'display_name': 'Daily Real-Time Allocation',
+        'description': 'Diverging bar — expected MW allocation vs actual average consumption vs unpicked energy',
         'category': 'tmo',
         'supports_chart': True,
+        'config_options': {},
+    },
+    'tmo_feeder_compliance_table': {
+        'display_name': 'Feeder Compliance Criticality',
+        'description': 'Per-feeder supply hours compliance table with RAG buckets (Target / Actual / Gap / % Achieved)',
+        'category': 'tmo',
+        'supports_chart': False,
+        'config_options': {},
+    },
+    'tmo_compliance_by_segment': {
+        'display_name': 'Compliance by Segment',
+        'description': '100%-stacked bar — feeder count in each compliance bucket (Exceeding / On Target / Below / Poor / Critical) per MDI, Non-MDI Band A, Non-MDI Non-Band A',
+        'category': 'tmo',
+        'supports_chart': True,
+        'config_options': {},
+    },
+    'tmo_minigrids_daily': {
+        'display_name': 'Daily Feeder / Minigrid Energy',
+        'description': 'Daily MWh bar chart for any feeder or set of feeders (default: minigrids). Supports feeder_slug, q, band, segment search params.',
+        'category': 'tmo',
+        'supports_chart': True,
+        'config_options': {
+            'feeder_slug': {'type': 'text', 'default': None},
+            'q':           {'type': 'text', 'default': None},
+            'band':        {'type': 'text', 'default': None},
+            'segment':     {'type': 'text', 'default': None},
+        },
+    },
+    'tmo_pear': {
+        'display_name': 'PEAR — Premium Energy Allocation Ratio',
+        'description': '100%-stacked bar showing MD vs NMD target mix and yesterday + MTD actual mix',
+        'category': 'tmo',
+        'supports_chart': True,
+        'config_options': {},
+    },
+    'tmo_energy_pnl_donut': {
+        'display_name': 'Energy by P&L Segment',
+        'description': 'Donut charts — energy consumed split by MDI / MDNI / Regions for yesterday and month-to-date',
+        'category': 'tmo',
+        'supports_chart': True,
+        'config_options': {},
+    },
+    'tmo_energy_by_voltage': {
+        'display_name': 'Daily Energy by Segment & Voltage',
+        'description': 'Per-segment (MDI / MDNI / Regions) stacked daily bar chart — 33KV vs 11KV GWh with previous-month comparison',
+        'category': 'tmo',
+        'supports_chart': True,
+        'config_options': {},
+    },
+    'tmo_incidents': {
+        'display_name': 'Techno-Commercial Incidents',
+        'description': 'Incidents table with financial impact, fault type, status (Rectified / Lingering), and weekly KPI tiles',
+        'category': 'tmo',
+        'supports_chart': False,
+        'config_options': {},
+    },
+    'tmo_pnl_deficit': {
+        'display_name': 'P&L Target Realization Deficit',
+        'description': 'Stacked bar — energy consumed vs gap vs target per segment (MDI / MDNI / Regions / Total)',
+        'category': 'tmo',
+        'supports_chart': True,
+        'config_options': {},
+    },
+    'tmo_gcr': {
+        'display_name': 'GCR — P&L Target vs Billing Value',
+        'description': 'Grid Collection Rate table: target GWh, consumed GWh, billing value, MTD achievement and gap per segment',
+        'category': 'tmo',
+        'supports_chart': False,
+        'config_options': {},
+    },
+    'tmo_volatility': {
+        'display_name': 'P&L Mix Volatility Index',
+        'description': 'Per-segment daily share vs MTD share vs difference — flags segments with >1% day-over-day swing',
+        'category': 'tmo',
+        'supports_chart': False,
         'config_options': {},
     },
     # ── DSO Compliance sections ───────────────────────────────────────────────
@@ -1495,8 +1577,8 @@ class ReportDataService:
         if not hasattr(self, '_tmo_service_instance'):
             from reports.tmo_service import TMOReportService
             self._tmo_service_instance = TMOReportService({
-                'from_date':  self.filters.get('from_date'),
-                'to_date':    self.filters.get('to_date'),
+                'from_date':  self.from_date,
+                'to_date':    self.to_date,
                 'feeder_ids': self.feeder_ids,
             })
         return self._tmo_service_instance
@@ -1511,7 +1593,14 @@ class ReportDataService:
     _COMMERCIAL_SECTIONS = {'commercial_overview', 'revenue_by_district', 'customer_type_summary'}
     _FINANCIAL_SECTIONS  = {'financial_overview', 'opex_by_category', 'opex_by_district'}
     _COMPARISON_SECTIONS = {'entity_comparison', 'period_comparison', 'customer_comparison'}
-    _TMO_SECTIONS        = {'tmo_feeder_dispatch', 'tmo_collection_performance', 'tmo_billing_efficiency'}
+    _TMO_SECTIONS = {
+        'tmo_overview', 'tmo_daily_network_energy', 'tmo_daily_energy_consumed',
+        'tmo_daily_allocation', 'tmo_feeder_compliance_table', 'tmo_compliance_by_segment',
+        'tmo_minigrids_daily', 'tmo_pear', 'tmo_energy_pnl_donut', 'tmo_energy_by_voltage',
+        'tmo_incidents', 'tmo_pnl_deficit', 'tmo_gcr', 'tmo_volatility',
+        # kept in dispatcher for any existing saved templates — no longer shown in picker
+        'tmo_feeder_dispatch', 'tmo_collection_performance', 'tmo_billing_efficiency',
+    }
 
     def get_feeder_segment_compliance(self):
         """

@@ -63,8 +63,11 @@ def technical_sync_status(request):
             "SELECT COUNT(*) FROM Technicalhourlydata WHERE Date >= %s AND Date <= %s",
             [window_start, window_end]
         )
+        # Count only DSO records — admin_override (Google Sheet) data would inflate
+        # the Raven count far beyond what DataNest holds and cause false out_of_sync.
         rv_hourly = HourlyLoad.objects.filter(
-            date__gte=window_start, date__lte=window_end
+            date__gte=window_start, date__lte=window_end,
+            submission_type='dso',
         ).count()
         sources['hourly_load'] = _reconcile_entry(
             label='Hourly Load',
@@ -85,8 +88,11 @@ def technical_sync_status(request):
             "SELECT COUNT(*) FROM techicalenergyreadingdailydta WHERE Date >= %s AND Date <= %s",
             [window_start, window_end]
         )
+        # Count only DSO records — Google Sheet (admin_override) CMR rows would
+        # dwarf the DataNest count and trigger false out_of_sync.
         rv_readings = CumulativeMeterReading.objects.filter(
-            reading_date__gte=window_start, reading_date__lte=window_end
+            reading_date__gte=window_start, reading_date__lte=window_end,
+            submission_type='dso',
         ).count()
         sources['meter_readings'] = _reconcile_entry(
             label='Meter Readings',
