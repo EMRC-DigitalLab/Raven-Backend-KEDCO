@@ -448,51 +448,49 @@ body {{
 }}
 .page:last-child {{ page-break-after: auto; }}
 
-/* ── Cover page ─────────────────────────────────────── */
-.cover {{
-    background: linear-gradient(135deg, {_C['primary']} 0%, #4570EA 100%);
-    color: #fff;
+/* ── Cover / back page (matches management_report.py style) ─── */
+.cover-page {{
+    padding: 0;
+    display: flex;
+    flex-direction: row;
+    min-height: 297mm;
+    page-break-after: always;
+    background: #002050;
+    color: #ffffff;
+}}
+.cover-accent {{ width: 10px; background: rgba(255,255,255,0.2); flex-shrink: 0; }}
+.cover-body {{
+    flex: 1;
+    padding: 48px 55px;
     display: flex;
     flex-direction: column;
-    justify-content: center;
-    align-items: flex-start;
-    padding: 60px 50px;
-    min-height: 297mm;
 }}
-.cover-badge {{
-    background: rgba(255,255,255,0.18);
-    border-radius: 20px;
-    padding: 5px 14px;
-    font-size: 10px;
-    font-weight: 600;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    margin-bottom: 28px;
-    display: inline-block;
+.cover-eyebrow {{
+    font-size: 10px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 3px;
+    opacity: 0.5; margin-bottom: 60px;
 }}
-.cover-title {{
-    font-size: 32px;
-    font-weight: 700;
-    line-height: 1.2;
-    margin-bottom: 12px;
+.cover-main-title {{
+    font-size: 52px; font-weight: 800;
+    line-height: 1.05; text-transform: uppercase;
+    letter-spacing: -0.5px; margin: 0 0 8px 0;
 }}
-.cover-subtitle {{
-    font-size: 15px;
-    opacity: 0.85;
-    margin-bottom: 48px;
+.cover-main-title-accent {{ opacity: 0.7; }}
+.cover-rule {{
+    width: 60px; height: 4px;
+    background: rgba(255,255,255,0.4);
+    border-radius: 3px; margin: 22px 0;
 }}
-.cover-meta {{
-    font-size: 10px;
-    opacity: 0.7;
-    margin-top: 4px;
+.cover-subtitle {{ font-size: 13px; font-weight: 400; opacity: 0.6; line-height: 1.6; }}
+.cover-footer-strip {{
+    margin-top: auto;
+    padding-top: 18px;
+    border-top: 1px solid rgba(255,255,255,0.15);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
 }}
-.cover-divider {{
-    width: 60px;
-    height: 3px;
-    background: rgba(255,255,255,0.5);
-    border-radius: 2px;
-    margin-bottom: 28px;
-}}
+.cover-period {{ font-size: 11px; font-weight: 600; opacity: 0.55; letter-spacing: 1px; }}
 
 /* ── Section page ───────────────────────────────────── */
 .section-page {{
@@ -909,7 +907,7 @@ def _svg_x_labels(positions, labels):
 
 # ── Stacked bar chart (bottom→top) ───────────────────────────────────────────
 
-def _svg_stacked_bar(days, series, y_title='GWh', label_fmt='{:.2f}'):
+def _svg_stacked_bar(days, series, y_title='GWh', label_fmt='{:.2f}', show_labels=True):
     """
     days   : list of dicts; each dict has a 'label' key and one key per series
     series : list of (key, color)  — bottom series first
@@ -937,8 +935,14 @@ def _svg_stacked_bar(days, series, y_title='GWh', label_fmt='{:.2f}'):
             bar_h = val / span * _CH
             y     = stack_bottom - bar_h
             svg  += f'<rect x="{x}" y="{y:.1f}" width="{w}" height="{bar_h:.1f}" fill="{color}" rx="1"/>'
-            # white 1px separator between stacked segments
             svg  += f'<line x1="{x}" y1="{y:.1f}" x2="{x+w}" y2="{y:.1f}" stroke="#fff" stroke-width="1"/>'
+            if show_labels and bar_h > 9 and w >= 12:
+                lbl = label_fmt.format(val)
+                svg += (
+                    f'<text x="{x + w/2:.1f}" y="{y + bar_h/2 + 2.5:.1f}" '
+                    f'text-anchor="middle" font-size="5" fill="#fff" font-weight="600">'
+                    f'{lbl}</text>'
+                )
             stack_bottom = y
 
     svg += _svg_x_labels(positions, [str(d.get('label', d.get('day', ''))) for d in days])
@@ -948,7 +952,7 @@ def _svg_stacked_bar(days, series, y_title='GWh', label_fmt='{:.2f}'):
 
 # ── Single-series bar chart ───────────────────────────────────────────────────
 
-def _svg_single_bar(days, key, color, y_title='GWh'):
+def _svg_single_bar(days, key, color, y_title='GWh', show_labels=True):
     if not days:
         return ''
     vals  = [float(d.get(key, 0) or 0) for d in days]
@@ -963,6 +967,12 @@ def _svg_single_bar(days, key, color, y_title='GWh'):
         bar_h = v / span * _CH
         y     = _MT + _CH - bar_h
         svg  += f'<rect x="{x}" y="{y:.1f}" width="{w}" height="{bar_h:.1f}" fill="{color}" rx="1"/>'
+        if show_labels and bar_h > 9 and w >= 12:
+            svg += (
+                f'<text x="{x + w/2:.1f}" y="{y + bar_h/2 + 2.5:.1f}" '
+                f'text-anchor="middle" font-size="5" fill="#fff" font-weight="600">'
+                f'{v:.2f}</text>'
+            )
 
     svg += _svg_x_labels(positions, [str(d.get('label', d.get('day', ''))) for d in days])
     svg += '</svg>'
@@ -1013,6 +1023,182 @@ def _svg_diverging_bar(days, pos_series, neg_key, neg_color_fn, y_title='MW'):
         svg     += f'<rect x="{x}" y="{zy:.1f}" width="{w}" height="{neg_h:.1f}" fill="{neg_color_fn(d)}" rx="1"/>'
 
     svg += _svg_x_labels(positions, [str(d.get('label', d.get('day', ''))) for d in days])
+    svg += '</svg>'
+    return svg
+
+
+# ── Period-total mini-chart (side-by-side comparison columns) ────────────────
+
+def _svg_period_total(bars, title='Period\nTotal', h=None):
+    """
+    bars : list of (label, value, color) — independent side-by-side bars.
+    Returns a small 120×h SVG for placement beside a main chart.
+    """
+    h = h or _SVG_H
+    if not bars:
+        return ''
+    W  = 120
+    ML = 6
+    MR = 6
+    MT = 26
+    MB = 20
+    n  = len(bars)
+    BW = max(10, (W - ML - MR - (n - 1) * 6) // max(n, 1))
+    CH = h - MT - MB
+
+    vals  = [abs(float(v)) for _, v, _ in bars]
+    y_max = max(vals) * 1.2 if any(v > 0 for v in vals) else 1.0
+    span  = y_max if y_max > 0 else 1.0
+    base  = MT + CH
+
+    svg = (
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{h}" '
+        f'style="display:block;font-family:sans-serif;flex-shrink:0;">'
+    )
+    for li, line in enumerate(title.split('\n')):
+        svg += (
+            f'<text x="{W//2}" y="{10 + li*10}" text-anchor="middle" '
+            f'font-size="6" fill="#7C8FAC" font-weight="600">{line}</text>'
+        )
+
+    for i, (label, val, color) in enumerate(bars):
+        v   = abs(float(val))
+        bx  = ML + i * (BW + 6)
+        bh  = max(v / span * CH, 2)
+        by  = base - bh
+        svg += f'<rect x="{bx}" y="{by:.1f}" width="{BW}" height="{bh:.1f}" fill="{color}" rx="2"/>'
+        if bh > 14:
+            svg += (
+                f'<text x="{bx + BW/2:.1f}" y="{by + bh/2 + 3:.1f}" '
+                f'text-anchor="middle" font-size="5.5" fill="#fff" font-weight="600">'
+                f'{v:.2f}</text>'
+            )
+        svg += (
+            f'<text x="{bx + BW/2:.1f}" y="{base + 12}" '
+            f'text-anchor="middle" font-size="5.5" fill="#7C8FAC">{label}</text>'
+        )
+
+    svg += '</svg>'
+    return svg
+
+
+# ── Period comparison stacked mini-chart (prev vs current month) ──────────────
+
+def _svg_period_stacked_total(months, series, title='Comparison\nPrev vs Current', h=None):
+    """
+    months : list of dicts with 'label' and value keys from series.
+    series : list of (key, color) — bottom series first.
+    Returns a 130×h SVG.
+    """
+    h = h or _SVG_H
+    if not months:
+        return ''
+    W  = 130
+    ML = 6
+    MR = 6
+    MT = 28
+    MB = 20
+    n  = len(months)
+    BW = max(10, (W - ML - MR - (n - 1) * 10) // max(n, 1))
+    CH = h - MT - MB
+
+    totals = [sum(abs(float(m.get(k, 0) or 0)) for k, _ in series) for m in months]
+    y_max  = max(totals) * 1.2 if any(t > 0 for t in totals) else 1.0
+    span   = y_max if y_max > 0 else 1.0
+    base   = MT + CH
+
+    svg = (
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{h}" '
+        f'style="display:block;font-family:sans-serif;flex-shrink:0;">'
+    )
+    for li, line in enumerate(title.split('\n')):
+        svg += (
+            f'<text x="{W//2}" y="{10 + li*9}" text-anchor="middle" '
+            f'font-size="5.5" fill="#7C8FAC" font-weight="600">{line}</text>'
+        )
+
+    for mi, month in enumerate(months):
+        bx    = ML + mi * (BW + 10)
+        stack = base
+        for key, color in series:
+            v  = abs(float(month.get(key, 0) or 0))
+            bh = max(v / span * CH, 1)
+            by = stack - bh
+            svg += f'<rect x="{bx}" y="{by:.1f}" width="{BW}" height="{bh:.1f}" fill="{color}" rx="1"/>'
+            svg += f'<line x1="{bx}" y1="{by:.1f}" x2="{bx+BW}" y2="{by:.1f}" stroke="#fff" stroke-width="0.5"/>'
+            if bh > 12:
+                svg += (
+                    f'<text x="{bx + BW/2:.1f}" y="{by + bh/2 + 2.5:.1f}" '
+                    f'text-anchor="middle" font-size="5" fill="#fff" font-weight="600">'
+                    f'{v:.2f}</text>'
+                )
+            stack = by
+        svg += (
+            f'<text x="{bx + BW/2:.1f}" y="{base + 12}" '
+            f'text-anchor="middle" font-size="5.5" fill="#7C8FAC">'
+            f'{month.get("label", "")}</text>'
+        )
+
+    svg += '</svg>'
+    return svg
+
+
+# ── 100% stacked vertical columns (compliance by segment) ─────────────────────
+
+def _svg_100pct_stacked_vertical(segments, series_buckets, h=200, label_min_pct=5):
+    """
+    segments      : list of dicts with 'label' key and bucket pct float values.
+    series_buckets: list of (key, color) bottom bucket first (exceeding → critical).
+    Returns a full-width SVG string.
+    """
+    if not segments:
+        return ''
+    n      = len(segments)
+    slot_w = _CW // max(n, 1)
+    bar_w  = max(40, slot_w * 2 // 3)
+    MT2    = _MT
+    CH2    = h - MT2 - _MB
+
+    svg = (
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{_SVG_W}" height="{h}" '
+        f'style="display:block;max-width:100%;font-family:sans-serif;">'
+    )
+    svg += f'<line x1="{_ML}" y1="{MT2}" x2="{_ML}" y2="{MT2+CH2}" stroke="#e5eaef" stroke-width="1"/>'
+    for v in [0, 20, 40, 60, 80, 100]:
+        py = MT2 + CH2 - (v / 100 * CH2)
+        svg += (
+            f'<line x1="{_ML-2}" y1="{py:.1f}" x2="{_SVG_W-_MR}" y2="{py:.1f}" '
+            f'stroke="#e5eaef" stroke-width="0.5"/>'
+            f'<text x="{_ML-4}" y="{py+3:.1f}" text-anchor="end" font-size="7" fill="#7C8FAC">{v}%</text>'
+        )
+    base_y = MT2 + CH2
+
+    for si, seg in enumerate(segments):
+        bx    = _ML + si * slot_w + (slot_w - bar_w) // 2
+        stack = base_y
+        for key, color in series_buckets:
+            pct = float(seg.get(key, 0) or 0)
+            if pct <= 0:
+                continue
+            display_pct = max(pct, label_min_pct)
+            bh = display_pct / 100 * CH2
+            by = stack - bh
+            svg += f'<rect x="{bx}" y="{by:.1f}" width="{bar_w}" height="{bh:.1f}" fill="{color}" rx="1"/>'
+            svg += f'<line x1="{bx}" y1="{by:.1f}" x2="{bx+bar_w}" y2="{by:.1f}" stroke="#fff" stroke-width="1"/>'
+            if pct >= 3 and bh > 10:
+                svg += (
+                    f'<text x="{bx + bar_w/2:.1f}" y="{by + bh/2 + 2.5:.1f}" '
+                    f'text-anchor="middle" font-size="7" fill="#fff" font-weight="600">'
+                    f'{pct:.0f}%</text>'
+                )
+            stack = by
+
+        lbl = seg.get('label', seg.get('segment', ''))
+        svg += (
+            f'<text x="{bx + bar_w/2:.1f}" y="{base_y + 14}" '
+            f'text-anchor="middle" font-size="7.5" fill="{_C["text"]}">{lbl}</text>'
+        )
+
     svg += '</svg>'
     return svg
 
@@ -1126,7 +1312,8 @@ def _seg_display_name(seg):
 
 
 def _render_daily_network_energy(data, ai):
-    """5.1 — Stacked vertical bar per day: Forecast (#5D87FF) base → Actual (#49BEFF) on top."""
+    """5.1 — Stacked vertical bar per day: Forecast (#5D87FF) base → Actual (#49BEFF) on top.
+    Period Total panel on right: two solid bars (Forecast, Actual)."""
     days         = data.get('days') or []
     total_target = data.get('monthly_target_gwh', 0)
     total_actual = data.get('total_actual_gwh', 0)
@@ -1142,12 +1329,17 @@ def _render_daily_network_energy(data, ai):
         y_title='GWh',
     ) if days else '<p style="font-size:9px;color:#999;">No daily energy data.</p>'
 
+    period_total = _svg_period_total(
+        [('Forecast', total_target, _C['primary']), ('Actual', total_actual, _C['secondary'])],
+        title='Period\nTotal',
+    )
+
     legend = (
         f'<div style="display:flex;gap:14px;font-size:8.5px;margin-bottom:8px;">'
         f'<span style="display:flex;align-items:center;gap:4px;">'
-        f'<span style="width:10px;height:10px;border-radius:2px;background:{_C["primary"]};display:inline-block;"></span>Forecast</span>'
+        f'<span style="width:10px;height:10px;border-radius:2px;background:{_C["primary"]};display:inline-block;"></span>Daily Energy Forecast</span>'
         f'<span style="display:flex;align-items:center;gap:4px;">'
-        f'<span style="width:10px;height:10px;border-radius:2px;background:{_C["secondary"]};display:inline-block;"></span>Actual</span>'
+        f'<span style="width:10px;height:10px;border-radius:2px;background:{_C["secondary"]};display:inline-block;"></span>Actual Energy Consumed</span>'
         f'</div>'
     )
 
@@ -1164,18 +1356,27 @@ def _render_daily_network_energy(data, ai):
         f'<div class="kpi-value">{_fmt_pct(ach_pct)}</div></div>'
         f'</div>'
         f'{legend}'
-        f'<div style="overflow-x:auto;">{svg}</div>'
+        f'<div style="display:flex;align-items:flex-start;gap:8px;">'
+        f'<div style="flex:1;overflow-x:auto;">{svg}</div>'
+        f'{period_total}'
+        f'</div>'
     )
 
 
 def _render_daily_energy_consumed(data, ai):
-    """5.2 — Single-series vertical bar per day: Actual GWh only (#49BEFF)."""
+    """5.2 — Single-series vertical bar per day: Actual GWh only (#49BEFF).
+    Period Total panel on right: single bar showing period sum."""
     days         = data.get('days') or []
     total_actual = data.get('total_actual_gwh', 0)
     ach_pct      = data.get('mtd_achievement_pct', 0)
 
     svg = _svg_single_bar(days, 'actual_gwh', _C['secondary'], y_title='GWh') \
         if days else '<p style="font-size:9px;color:#999;">No daily energy data.</p>'
+
+    period_total = _svg_period_total(
+        [('Actual', total_actual, _C['secondary'])],
+        title='Period\nTotal',
+    )
 
     return (
         f'<div class="section-heading">Daily Energy Consumed</div>'
@@ -1186,12 +1387,17 @@ def _render_daily_energy_consumed(data, ai):
         f'<div class="kpi-label">MTD Achievement</div>'
         f'<div class="kpi-value">{_fmt_pct(ach_pct)}</div></div>'
         f'</div>'
-        f'<div style="overflow-x:auto;">{svg}</div>'
+        f'<div style="display:flex;align-items:flex-start;gap:8px;">'
+        f'<div style="flex:1;overflow-x:auto;">{svg}</div>'
+        f'{period_total}'
+        f'</div>'
     )
 
 
 def _render_daily_allocation(data, ai):
-    """5.3 — Diverging bar: Expected + Consumed above zero; Unpicked below (green if ≥expected, red otherwise)."""
+    """5.3 — Diverging bar: Expected (blue) base + excess (orange, actual-expected) above zero;
+    Unpicked below zero (green if actual≥expected, red if shortfall).
+    Period Total panel: Expected vs Actual side-by-side."""
     days    = data.get('days') or []
     summary = data.get('summary') or {}
 
@@ -1202,24 +1408,40 @@ def _render_daily_allocation(data, ai):
     def _unpicked_color(d):
         return _C['gap_green'] if float(d.get('actual_mw', 0) or 0) >= float(d.get('expected_mw', 0) or 0) else _C['critical']
 
+    # Pre-compute excess_mw = max(0, actual - expected) so the stacked bar
+    # shows only the portion above expected, not the full actual on top.
+    processed_days = []
+    for d in days:
+        exp = float(d.get('expected_mw', 0) or 0)
+        act = float(d.get('actual_mw', 0) or 0)
+        processed_days.append({**d, 'excess_mw': max(0.0, act - exp)})
+
     svg = _svg_diverging_bar(
-        days,
-        pos_series=[('expected_mw', _C['primary']), ('actual_mw', _C['warning'])],
+        processed_days,
+        pos_series=[('expected_mw', _C['primary']), ('excess_mw', _C['warning'])],
         neg_key='unpicked_mw',
         neg_color_fn=_unpicked_color,
         y_title='MW',
-    ) if days else '<p style="font-size:9px;color:#999;">No allocation data.</p>'
+    ) if processed_days else '<p style="font-size:9px;color:#999;">No allocation data.</p>'
+
+    period_total = _svg_period_total(
+        [
+            ('Expected', summary.get('total_expected_mw', 0), _C['primary']),
+            ('Actual',   summary.get('total_actual_mw',   0), _C['warning']),
+        ],
+        title='Period\nTotal',
+    )
 
     legend = (
         f'<div style="display:flex;gap:14px;font-size:8.5px;margin-bottom:8px;flex-wrap:wrap;">'
         f'<span style="display:flex;align-items:center;gap:4px;">'
-        f'<span style="width:10px;height:10px;border-radius:2px;background:{_C["primary"]};display:inline-block;"></span>Expected</span>'
+        f'<span style="width:10px;height:10px;border-radius:2px;background:{_C["primary"]};display:inline-block;"></span>Hourly Expected Allocation</span>'
         f'<span style="display:flex;align-items:center;gap:4px;">'
-        f'<span style="width:10px;height:10px;border-radius:2px;background:{_C["warning"]};display:inline-block;"></span>Consumed</span>'
+        f'<span style="width:10px;height:10px;border-radius:2px;background:{_C["warning"]};display:inline-block;"></span>Hourly Avg Consumption</span>'
         f'<span style="display:flex;align-items:center;gap:4px;">'
-        f'<span style="width:10px;height:10px;border-radius:2px;background:{_C["gap_green"]};display:inline-block;"></span>Unpicked (≥expected)</span>'
+        f'<span style="width:10px;height:10px;border-radius:2px;background:{_C["gap_green"]};display:inline-block;"></span>Consumed more than available</span>'
         f'<span style="display:flex;align-items:center;gap:4px;">'
-        f'<span style="width:10px;height:10px;border-radius:2px;background:{_C["critical"]};display:inline-block;"></span>Unpicked (shortfall)</span>'
+        f'<span style="width:10px;height:10px;border-radius:2px;background:{_C["critical"]};display:inline-block;"></span>Consumed less than available</span>'
         f'</div>'
     )
 
@@ -1235,7 +1457,10 @@ def _render_daily_allocation(data, ai):
         f'<div class="kpi-value">{_fmt_mw(summary.get("total_unpicked_mw", 0))}</div></div>'
         f'</div>'
         f'{legend}'
-        f'<div style="overflow-x:auto;">{svg}</div>'
+        f'<div style="display:flex;align-items:flex-start;gap:8px;">'
+        f'<div style="flex:1;overflow-x:auto;">{svg}</div>'
+        f'{period_total}'
+        f'</div>'
     )
 
 
@@ -1248,22 +1473,41 @@ def _render_feeder_compliance_table(data, ai):
     if ai.get('compliance_narrative'):
         ai_html = f'<div class="ai-block">{ai["compliance_narrative"]}</div>'
 
+    def _fmt_int_hours(v):
+        try:
+            return str(int(float(v)))
+        except (TypeError, ValueError):
+            return '—'
+
     rows_html = ''
-    for f in feeders[:40]:
-        bucket  = f.get('bucket') or f.get('status', 'critical')
+    for fd in feeders[:40]:
+        bucket  = fd.get('bucket') or fd.get('status', 'critical')
         b_col   = _bucket_color(bucket)
         b_txt   = _bucket_text_color(bucket)
-        ach     = float(f.get('achievement_pct') or f.get('pct_achieved', 0))
-        gap     = float(f.get('gap_hours') or f.get('gap', 0))
+        ach     = float(fd.get('achievement_pct') or fd.get('pct_achieved', 0))
+        gap     = float(fd.get('gap_hours') or fd.get('gap', 0))
         gap_col = _C['success'] if gap >= 0 else _C['error']
+
+        # Feeder subtitle: segment · band · voltage
+        seg_part     = fd.get('segment', fd.get('segment_name', ''))
+        band_part    = fd.get('band', fd.get('tariff_band', ''))
+        voltage_part = fd.get('voltage', fd.get('voltage_level', ''))
+        subtitle_parts = [p for p in [seg_part, band_part, voltage_part] if p]
+        subtitle = ' · '.join(subtitle_parts)
+
+        name_cell = (
+            f'<div style="font-weight:600;">{fd.get("feeder_name","")}</div>'
+            + (f'<div style="font-size:7px;color:{_C["grey"]};margin-top:1px;">{subtitle}</div>' if subtitle else '')
+        )
+
         rows_html += (
             f'<tr style="background:{b_col}10;">'
-            f'<td>{f.get("feeder_name","")}</td>'
-            f'<td style="text-align:right;">{_fmt_hrs(f.get("target_hours",0))}</td>'
-            f'<td style="text-align:right;">{_fmt_hrs(f.get("actual_hours",0))}</td>'
-            f'<td style="text-align:right;color:{gap_col};">{_fmt_hrs(gap)}</td>'
+            f'<td>{name_cell}</td>'
+            f'<td style="text-align:right;">{_fmt_int_hours(fd.get("target_hours",0))}</td>'
+            f'<td style="text-align:right;">{_fmt_int_hours(fd.get("actual_hours",0))}</td>'
+            f'<td style="text-align:right;color:{gap_col};">{_fmt_int_hours(gap)}</td>'
             f'<td style="text-align:right;">'
-            f'<span class="chip" style="background:{b_col};color:{b_txt};">{_fmt_pct(ach)}</span>'
+            f'<span class="chip" style="background:{b_col};color:{b_txt};">{ach:.0f}%</span>'
             f'</td></tr>'
         )
 
@@ -1281,47 +1525,28 @@ def _render_compliance_by_segment(data, ai):
     if not segments:
         return '<p style="font-size:9px;color:#999;">No compliance summary data.</p>'
 
-    ai_html = ''
-    if ai.get('compliance_narrative'):
-        ai_html = ''  # already shown in feeder table; avoid duplicate
-
     BUCKETS = ['exceeding', 'on_target', 'below_target', 'poor', 'critical']
     BUCKET_LABELS = {
         'exceeding':    'Exceeding (>105%)',
-        'on_target':    'On Target (95-105%)',
-        'below_target': 'Below Target (85-94%)',
-        'poor':         'Poor (75-84%)',
+        'on_target':    'On Target (95%-105%)',
+        'below_target': 'Below Target (85%-94%)',
+        'poor':         'Poor (75%-84%)',
         'critical':     'Critical (<75%)',
     }
 
-    chart_html = ''
+    # Pre-compute percentage for each bucket per segment
+    processed = []
     for seg in segments:
-        seg_name = seg.get('segment', '')
-        total    = max(seg.get('total', 1), 1)
-        bar_segs = []
+        total = max(seg.get('total', 1), 1)
+        entry = {'label': seg.get('segment', ''), 'segment': seg.get('segment', '')}
         for bk in BUCKETS:
             cnt = seg.get(bk, {}).get('count', 0) if isinstance(seg.get(bk), dict) else 0
-            pct = cnt / total * 100
-            if pct > 0:
-                bar_segs.append((BUCKET_LABELS[bk], pct, _C[bk]))
+            entry[bk] = cnt / total * 100
+        processed.append(entry)
 
-        bar_html = _css_100pct_bar(bar_segs, height=18)
-        legend = ' '.join(
-            f'<span style="font-size:7.5px;display:inline-flex;align-items:center;gap:3px;">'
-            f'<span style="width:8px;height:8px;border-radius:2px;background:{_C[bk]};display:inline-block;"></span>'
-            f'{seg.get(bk,{}).get("count",0) if isinstance(seg.get(bk),dict) else 0}'
-            f'</span>'
-            for bk in BUCKETS if (seg.get(bk, {}).get('count', 0) if isinstance(seg.get(bk), dict) else 0) > 0
-        )
-        avg_ach = seg.get('avg_achievement_pct', seg.get('avg_pct_achieved', 0))
-        chart_html += (
-            f'<div style="margin-bottom:12px;">'
-            f'<div style="font-size:9px;font-weight:600;margin-bottom:4px;">{seg_name}'
-            f' <span style="color:{_C["grey"]};font-weight:400;">(avg: {_fmt_pct(avg_ach)})</span></div>'
-            f'{bar_html}'
-            f'<div style="margin-top:4px;display:flex;gap:8px;flex-wrap:wrap;">{legend}</div>'
-            f'</div>'
-        )
+    # series_buckets: exceeding at bottom, critical at top (matches dashboard stacking)
+    series_buckets = [(bk, _C[bk]) for bk in BUCKETS]
+    svg = _svg_100pct_stacked_vertical(processed, series_buckets, h=220)
 
     legend_global = ' '.join(
         f'<span style="display:inline-flex;align-items:center;gap:4px;font-size:8px;">'
@@ -1332,8 +1557,8 @@ def _render_compliance_by_segment(data, ai):
 
     return (
         f'<div class="section-heading">Compliance by Segment</div>'
-        f'<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;">{legend_global}</div>'
-        f'{chart_html}'
+        f'<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;">{legend_global}</div>'
+        f'<div style="overflow-x:auto;">{svg}</div>'
     )
 
 
@@ -1422,6 +1647,8 @@ def _render_energy_pnl_donut(data, ai):
 
     def _donut_card(title, d):
         segs      = d.get('segments') or []
+        # Dashboard donut shows MDI/MDNI/Regions only — no Minigrid slice
+        segs      = [s for s in segs if 'MINI' not in str(s.get('segment', '')).upper()]
         total_gwh = float(d.get('total_gwh', d.get('total_energy_gwh', 0)) or 0)
 
         bar_segs    = []
@@ -1492,7 +1719,7 @@ def _render_energy_by_voltage(data, ai):
         normalised = []
         for d in days:
             normalised.append({
-                'label':   d.get('label', d.get('day', '')),
+                'label':    d.get('label', d.get('day', '')),
                 'gwh_33kv': float(d.get('total_33kv_gwh', d.get('gwh_33kv', 0)) or 0),
                 'gwh_11kv': float(d.get('total_11kv_gwh', d.get('gwh_11kv', 0)) or 0),
             })
@@ -1503,6 +1730,23 @@ def _render_energy_by_voltage(data, ai):
             y_title='GWh',
         ) if normalised else ''
 
+        # Period comparison panel: prev month vs current month
+        prev      = seg.get('prev_month') or {}
+        prev_33   = float(prev.get('total_33kv_gwh', prev.get('gwh_33kv', 0)) or 0)
+        prev_11   = float(prev.get('total_11kv_gwh', prev.get('gwh_11kv', 0)) or 0)
+        prev_lbl  = prev.get('month_label', 'Prev Month')
+        curr_lbl  = seg.get('month_label', 'This Month')
+        comp_months = []
+        if prev_33 or prev_11:
+            comp_months.append({'label': prev_lbl, 'gwh_33kv': prev_33, 'gwh_11kv': prev_11})
+        comp_months.append({'label': curr_lbl, 'gwh_33kv': total_33, 'gwh_11kv': total_11})
+
+        comp_svg = _svg_period_stacked_total(
+            comp_months,
+            [('gwh_33kv', _C['primary']), ('gwh_11kv', _C['warning'])],
+            title='Comparison\nBetween Present\nand Previous\nMonth (Total)',
+        ) if len(comp_months) >= 1 else ''
+
         cards_html += (
             f'<div style="margin-bottom:18px;">'
             f'<div style="font-size:9px;font-weight:700;color:{_C["primary"]};margin-bottom:4px;">'
@@ -1510,8 +1754,10 @@ def _render_energy_by_voltage(data, ai):
             f'<span style="font-weight:400;color:{_C["grey"]};margin-left:8px;">'
             f'33KV: {_fmt_gwh(total_33)} &nbsp;|&nbsp; 11KV: {_fmt_gwh(total_11)}'
             f'</span></div>'
-            f'<div style="overflow-x:auto;">{svg}</div>'
-            f'</div>'
+            f'<div style="display:flex;align-items:flex-start;gap:8px;">'
+            f'<div style="flex:1;overflow-x:auto;">{svg}</div>'
+            f'{comp_svg}'
+            f'</div></div>'
         )
 
     return (
@@ -1573,67 +1819,80 @@ def _render_incidents(data, ai):
 
 
 def _render_pnl_deficit(data, ai):
-    """5.12 — Grouped vertical bar per category: Consumed (#5D87FF) | Gap (#2E7D32) | Target (#FFAE1F, tallest)."""
+    """5.12 — STACKED vertical bar per category (bottom→top): Consumed (#5D87FF) → |Gap| (#2E7D32) → Target (#FFAE1F).
+    Gap uses abs() so surplus segments (MDNI) still show the magnitude.
+    Category labels use _seg_display_name for clean display names."""
     segments = data.get('segments') or []
     if not segments:
         return '<p style="font-size:9px;color:#999;">No P&L deficit data.</p>'
 
     ai_html = f'<div class="ai-block">{ai["pnl_deficit_narrative"]}</div>' if ai.get('pnl_deficit_narrative') else ''
 
-    # Build grouped SVG bar inline (4 categories × 3 bars each)
-    cats      = [s.get('segment', f'Cat {i}') for i, s in enumerate(segments, 1)]
-    consumed  = [max(0.0, float(s.get('consumed_gwh', 0) or 0)) for s in segments]
-    gaps      = [max(0.0, float(s.get('gap_gwh', 0)      or 0)) for s in segments]
-    targets   = [max(0.0, float(s.get('target_gwh', 0)   or 0)) for s in segments]
+    cats     = [_seg_display_name(s.get('segment', f'Cat {i}')) for i, s in enumerate(segments, 1)]
+    consumed = [max(0.0, float(s.get('consumed_gwh', 0) or 0)) for s in segments]
+    gaps     = [abs(float(s.get('gap_gwh', 0) or 0))           for s in segments]  # abs() — includes surplus
+    targets  = [max(0.0, float(s.get('target_gwh', 0) or 0))   for s in segments]
 
-    y_max = max(targets + [0.001]) * 1.15
-    span  = y_max if y_max > 0 else 1.0
+    # Total bar height = consumed + abs_gap + target (all three stacked)
+    totals = [c + g + t for c, g, t in zip(consumed, gaps, targets)]
+    y_max  = max(totals + [0.001]) * 1.15
+    span   = y_max if y_max > 0 else 1.0
 
-    SVG_H = 200
-    CH    = SVG_H - _MT - _MB - 10
-    n     = len(cats)
-    group_w = _CW // max(n, 1)
-    bar_w   = max(4, group_w // 4)   # 3 bars + gaps per group
+    SVG_H  = 210
+    CH     = SVG_H - _MT - _MB - 10
+    n      = len(cats)
+    slot_w = _CW // max(n, 1)
+    bar_w  = max(20, slot_w * 2 // 3)
+    MIN_PX = max(2, CH * 0.18)   # 18% minimum visibility floor per spec §7.12
 
     svg = (
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{_SVG_W}" height="{SVG_H}" '
         f'style="display:block;max-width:100%;font-family:sans-serif;">'
     )
 
-    # Y-axis grid lines
+    # Y-axis
+    svg += f'<line x1="{_ML}" y1="{_MT}" x2="{_ML}" y2="{_MT+CH}" stroke="#e5eaef" stroke-width="1"/>'
     for tick in range(5):
         v  = y_max * tick / 4
         py = _MT + CH - (v / span * CH)
         svg += (
-            f'<line x1="{_ML}" y1="{py:.1f}" x2="{_SVG_W-_MR}" y2="{py:.1f}" '
+            f'<line x1="{_ML-2}" y1="{py:.1f}" x2="{_SVG_W-_MR}" y2="{py:.1f}" '
             f'stroke="#e5eaef" stroke-width="0.5"/>'
-            f'<text x="{_ML-4}" y="{py+3:.1f}" text-anchor="end" font-size="7" fill="#7C8FAC">{v:.1f}</text>'
+            f'<text x="{_ML-4}" y="{py+3:.1f}" text-anchor="end" font-size="7" fill="#7C8FAC">{v:.0f}</text>'
         )
-    svg += f'<line x1="{_ML}" y1="{_MT}" x2="{_ML}" y2="{_MT+CH}" stroke="#e5eaef" stroke-width="1"/>'
+    svg += (
+        f'<text x="10" y="{_MT + CH//2}" text-anchor="middle" font-size="7" fill="#7C8FAC" '
+        f'transform="rotate(-90,10,{_MT + CH//2})">GWh</text>'
+    )
 
     SERIES = [
-        (consumed, _C['primary'],      '#fff'),
-        (gaps,     _C['gap_green'],    '#fff'),
-        (targets,  _C['target_yellow'], _C['text']),
+        (consumed, _C['primary'],        '#fff'),   # bottom — Energy Consumed
+        (gaps,     _C['gap_green'],      '#fff'),   # middle — |Gap|
+        (targets,  _C['target_yellow'],  '#fff'),   # top    — Energy Target
     ]
 
     base_y = _MT + CH
     for gi, cat in enumerate(cats):
-        gx = _ML + gi * group_w + bar_w // 2
-        for si, (vals, color, label_color) in enumerate(SERIES):
-            v     = vals[gi]
-            bar_h = v / span * CH
-            bx    = gx + si * (bar_w + 2)
-            by    = base_y - bar_h
-            svg  += f'<rect x="{bx}" y="{by:.1f}" width="{bar_w}" height="{bar_h:.1f}" fill="{color}" rx="1"/>'
-            if bar_h > 14 and v > 0:
-                lbl = f'{v:.2f}'
+        bx    = _ML + gi * slot_w + (slot_w - bar_w) // 2
+        stack = base_y
+
+        for vals, color, label_col in SERIES:
+            v  = vals[gi]
+            bh = max(v / span * CH, MIN_PX) if v > 0 else 0
+            if bh <= 0:
+                continue
+            by  = stack - bh
+            svg += f'<rect x="{bx}" y="{by:.1f}" width="{bar_w}" height="{bh:.1f}" fill="{color}" rx="1"/>'
+            svg += f'<line x1="{bx}" y1="{by:.1f}" x2="{bx+bar_w}" y2="{by:.1f}" stroke="#fff" stroke-width="1"/>'
+            if bh > 12 and v > 0:
                 svg += (
-                    f'<text x="{bx + bar_w/2:.1f}" y="{by + bar_h/2 + 3:.1f}" '
-                    f'text-anchor="middle" font-size="6.5" fill="{label_color}">{lbl}</text>'
+                    f'<text x="{bx + bar_w/2:.1f}" y="{by + bh/2 + 3:.1f}" '
+                    f'text-anchor="middle" font-size="7" fill="{label_col}" font-weight="600">'
+                    f'{v:.1f}</text>'
                 )
-        # Category label
-        cx = gx + bar_w + 1
+            stack = by
+
+        cx = bx + bar_w // 2
         svg += (
             f'<text x="{cx:.1f}" y="{base_y + 14}" text-anchor="middle" '
             f'font-size="7.5" fill="{_C["text"]}">{cat}</text>'
@@ -1830,21 +2089,49 @@ def _build_html(report_config, section_data, ai_narrative, company, period):
     subtitle = report_config.get('report_subtitle', '')
     sections = report_config.get('sections') or ALL_SECTIONS
 
-    # Cover page
     import datetime as _dt
     generated_at = _dt.datetime.now().strftime('%d %B %Y, %H:%M')
 
+    # ── Cover page — same dark-navy style as management_report.py ────────────
+    words        = title.split()
+    title_main   = ' '.join(words[:-1]) if len(words) > 1 else title
+    title_accent = words[-1] if len(words) > 1 else ''
+
+    headline_html = ''
+    if ai_narrative.get('headline'):
+        headline_html = (
+            f'<div style="margin-top:28px;background:rgba(255,255,255,0.10);'
+            f'border-left:3px solid rgba(255,255,255,0.4);border-radius:0 6px 6px 0;'
+            f'padding:12px 16px;font-size:10.5px;line-height:1.6;opacity:0.85;">'
+            f'{ai_narrative["headline"]}</div>'
+        )
+
+    subtitle_html = (
+        f'<div class="cover-subtitle">{subtitle}</div>' if subtitle
+        else f'<div class="cover-subtitle">{company}</div>'
+    )
+
     cover = (
-        f'<div class="page cover">'
-        f'<div class="cover-badge">KEDCO — Technical & Management Operations</div>'
-        f'<div class="cover-title">{title}</div>'
-        f'{"<div class=cover-subtitle>" + subtitle + "</div>" if subtitle else ""}'
-        f'<div class="cover-divider"></div>'
-        f'<div style="font-size:12px;opacity:0.9;margin-bottom:6px;">{company}</div>'
-        f'<div style="font-size:11px;opacity:0.8;margin-bottom:4px;">Period: {period}</div>'
-        f'<div style="font-size:10px;opacity:0.7;">Generated: {generated_at}</div>'
-        f'{"<div class=ai-headline style=margin-top:40px;>" + ai_narrative.get("headline","") + "</div>" if ai_narrative.get("headline") else ""}'
+        f'<div class="cover-page">'
+        f'<div class="cover-accent"></div>'
+        f'<div class="cover-body">'
+        f'<div class="cover-eyebrow">{company} &nbsp;&bull;&nbsp; Technical &amp; Management Operations Report</div>'
+        f'<div style="flex:1;">'
+        f'<div style="font-size:10px;font-weight:700;text-transform:uppercase;'
+        f'letter-spacing:2.5px;opacity:0.5;margin-bottom:18px;">Performance Monitoring Tool</div>'
+        f'<h1 class="cover-main-title">{title_main}<br/>'
+        f'<span class="cover-main-title-accent">{title_accent}</span></h1>'
+        f'<div class="cover-rule"></div>'
+        f'{subtitle_html}'
+        f'<div style="margin-top:12px;font-size:11px;opacity:0.5;letter-spacing:0.5px;">Period: {period}</div>'
+        f'{headline_html}'
         f'</div>'
+        f'<div class="cover-footer-strip">'
+        f'<span style="font-size:10px;opacity:0.4;text-transform:uppercase;letter-spacing:2px;">'
+        f'Powered by RAVEN &mdash; Performance Monitoring Tool</span>'
+        f'<span class="cover-period">{generated_at}</span>'
+        f'</div>'
+        f'</div></div>'
     )
 
     # Content pages — batch sections into groups to avoid giant single pages
@@ -1922,13 +2209,33 @@ def _build_html(report_config, section_data, ai_narrative, company, period):
             f'</div>'
         )
 
+    # ── Back page — same dark-navy style as management_report.py ─────────────
+    back_page = (
+        f'<div class="cover-page" style="justify-content:center;align-items:center;text-align:center;">'
+        f'<div class="cover-accent"></div>'
+        f'<div class="cover-body" style="justify-content:center;align-items:center;">'
+        f'<div style="margin-bottom:32px;">'
+        f'<div class="cover-eyebrow" style="text-align:center;margin-bottom:24px;">End of Report</div>'
+        f'<h2 style="font-size:30px;font-weight:800;color:#fff;text-transform:uppercase;'
+        f'letter-spacing:-0.5px;line-height:1.1;">{company}</h2>'
+        f'<div class="cover-rule" style="margin:24px auto;"></div>'
+        f'<div style="font-size:12px;color:#fff;opacity:0.5;letter-spacing:1.5px;'
+        f'text-transform:uppercase;font-weight:600;">{period}</div>'
+        f'</div>'
+        f'<div style="font-size:10px;color:#fff;opacity:0.3;text-transform:uppercase;'
+        f'letter-spacing:2px;margin-top:60px;">'
+        f'Powered by RAVEN &mdash; Performance Monitoring Tool'
+        f'</div>'
+        f'</div></div>'
+    )
+
     return (
         '<!DOCTYPE html><html lang="en"><head>'
         '<meta charset="UTF-8">'
         f'<title>{title}</title>'
         f'<style>{TMO_REPORT_STYLES}</style>'
         '</head><body>'
-        f'{cover}{content_pages}'
+        f'{cover}{content_pages}{back_page}'
         '</body></html>'
     )
 

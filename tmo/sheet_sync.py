@@ -427,7 +427,9 @@ SKIP_NAMES_11KV = frozenset({
 })
 
 # Known sheet-name → DB-name aliases for 11KV feeders (add as needed)
-NAME_MAP_11KV: dict[str, str] = {}
+NAME_MAP_11KV: dict[str, str] = {
+    'ASIAN PLASTICS': 'ASIAN PLASTIC',  # sheet has extra S
+}
 
 
 def _clean_11kv_name(raw: str) -> str:
