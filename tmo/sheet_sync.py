@@ -42,7 +42,13 @@ def _get_gspread_client():
     creds = Credentials.from_authorized_user_file(str(TOKEN_FILE), SCOPES)
     if creds.expired and creds.refresh_token:
         creds.refresh(GoogleRequest())
-        TOKEN_FILE.write_text(creds.to_json())
+        # Write-back is best-effort: the file may be read-only (bind-mount with
+        # tight host permissions). Skipping is safe — the refresh_token in the
+        # file is long-lived, so the next run will simply refresh again.
+        try:
+            TOKEN_FILE.write_text(creds.to_json())
+        except OSError:
+            logger.debug('google_token.json is not writable; skipping write-back (non-fatal)')
     return gspread.authorize(creds)
 
 
