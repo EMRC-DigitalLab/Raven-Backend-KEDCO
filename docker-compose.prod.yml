@@ -65,6 +65,8 @@ services:
     entrypoint: ["celery", "-A", "raven", "worker",
                  "-Q", "default,notifications,analytics",
                  "--concurrency=4", "-l", "info"]
+    volumes:
+      - ./google_token.json:/app/google_token.json:ro
     networks:
       - prod_net
     restart: always
@@ -84,6 +86,8 @@ services:
     entrypoint: ["celery", "-A", "raven", "worker",
                  "-Q", "datanest_sync",
                  "--concurrency=2", "-l", "info"]
+    volumes:
+      - ./google_token.json:/app/google_token.json:ro
     networks:
       - prod_net
     restart: always
