@@ -92,24 +92,9 @@ services:
       raven:
         condition: service_healthy
 
-  # ── Celery Beat: task scheduler ───────────────────────────────────────────
-  celery-beat:
-    image: ghcr.io/${GITHUB_REPOSITORY}/raven:staging
-    container_name: celery_beat_staging
-    env_file: .env
-    environment:
-      - REDIS_URL=redis://redis:6379/2
-    entrypoint: ["celery", "-A", "raven", "beat",
-                 "-l", "info",
-                 "--schedule", "/tmp/celerybeat-schedule"]
-    networks:
-      - staging_net
-    restart: unless-stopped
-    depends_on:
-      redis:
-        condition: service_healthy
-      raven:
-        condition: service_healthy
+  # celery-beat intentionally omitted from staging — only prod fires scheduled
+  # tasks; running beat in both environments caused duplicate syncs against the
+  # shared production database, leading to stale last_synced_at values.
 
   nginx:
     image: nginx:1.25-alpine

@@ -16,6 +16,7 @@ networks:
 volumes:
   static_prod:
   redis_prod:
+  celerybeat_prod:
 
 services:
 
@@ -101,7 +102,9 @@ services:
       - REDIS_URL=redis://redis:6379/2
     entrypoint: ["celery", "-A", "raven", "beat",
                  "-l", "info",
-                 "--schedule", "/tmp/celerybeat-schedule"]
+                 "--schedule", "/app/celerybeat/celerybeat-schedule"]
+    volumes:
+      - celerybeat_prod:/app/celerybeat
     networks:
       - prod_net
     restart: always
