@@ -35,7 +35,7 @@ _MW_REALISTIC_MAX = Decimal('10000')
 
 
 def _safe_mw(v, label: str = 'mw') -> 'Decimal | None':
-    """Coerce to Decimal safe value; returns None for null/non-numeric/out-of-range data."""
+    """Last-resort guard: coerce to Decimal, return None only on decimal overflow."""
     if v is None:
         return None
     try:
@@ -45,10 +45,42 @@ def _safe_mw(v, label: str = 'mw') -> 'Decimal | None':
     if abs(d) >= _MW_DECIMAL_MAX:
         logger.warning('Decimal overflow in %s=%s — stored as NULL', label, v)
         return None
-    if abs(d) > _MW_REALISTIC_MAX:
-        logger.warning('Unrealistic %s=%s (>10,000 MW) — stored as NULL', label, v)
-        return None
     return d
+
+
+def _impute_dispatch_outliers(dispatch_hourly: dict, dispatch_daily: dict) -> None:
+    """
+    For each MW field, replace physically impossible hourly values with the day
+    average of valid hours, then recompute the daily summary from the clean set.
+
+    Nigeria's total installed capacity is ~6,000 MW; KEDCO's share is ~10%.
+    Anything beyond 10,000 MW in a single field is a sheet entry error.
+    Mutates both dicts in place.
+    """
+    _MAX = float(_MW_REALISTIC_MAX)
+    fields = ('disco_offtake', 'kedco_alloc', 'available_gen', 'variance')
+
+    for field in fields:
+        by_hour = {hr: vals[field] for hr, vals in dispatch_hourly.items() if field in vals}
+        if not by_hour:
+            continue
+
+        valid = {hr: v for hr, v in by_hour.items() if abs(v) <= _MAX}
+        bad_hrs = [hr for hr in by_hour if hr not in valid]
+        if not bad_hrs:
+            continue
+
+        avg = sum(valid.values()) / len(valid) if valid else 0.0
+        logger.warning(
+            'Imputing %d bad %s hour(s) with day average %.4f MW (raw bad values: %s)',
+            len(bad_hrs), field, avg, {hr: by_hour[hr] for hr in bad_hrs},
+        )
+        for hr in bad_hrs:
+            dispatch_hourly[hr][field] = avg
+
+        # Recompute daily average from the now-clean full set
+        all_clean = [dispatch_hourly[hr][field] for hr in dispatch_hourly if field in dispatch_hourly[hr]]
+        dispatch_daily[field] = sum(all_clean) / len(all_clean)
 
 
 # ── Google auth ───────────────────────────────────────────────────────────────
@@ -340,6 +372,10 @@ def sync_33kv_sheet(spreadsheet_id: str, year: int, month: int,
                     if hr not in dispatch_hourly:
                         dispatch_hourly[hr] = {}
                     dispatch_hourly[hr][field] = val
+
+        # Replace physically impossible MW values with the day average of valid hours
+        if dispatch_hourly:
+            _impute_dispatch_outliers(dispatch_hourly, dispatch_daily)
 
         # ── Dry run ──────────────────────────────────────────────────────────
         if dry_run:
