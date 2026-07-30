@@ -27,6 +27,24 @@ from tmo.models import TMONetworkDispatch, TMONetworkDispatchHourly
 
 logger = logging.getLogger(__name__)
 
+# decimal(10,4) max absolute value — values beyond this come from bad sheet data
+_MW_DECIMAL_MAX = Decimal('999999.9999')
+
+
+def _safe_mw(v, label: str = 'mw') -> 'Decimal | None':
+    """Coerce to Decimal(10,4)-safe value; returns None for null/bad/overflow data."""
+    if v is None:
+        return None
+    try:
+        d = Decimal(str(round(float(v), 4)))
+    except Exception:
+        return None
+    if abs(d) >= _MW_DECIMAL_MAX:
+        logger.warning('Out-of-range %s value %s ignored (decimal overflow)', label, v)
+        return None
+    return d
+
+
 # ── Google auth ───────────────────────────────────────────────────────────────
 SCOPES     = ['https://www.googleapis.com/auth/spreadsheets.readonly']
 TOKEN_FILE = Path(settings.BASE_DIR) / 'google_token.json'
@@ -374,10 +392,10 @@ def sync_33kv_sheet(spreadsheet_id: str, year: int, month: int,
                     daily_obj, _ = TMONetworkDispatch.objects.update_or_create(
                         date=reading_date,
                         defaults={
-                            'disco_offtake_mw':        Decimal(str(round(dispatch_daily.get('disco_offtake', 0), 4))),
-                            'kedco_allocation_mw':     Decimal(str(round(dispatch_daily.get('kedco_alloc', 0), 4))),
-                            'available_generation_mw': Decimal(str(round(dispatch_daily.get('available_gen', 0), 4))),
-                            'variance_mw':             Decimal(str(round(dispatch_daily.get('variance', 0), 4))),
+                            'disco_offtake_mw':        _safe_mw(dispatch_daily.get('disco_offtake'), 'disco_offtake'),
+                            'kedco_allocation_mw':     _safe_mw(dispatch_daily.get('kedco_alloc'), 'kedco_alloc'),
+                            'available_generation_mw': _safe_mw(dispatch_daily.get('available_gen'), 'available_gen'),
+                            'variance_mw':             _safe_mw(dispatch_daily.get('variance'), 'variance'),
                             'source': 'manual',
                         }
                     )
@@ -387,10 +405,10 @@ def sync_33kv_sheet(spreadsheet_id: str, year: int, month: int,
                             dispatch=daily_obj,
                             date=reading_date,
                             hour=hr,
-                            disco_offtake_mw=         Decimal(str(round(vals.get('disco_offtake', 0), 4))),
-                            kedco_allocation_mw=      Decimal(str(round(vals.get('kedco_alloc', 0), 4))),
-                            available_generation_mw=  Decimal(str(round(vals.get('available_gen', 0), 4))),
-                            variance_mw=              Decimal(str(round(vals.get('variance', 0), 4))),
+                            disco_offtake_mw=         _safe_mw(vals.get('disco_offtake'), 'disco_offtake'),
+                            kedco_allocation_mw=      _safe_mw(vals.get('kedco_alloc'), 'kedco_alloc'),
+                            available_generation_mw=  _safe_mw(vals.get('available_gen'), 'available_gen'),
+                            variance_mw=              _safe_mw(vals.get('variance'), 'variance'),
                         )
                         for hr, vals in sorted(dispatch_hourly.items())
                     ], batch_size=100)
