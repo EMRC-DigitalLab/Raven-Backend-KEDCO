@@ -27,12 +27,15 @@ from tmo.models import TMONetworkDispatch, TMONetworkDispatchHourly
 
 logger = logging.getLogger(__name__)
 
-# decimal(10,4) max absolute value — values beyond this come from bad sheet data
+# decimal(10,4) hard limit
 _MW_DECIMAL_MAX = Decimal('999999.9999')
+# Nigeria's total installed grid capacity is ~6,000 MW; KEDCO's share is ~10%.
+# Any single MW field above 10,000 is physically impossible — treat as bad sheet data.
+_MW_REALISTIC_MAX = Decimal('10000')
 
 
 def _safe_mw(v, label: str = 'mw') -> 'Decimal | None':
-    """Coerce to Decimal(10,4)-safe value; returns None for null/bad/overflow data."""
+    """Coerce to Decimal safe value; returns None for null/non-numeric/out-of-range data."""
     if v is None:
         return None
     try:
@@ -40,7 +43,10 @@ def _safe_mw(v, label: str = 'mw') -> 'Decimal | None':
     except Exception:
         return None
     if abs(d) >= _MW_DECIMAL_MAX:
-        logger.warning('Out-of-range %s value %s ignored (decimal overflow)', label, v)
+        logger.warning('Decimal overflow in %s=%s — stored as NULL', label, v)
+        return None
+    if abs(d) > _MW_REALISTIC_MAX:
+        logger.warning('Unrealistic %s=%s (>10,000 MW) — stored as NULL', label, v)
         return None
     return d
 
