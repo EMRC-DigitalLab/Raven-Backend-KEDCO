@@ -2001,17 +2001,29 @@ def _render_energy_by_voltage(data, ai):
 def _render_incidents(data, ai):
     summary = data.get('summary') or {}
     rows    = data.get('incidents') or data.get('rows') or []
+    period  = data.get('period') or {}
 
-    ai_html = ''
-    if ai.get('incidents_narrative'):
-        ai_html = f'<div class="ai-block">{ai["incidents_narrative"]}</div>'
+    ai_html = f'<div class="ai-block">{ai["incidents_narrative"]}</div>' if ai.get('incidents_narrative') else ''
+
+    # KPI labels match dashboard exactly
+    total   = summary.get('total_incidents', summary.get('total', 0))
+    loss    = summary.get('total_financial_loss_ngn', summary.get('total_loss', 0))
+    rect    = summary.get('rectified', 0)
+    linger  = summary.get('lingering', 0)
+    rate    = summary.get('rectification_rate_pct', 0)
+
+    # Period label for subtitle
+    try:
+        to_lbl = _dt.strptime(period.get('to', ''), '%Y-%m-%d').strftime('%b %d, %Y')
+    except Exception:
+        to_lbl = ''
 
     tiles = [
-        ('Total Incidents',         str(summary.get('total', 0)),               'primary'),
-        ('Financial Impact',        _fmt_naira(summary.get('total_loss', 0)),    'error'),
-        ('Rectified',               str(summary.get('rectified', 0)),             'success'),
-        ('Lingering',               str(summary.get('lingering', 0)),             'warning'),
-        ('Rectification Rate',      _fmt_pct(summary.get('rectification_rate_pct', 0)), 'info'),
+        ('TOTAL INCIDENTS LOGGED',  str(total),           'primary'),
+        ('FINANCIAL IMPACT (LOSS)', _fmt_naira(loss),      'error'),
+        ('FAULT RECTIFIED',         str(rect),             'success'),
+        ('LINGERING',               str(linger),           'warning'),
+        ('RECTIFICATION RATE (%)',  _fmt_pct(rate),        'info'),
     ]
     tiles_html = ''.join(
         f'<div class="kpi-tile {cls}"><div class="kpi-label">{lbl}</div>'
@@ -2020,28 +2032,45 @@ def _render_incidents(data, ai):
     )
 
     inc_rows_html = ''
-    for i, r in enumerate(rows[:15], 1):
-        status = str(r.get('status', '')).lower()
-        s_col  = _C['success'] if 'rectif' in status else _C['warning']
-        inc_rows_html += (
-            f'<tr><td>{i}</td>'
-            f'<td style="font-size:7.5px;">{r.get("coordinate", r.get("location", ""))}</td>'
-            f'<td>{r.get("region", r.get("regions", ""))}</td>'
-            f'<td style="font-weight:600;">{r.get("feeder_name", r.get("feeder", ""))}</td>'
-            f'<td>{r.get("nature_of_fault", r.get("fault_type", ""))}</td>'
-            f'<td><span class="chip" style="background:{s_col}22;color:{s_col};">'
-            f'{r.get("status", "")}</span></td>'
-            f'<td style="text-align:right;color:{_C["error"]};">{_fmt_naira(r.get("loss", 0))}</td>'
-            f'</tr>'
+    if rows:
+        for i, r in enumerate(rows[:20], 1):
+            status = str(r.get('status', '')).lower()
+            s_col  = _C['success'] if 'rectif' in status else _C['warning']
+            loss_v = r.get('financial_loss_ngn', r.get('loss', 0))
+            inc_rows_html += (
+                f'<tr><td>{i}</td>'
+                f'<td style="font-size:7.5px;">{r.get("coordinate", r.get("location", ""))}</td>'
+                f'<td>{r.get("region", r.get("regions", ""))}</td>'
+                f'<td style="font-weight:600;">{r.get("feeder_name", r.get("feeder", ""))}</td>'
+                f'<td>{r.get("nature_of_fault", r.get("fault_type", ""))}</td>'
+                f'<td><span class="chip" style="background:{s_col}22;color:{s_col};">'
+                f'{r.get("status", "").capitalize()}</span></td>'
+                f'<td style="text-align:right;color:{_C["error"]};">{_fmt_naira(loss_v)}</td>'
+                f'</tr>'
+            )
+    else:
+        inc_rows_html = (
+            f'<tr><td colspan="7" style="text-align:center;color:{_C["grey"]};padding:16px;">'
+            f'No incidents match these filters for this period.</td></tr>'
         )
 
+    period_tag = (
+        f'<span style="margin-left:8px;padding:2px 6px;background:{_C["primary"]}22;'
+        f'color:{_C["primary"]};border-radius:4px;font-size:8px;font-weight:600;">'
+        f'{to_lbl}</span>'
+    ) if to_lbl else ''
+
     return (
-        f'<div class="section-heading">Techno-Commercial Incidents</div>'
+        f'<div class="section-heading">'
+        f'Weekly Techno-Commercial Incidence{period_tag}'
+        f'</div>'
+        f'<div style="font-size:8px;color:{_C["grey"]};margin-bottom:10px;">'
+        f'Feeder faults, financial impact &amp; rectification status</div>'
         f'{ai_html}'
         f'<div class="kpi-row">{tiles_html}</div>'
         f'<table class="data-table" style="font-size:8px;">'
         f'<thead><tr>'
-        f'<th>#</th><th>Coordinate</th><th>Region</th><th>Feeder</th>'
+        f'<th>#</th><th>Coordinate</th><th>Regions</th><th>Feeder</th>'
         f'<th>Nature of Fault</th><th>Status</th><th>Loss</th>'
         f'</tr></thead>'
         f'<tbody>{inc_rows_html}</tbody></table>'
