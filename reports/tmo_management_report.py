@@ -259,20 +259,30 @@ def _fmt_naira(v):
         v = float(v)
     except (TypeError, ValueError):
         return "—"
-    if v >= 1_000_000_000:
-        return f"₦{v/1_000_000_000:.2f}B"
-    if v >= 1_000_000:
-        return f"₦{v/1_000_000:.1f}M"
-    if v >= 1_000:
-        return f"₦{v/1_000:.1f}K"
-    return f"₦{v:,.0f}"
+    neg = v < 0
+    av  = abs(v)
+    pfx = "₦-" if neg else "₦"
+    if av >= 1_000_000_000:
+        return f"{pfx}{av/1_000_000_000:.2f}B"
+    if av >= 1_000_000:
+        return f"{pfx}{av/1_000_000:.1f}M"
+    if av >= 1_000:
+        return f"{pfx}{av/1_000:.1f}K"
+    return f"{pfx}{av:,.0f}"
 
 def _bucket_color(bucket):
     return _C.get(bucket, _C['grey'])
 
 def _bucket_text_color(bucket):
-    dark = {'exceeding', 'on_target', 'below_target', 'critical'}
-    return '#ffffff' if bucket in dark else _C['text']
+    # Light-background buckets need dark text for contrast
+    light_bg = {'on_target', 'below_target', 'poor'}
+    return _C['text'] if bucket in light_bg else '#ffffff'
+
+def _bar_text_color(bg_color):
+    """Return white for dark bar backgrounds, dark for yellow/orange/light bars."""
+    light_fills = {_C.get('warning'), _C.get('target_yellow'),
+                   _C.get('below_target'), _C.get('on_target')}
+    return _C['text'] if bg_color in light_fills else '#ffffff'
 
 def _status_color(status):
     map_ = {
@@ -510,7 +520,7 @@ body {{
 .page-header-title {{
     font-size: 13px;
     font-weight: 700;
-    color: {_C['primary']};
+    color: #002050;
     letter-spacing: 0.01em;
 }}
 .page-header-period {{
@@ -534,12 +544,12 @@ body {{
     background: #f8f9fa;
     border-radius: 8px;
     padding: 12px 14px;
-    border-left: 3px solid {_C['primary']};
+    border: 1px solid #e5eaef;
 }}
-.kpi-tile.success {{ border-left-color: {_C['success']}; }}
-.kpi-tile.warning {{ border-left-color: {_C['warning']}; }}
-.kpi-tile.error   {{ border-left-color: {_C['error']};   }}
-.kpi-tile.info    {{ border-left-color: {_C['info']};    }}
+.kpi-tile.success {{}}
+.kpi-tile.warning {{}}
+.kpi-tile.error   {{}}
+.kpi-tile.info    {{}}
 .kpi-label {{
     font-size: 8.5px;
     color: {_C['grey']};
@@ -589,7 +599,7 @@ body {{
     margin-bottom: 14px;
 }}
 .data-table th {{
-    background: {_C['primary']};
+    background: #002050;
     color: #fff;
     font-weight: 600;
     padding: 6px 8px;
@@ -769,7 +779,7 @@ body {{
 .section-heading {{
     font-size: 10px;
     font-weight: 700;
-    color: {_C['primary']};
+    color: #002050;
     text-transform: uppercase;
     letter-spacing: 0.05em;
     margin-bottom: 10px;
@@ -815,10 +825,10 @@ body {{
 # =============================================================================
 
 _SVG_W  = 680   # chart canvas width  (fits A4 portrait content area)
-_SVG_H  = 170   # chart canvas height
+_SVG_H  = 260   # chart canvas height (taller bars for clarity)
 _ML     = 42    # left margin (Y-axis)
 _MR     = 10    # right margin
-_MT     = 14    # top margin
+_MT     = 18    # top margin (extra space for top-of-bar labels)
 _MB     = 28    # bottom margin (X-axis labels)
 _CW     = _SVG_W - _ML - _MR   # plot width
 _CH     = _SVG_H - _MT - _MB   # plot height
@@ -847,7 +857,7 @@ def _x_positions(n):
     """Return list of (bar_x, bar_w) for n bars across the plot width."""
     if n == 0:
         return []
-    bar_w = max(4, min(24, int(_CW / n) - 2))
+    bar_w = max(4, min(52, int(_CW / n) - 2))
     gap   = max(1, (_CW - n * bar_w) // max(n - 1, 1))
     positions = []
     x = _ML
@@ -860,8 +870,9 @@ def _x_positions(n):
 def _svg_open(h=None):
     h = h or _SVG_H
     return (
-        f'<svg xmlns="http://www.w3.org/2000/svg" width="{_SVG_W}" height="{h}" '
-        f'style="display:block;max-width:100%;font-family:sans-serif;">'
+        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {_SVG_W} {h}" '
+        f'width="100%" height="auto" '
+        f'style="display:block;font-family:sans-serif;">'
     )
 
 
@@ -895,14 +906,15 @@ def _svg_axes(y_max, y_min, n_ticks=4, y_title='GWh', zero_line=False):
 
 def _svg_x_labels(positions, labels):
     out = ''
-    step = max(1, len(labels) // 15)   # show at most ~15 labels so they don't overlap
+    n = len(labels)
+    # Always show all labels; reduce font for dense charts
+    fs = 6.0 if n <= 31 else 5.0
     for i, ((x, w), lbl) in enumerate(zip(positions, labels)):
-        if i % step == 0:
-            cx = x + w / 2
-            out += (
-                f'<text x="{cx:.1f}" y="{_SVG_H-6}" text-anchor="middle" '
-                f'font-size="7" fill="#7C8FAC">{lbl}</text>'
-            )
+        cx = x + w / 2
+        out += (
+            f'<text x="{cx:.1f}" y="{_SVG_H-5}" text-anchor="middle" '
+            f'font-size="{fs}" fill="#7C8FAC">{lbl}</text>'
+        )
     return out
 
 
@@ -934,14 +946,18 @@ def _svg_stacked_bar(days, series, y_title='GWh', label_fmt='{:.2f}', show_label
             if val <= 0:
                 continue
             bar_h = val / span * _CH
+            bar_h = max(bar_h, 6)  # minimum 6px so thin segments (e.g. 33KV) are always visible
             y     = stack_bottom - bar_h
             svg  += f'<rect x="{x}" y="{y:.1f}" width="{w}" height="{bar_h:.1f}" fill="{color}" rx="1"/>'
-            svg  += f'<line x1="{x}" y1="{y:.1f}" x2="{x+w}" y2="{y:.1f}" stroke="#fff" stroke-width="1"/>'
-            if show_labels and bar_h > 9 and w >= 12:
+            if bar_h > 8:
+                svg  += f'<line x1="{x}" y1="{y:.1f}" x2="{x+w}" y2="{y:.1f}" stroke="#fff" stroke-width="0.5"/>'
+            if show_labels and bar_h > 11 and w >= 10:
                 lbl = label_fmt.format(val)
+                lbl_y  = y + min(10, bar_h * 0.35) + 5.5
+                t_col  = _bar_text_color(color)
                 svg += (
-                    f'<text x="{x + w/2:.1f}" y="{y + bar_h/2 + 2.5:.1f}" '
-                    f'text-anchor="middle" font-size="5" fill="#fff" font-weight="600">'
+                    f'<text x="{x + w/2:.1f}" y="{lbl_y:.1f}" '
+                    f'text-anchor="middle" font-size="5.5" fill="{t_col}" font-weight="700">'
                     f'{lbl}</text>'
                 )
             stack_bottom = y
@@ -968,10 +984,12 @@ def _svg_single_bar(days, key, color, y_title='GWh', show_labels=True):
         bar_h = v / span * _CH
         y     = _MT + _CH - bar_h
         svg  += f'<rect x="{x}" y="{y:.1f}" width="{w}" height="{bar_h:.1f}" fill="{color}" rx="1"/>'
-        if show_labels and bar_h > 9 and w >= 12:
+        if show_labels and bar_h > 11 and w >= 10:
+            lbl_y = y + min(10, bar_h * 0.35) + 5.5
+            t_col = _bar_text_color(color)
             svg += (
-                f'<text x="{x + w/2:.1f}" y="{y + bar_h/2 + 2.5:.1f}" '
-                f'text-anchor="middle" font-size="5" fill="#fff" font-weight="600">'
+                f'<text x="{x + w/2:.1f}" y="{lbl_y:.1f}" '
+                f'text-anchor="middle" font-size="5.5" fill="{t_col}" font-weight="700">'
                 f'{v:.2f}</text>'
             )
 
@@ -1003,47 +1021,49 @@ def _svg_diverging_bar(days, pos_series, neg_key, neg_color_fn, y_title='MW'):
     svg  = _svg_open()
     svg += _svg_axes(y_max, y_min, y_title=y_title, zero_line=True)
 
-    lbl_fs = max(5.5, min(7.0, w * 0.55))  # font size scales with bar width
     cx_fn  = lambda x, w: x + w / 2       # bar centre x
 
     for d, (x, w) in zip(days, positions):
+        lbl_fs = max(5.5, min(7.0, w * 0.55))  # font size scales with bar width
         cx = cx_fn(x, w)
 
         # Positive stacked segments above zero
         stack_bottom = zy
-        seg_tops = []   # (top_y, bar_h, key, val) for label placement
+        seg_tops = []   # (top_y, bar_h, key, val, color) for label placement
         for key, color in pos_series:
             val   = float(d.get(key, 0) or 0)
             if val <= 0:
                 continue
-            bar_h = val / span * _CH
+            bar_h = max(val / span * _CH, 3)
             y     = stack_bottom - bar_h
             svg  += f'<rect x="{x}" y="{y:.1f}" width="{w}" height="{bar_h:.1f}" fill="{color}" rx="1"/>'
-            svg  += f'<line x1="{x}" y1="{y:.1f}" x2="{x+w}" y2="{y:.1f}" stroke="#fff" stroke-width="1"/>'
-            seg_tops.append((y, bar_h, key, val))
+            if bar_h > 8:
+                svg  += f'<line x1="{x}" y1="{y:.1f}" x2="{x+w}" y2="{y:.1f}" stroke="#fff" stroke-width="0.5"/>'
+            seg_tops.append((y, bar_h, key, val, color))
             stack_bottom = y
 
-        # Labels on positive bars: value centred inside each segment if tall enough
-        for seg_y, seg_h, key, val in seg_tops:
+        # Labels on positive bars: near top of each segment for readability
+        for seg_y, seg_h, key, val, seg_color in seg_tops:
             lbl = str(round(val))
-            if seg_h >= 10:
-                mid_y = seg_y + seg_h / 2 + lbl_fs * 0.35
-                svg += (f'<text x="{cx:.1f}" y="{mid_y:.1f}" text-anchor="middle" '
-                        f'font-size="{lbl_fs:.1f}" fill="#fff" font-weight="600">{lbl}</text>')
+            if seg_h >= 12:
+                lbl_y   = seg_y + min(10, seg_h * 0.3) + lbl_fs * 0.9
+                t_color = _bar_text_color(seg_color)
+                svg += (f'<text x="{cx:.1f}" y="{lbl_y:.1f}" text-anchor="middle" '
+                        f'font-size="{lbl_fs:.1f}" fill="{t_color}" font-weight="700">{lbl}</text>')
 
         # Negative segment below zero — min floor 0.5 MW for visibility
         neg_raw  = float(d.get(neg_key, 0) or 0)
         neg_v    = max(abs(neg_raw), 0.5)
         neg_h    = neg_v / span * _CH
-        neg_h    = max(neg_h, 2)
+        neg_h    = max(neg_h, 3)
         svg     += f'<rect x="{x}" y="{zy:.1f}" width="{w}" height="{neg_h:.1f}" fill="{neg_color_fn(d)}" rx="1"/>'
 
-        # Label below zero: show actual signed value (e.g. -44 or 5)
+        # Label below zero: show actual signed value (e.g. -44 or 5) near top of bar
         neg_lbl = str(round(neg_raw)) if abs(neg_raw) >= 0.5 else '0'
-        if neg_h >= 8:
-            lbl_y = zy + neg_h / 2 + lbl_fs * 0.35
+        if neg_h >= 10:
+            lbl_y = zy + min(10, neg_h * 0.3) + lbl_fs * 0.9
             svg += (f'<text x="{cx:.1f}" y="{lbl_y:.1f}" text-anchor="middle" '
-                    f'font-size="{lbl_fs:.1f}" fill="#fff" font-weight="600">{neg_lbl}</text>')
+                    f'font-size="{lbl_fs:.1f}" fill="#fff" font-weight="700">{neg_lbl}</text>')
 
     svg += _svg_x_labels(positions, [str(d.get('label', d.get('day', ''))) for d in days])
     svg += '</svg>'
@@ -1225,11 +1245,13 @@ def _svg_100pct_stacked_vertical(segments, series_buckets, h=200, label_min_pct=
             by = stack - bh
             svg += f'<rect x="{bx}" y="{by:.1f}" width="{bar_w}" height="{bh:.1f}" fill="{color}" rx="1"/>'
             svg += f'<line x1="{bx}" y1="{by:.1f}" x2="{bx+bar_w}" y2="{by:.1f}" stroke="#fff" stroke-width="1"/>'
-            # Label shows true value (empty string when true value is 0)
-            if true_pct > 0 and bh > 10:
+            # Label near top of segment; dark text on light-bg buckets
+            if true_pct > 0 and bh > 12:
+                txt_col = _bucket_text_color(key)
+                lbl_y   = by + min(12, bh * 0.3) + 7
                 svg += (
-                    f'<text x="{bx + bar_w/2:.1f}" y="{by + bh/2 + 2.5:.1f}" '
-                    f'text-anchor="middle" font-size="7" fill="#fff" font-weight="700">'
+                    f'<text x="{bx + bar_w/2:.1f}" y="{lbl_y:.1f}" '
+                    f'text-anchor="middle" font-size="7" fill="{txt_col}" font-weight="700">'
                     f'{true_pct:.0f}%</text>'
                 )
             stack = by
@@ -1262,11 +1284,14 @@ def _css_100pct_bar(segments_pct, height=18, label_min_pct=10):
         visible = [(l, dp / total_display * 100, c, tp) for l, dp, c, tp in visible]
 
     parts = ''
+    # Map bucket colors that need dark text
+    _LIGHT_BG_COLS = {_C.get('on_target'), _C.get('below_target'), _C.get('poor')}
     for lbl, dp, color, true_pct in visible:
         if dp <= 0:
             continue
+        txt_col = _C['text'] if color in _LIGHT_BG_COLS else '#fff'
         label_html = (
-            f'<span style="font-size:7.5px;font-weight:600;color:#fff;">'
+            f'<span style="font-size:7.5px;font-weight:600;color:{txt_col};">'
             f'{true_pct:.0f}%</span>'
             if true_pct >= 8 else ''
         )
@@ -1580,7 +1605,13 @@ def _render_feeder_compliance_table(data, ai):
         f'<div class="section-heading">Feeder Compliance Criticality</div>'
         f'{ai_html}'
         f'<table class="data-table">'
-        f'<thead><tr><th>Feeder</th><th>Target</th><th>Actual</th><th>Gap</th><th>% Achieved</th></tr></thead>'
+        f'<thead><tr>'
+        f'<th>Feeder</th>'
+        f'<th style="text-align:right;">Target</th>'
+        f'<th style="text-align:right;">Actual</th>'
+        f'<th style="text-align:right;">Gap</th>'
+        f'<th style="text-align:right;">% Achieved</th>'
+        f'</tr></thead>'
         f'<tbody>{rows_html}</tbody></table>'
     )
 
@@ -1730,8 +1761,8 @@ def _render_pear(data, ai):
             # MD on top (blue)
             f'<div style="flex:{md:.1f};background:{_C["primary"]};display:flex;align-items:center;justify-content:center;color:#fff;font-size:9px;font-weight:700;">'
             f'{"MD " + str(round(md)) + "%" if md >= 12 else ""}</div>'
-            # NMD on bottom (orange)
-            f'<div style="flex:{nmd:.1f};background:{_C["warning"]};display:flex;align-items:center;justify-content:center;color:#fff;font-size:9px;font-weight:700;">'
+            # NMD on bottom (orange) — dark text for contrast on yellow/orange
+            f'<div style="flex:{nmd:.1f};background:{_C["warning"]};display:flex;align-items:center;justify-content:center;color:{_C["text"]};font-size:9px;font-weight:700;">'
             f'{"NMD " + str(round(nmd)) + "%" if nmd >= 12 else ""}</div>'
             f'</div>'
             f'<div style="font-size:8.5px;color:{_C["grey"]};text-align:center;">{label}</div>'
@@ -1816,19 +1847,19 @@ def _svg_donut_chart(segs_in, total_gwh):
         ly = CY + R * math.sin(mid_rad)
         svg += (
             f'<text x="{lx:.1f}" y="{ly - 4:.1f}" text-anchor="middle" '
-            f'font-size="8.5" font-weight="700" fill="#fff">{energy:.2f}</text>'
+            f'font-size="9" font-weight="800" fill="#fff">{energy:.2f}</text>'
             f'<text x="{lx:.1f}" y="{ly + 7:.1f}" text-anchor="middle" '
-            f'font-size="8" fill="#fff">{pct:.1f}%</text>'
+            f'font-size="8.5" font-weight="600" fill="#fff">{pct:.1f}%</text>'
         )
 
     # Center label: name of the largest segment + its pct
     if arc_data:
         biggest = max(arc_data, key=lambda x: x[1])
         svg += (
-            f'<text x="{CX}" y="{CY - 6}" text-anchor="middle" '
-            f'font-size="9.5" font-weight="600" fill="{biggest[2]}">{biggest[0]}</text>'
-            f'<text x="{CX}" y="{CY + 8}" text-anchor="middle" '
-            f'font-size="12" font-weight="700" fill="{_C["text"]}">{biggest[1]:.1f}</text>'
+            f'<text x="{CX}" y="{CY - 7}" text-anchor="middle" '
+            f'font-size="10" font-weight="700" fill="{biggest[2]}">{biggest[0]}</text>'
+            f'<text x="{CX}" y="{CY + 9}" text-anchor="middle" '
+            f'font-size="13" font-weight="800" fill="{_C["text"]}">{biggest[1]:.1f}%</text>'
         )
 
     svg += '</svg>'
@@ -1876,7 +1907,7 @@ def _render_energy_pnl_donut(data, ai):
             f'{svg}'
             f'<div style="min-width:130px;">{legend_html}'
             f'<div style="margin-top:8px;font-size:9px;font-weight:700;color:{_C["text"]};">'
-            f'Total: {_fmt_gwh(total_gwh)} GWh</div>'
+            f'Total: {_fmt_gwh(total_gwh)}</div>'
             f'</div></div>'
             f'</div>'
         )
@@ -2160,9 +2191,9 @@ def _render_pnl_deficit(data, ai):
     )
 
     SERIES = [
-        (consumed, _C['primary'],        '#fff'),   # bottom — Energy Consumed
-        (gaps,     _C['gap_green'],      '#fff'),   # middle — |Gap|
-        (targets,  _C['target_yellow'],  '#fff'),   # top    — Energy Target
+        (consumed, _C['primary'],        '#fff'),         # bottom — Energy Consumed
+        (gaps,     _C['gap_green'],      '#fff'),         # middle — |Gap|
+        (targets,  _C['target_yellow'],  _C['text']),    # top    — Energy Target (dark text on yellow)
     ]
 
     base_y = _MT + CH
@@ -2179,8 +2210,9 @@ def _render_pnl_deficit(data, ai):
             svg += f'<rect x="{bx}" y="{by:.1f}" width="{bar_w}" height="{bh:.1f}" fill="{color}" rx="1"/>'
             svg += f'<line x1="{bx}" y1="{by:.1f}" x2="{bx+bar_w}" y2="{by:.1f}" stroke="#fff" stroke-width="1"/>'
             if bh > 12 and v > 0:
+                lbl_y = by + min(12, bh * 0.3) + 6
                 svg += (
-                    f'<text x="{bx + bar_w/2:.1f}" y="{by + bh/2 + 3:.1f}" '
+                    f'<text x="{bx + bar_w/2:.1f}" y="{lbl_y:.1f}" '
                     f'text-anchor="middle" font-size="7" fill="{label_col}" font-weight="600">'
                     f'{v:.1f}</text>'
                 )

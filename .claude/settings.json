@@ -84,7 +84,12 @@
       "Bash(python manage.py makemigrations --check --dry-run)",
       "Bash(python manage.py makemigrations)",
       "Bash(python manage.py migrate)",
-      "Bash(APP_ENV=production python manage.py migrate)"
+      "Bash(APP_ENV=production python manage.py migrate)",
+      "PowerShell(python \"C:\\\\Users\\\\TRIUMP~1\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-TriumphAdeniran-OneDrive---Market-and-Regulatory-Consultants-Ltd-Desktop-Raven-Code-Base-Raven-Backend-KEDCO\\\\54108a7c-7694-489a-a88c-dd6cc0d967b8\\\\scratchpad\\\\tmo_july_check.py\")",
+      "PowerShell(python \"C:\\\\Users\\\\TRIUMP~1\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-TriumphAdeniran-OneDrive---Market-and-Regulatory-Consultants-Ltd-Desktop-Raven-Code-Base-Raven-Backend-KEDCO\\\\54108a7c-7694-489a-a88c-dd6cc0d967b8\\\\scratchpad\\\\tmo_july_check2.py\")",
+      "PowerShell(Copy-Item \"C:\\\\Users\\\\TRIUMP~1\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-TriumphAdeniran-OneDrive---Market-and-Regulatory-Consultants-Ltd-Desktop-Raven-Code-Base-Raven-Backend-KEDCO\\\\54108a7c-7694-489a-a88c-dd6cc0d967b8\\\\scratchpad\\\\tmo_report_preview.html\" \"C:\\\\Users\\\\TriumphAdeniran\\\\OneDrive - Market and Regulatory Consultants Ltd\\\\Desktop\\\\tmo_report_preview.html\" -Force)",
+      "PowerShell(Copy-Item \"C:\\\\Users\\\\TRIUMP~1\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-TriumphAdeniran-OneDrive---Market-and-Regulatory-Consultants-Ltd-Desktop-Raven-Code-Base-Raven-Backend-KEDCO\\\\54108a7c-7694-489a-a88c-dd6cc0d967b8\\\\scratchpad\\\\tmo_report_july2026.html\" \"C:\\\\Users\\\\TriumphAdeniran\\\\OneDrive - Market and Regulatory Consultants Ltd\\\\Desktop\\\\tmo_report_july2026.html\" -Force)",
+      "PowerShell(Copy-Item \"C:\\\\Users\\\\TRIUMP~1\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-TriumphAdeniran-OneDrive---Market-and-Regulatory-Consultants-Ltd-Desktop-Raven-Code-Base-Raven-Backend-KEDCO\\\\54108a7c-7694-489a-a88c-dd6cc0d967b8\\\\scratchpad\\\\tmo_report_july2026.html\" \"C:\\\\Users\\\\TriumphAdeniran\\\\OneDrive - Market and Regulatory Consultants Ltd\\\\Desktop\\\\tmo_report_v3.html\" -Force)"
     ],
     "additionalDirectories": [
       "c:\\c\\Users\\TriumphAdeniran\\OneDrive - Market and Regulatory Consultants Ltd\\Desktop\\Raven Code Base\\Raven-Backend-KEDCO"
