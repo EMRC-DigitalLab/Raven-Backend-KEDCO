@@ -48,9 +48,12 @@ Default sections (when "sections" is omitted): all 14 dashboard sections.
 from __future__ import annotations
 
 import base64
+import calendar as _calendar
 import io
 import json
 import logging
+import math
+from datetime import datetime as _dt
 
 logger = logging.getLogger(__name__)
 
@@ -686,12 +689,10 @@ body {{
     padding: 12px;
 }}
 .donut-title {{
-    font-size: 8.5px;
-    font-weight: 600;
-    color: {_C['grey']};
-    margin-bottom: 8px;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
+    font-size: 9px;
+    font-weight: 700;
+    color: {_C['text']};
+    margin-bottom: 10px;
 }}
 .donut-legend-row {{
     display: flex;
@@ -1002,9 +1003,15 @@ def _svg_diverging_bar(days, pos_series, neg_key, neg_color_fn, y_title='MW'):
     svg  = _svg_open()
     svg += _svg_axes(y_max, y_min, y_title=y_title, zero_line=True)
 
+    lbl_fs = max(5.5, min(7.0, w * 0.55))  # font size scales with bar width
+    cx_fn  = lambda x, w: x + w / 2       # bar centre x
+
     for d, (x, w) in zip(days, positions):
+        cx = cx_fn(x, w)
+
         # Positive stacked segments above zero
         stack_bottom = zy
+        seg_tops = []   # (top_y, bar_h, key, val) for label placement
         for key, color in pos_series:
             val   = float(d.get(key, 0) or 0)
             if val <= 0:
@@ -1013,14 +1020,30 @@ def _svg_diverging_bar(days, pos_series, neg_key, neg_color_fn, y_title='MW'):
             y     = stack_bottom - bar_h
             svg  += f'<rect x="{x}" y="{y:.1f}" width="{w}" height="{bar_h:.1f}" fill="{color}" rx="1"/>'
             svg  += f'<line x1="{x}" y1="{y:.1f}" x2="{x+w}" y2="{y:.1f}" stroke="#fff" stroke-width="1"/>'
+            seg_tops.append((y, bar_h, key, val))
             stack_bottom = y
 
+        # Labels on positive bars: value centred inside each segment if tall enough
+        for seg_y, seg_h, key, val in seg_tops:
+            lbl = str(round(val))
+            if seg_h >= 10:
+                mid_y = seg_y + seg_h / 2 + lbl_fs * 0.35
+                svg += (f'<text x="{cx:.1f}" y="{mid_y:.1f}" text-anchor="middle" '
+                        f'font-size="{lbl_fs:.1f}" fill="#fff" font-weight="600">{lbl}</text>')
+
         # Negative segment below zero — min floor 0.5 MW for visibility
-        neg_v    = abs(float(d.get(neg_key, 0) or 0))
-        neg_v    = max(neg_v, 0.5)   # minimum visibility floor per spec
+        neg_raw  = float(d.get(neg_key, 0) or 0)
+        neg_v    = max(abs(neg_raw), 0.5)
         neg_h    = neg_v / span * _CH
-        neg_h    = max(neg_h, 2)      # pixel floor
+        neg_h    = max(neg_h, 2)
         svg     += f'<rect x="{x}" y="{zy:.1f}" width="{w}" height="{neg_h:.1f}" fill="{neg_color_fn(d)}" rx="1"/>'
+
+        # Label below zero: show actual signed value (e.g. -44 or 5)
+        neg_lbl = str(round(neg_raw)) if abs(neg_raw) >= 0.5 else '0'
+        if neg_h >= 8:
+            lbl_y = zy + neg_h / 2 + lbl_fs * 0.35
+            svg += (f'<text x="{cx:.1f}" y="{lbl_y:.1f}" text-anchor="middle" '
+                    f'font-size="{lbl_fs:.1f}" fill="#fff" font-weight="600">{neg_lbl}</text>')
 
     svg += _svg_x_labels(positions, [str(d.get('label', d.get('day', ''))) for d in days])
     svg += '</svg>'
@@ -1341,11 +1364,13 @@ def _render_daily_network_energy(data, ai):
     if ai.get('energy_narrative'):
         ai_html = f'<div class="ai-block">{ai["energy_narrative"]}</div>'
 
+    # get_daily_energy() returns 'target_gwh'; remap to 'forecast_gwh' for the SVG helper.
+    _days = [{**d, 'forecast_gwh': d.get('target_gwh', d.get('forecast_gwh', 0))} for d in days]
     svg = _svg_stacked_bar(
-        days,
+        _days,
         [('forecast_gwh', _C['primary']), ('actual_gwh', _C['secondary'])],
         y_title='GWh',
-    ) if days else '<p style="font-size:9px;color:#999;">No daily energy data.</p>'
+    ) if _days else '<p style="font-size:9px;color:#999;">No daily energy data.</p>'
 
     period_total = _svg_period_total(
         [('Forecast', total_target, _C['primary']), ('Actual', total_actual, _C['secondary'])],
@@ -1355,9 +1380,9 @@ def _render_daily_network_energy(data, ai):
     legend = (
         f'<div style="display:flex;gap:14px;font-size:8.5px;margin-bottom:8px;">'
         f'<span style="display:flex;align-items:center;gap:4px;">'
-        f'<span style="width:10px;height:10px;border-radius:2px;background:{_C["primary"]};display:inline-block;"></span>Daily Energy Forecast</span>'
+        f'<span style="width:10px;height:10px;border-radius:50%;background:{_C["primary"]};display:inline-block;"></span>Daily Energy Forecast</span>'
         f'<span style="display:flex;align-items:center;gap:4px;">'
-        f'<span style="width:10px;height:10px;border-radius:2px;background:{_C["secondary"]};display:inline-block;"></span>Actual Energy Consumed</span>'
+        f'<span style="width:10px;height:10px;border-radius:50%;background:{_C["secondary"]};display:inline-block;"></span>Actual Energy Consumed</span>'
         f'</div>'
     )
 
@@ -1473,11 +1498,11 @@ def _render_daily_allocation(data, ai):
     legend = (
         f'<div style="display:flex;gap:14px;font-size:8.5px;margin-bottom:8px;flex-wrap:wrap;">'
         f'<span style="display:flex;align-items:center;gap:4px;">'
-        f'<span style="width:10px;height:10px;border-radius:2px;background:{_C["primary"]};display:inline-block;"></span>Hourly Expected allocation</span>'
+        f'<span style="width:10px;height:10px;border-radius:50%;background:{_C["primary"]};display:inline-block;"></span>Hourly Expected allocation</span>'
         f'<span style="display:flex;align-items:center;gap:4px;">'
-        f'<span style="width:10px;height:10px;border-radius:2px;background:{_C["warning"]};display:inline-block;"></span>Hourly average consumption</span>'
+        f'<span style="width:10px;height:10px;border-radius:50%;background:{_C["warning"]};display:inline-block;"></span>Hourly average consumption</span>'
         f'<span style="display:flex;align-items:center;gap:4px;">'
-        f'<span style="width:10px;height:10px;border-radius:2px;background:{REAL_RED};display:inline-block;"></span>'
+        f'<span style="width:10px;height:10px;border-radius:50%;background:{REAL_RED};display:inline-block;"></span>'
         f'Unpicked energy due to low energy and TCN constraints </span>'
         f'</div>'
     )
@@ -1510,9 +1535,10 @@ def _render_feeder_compliance_table(data, ai):
     if ai.get('compliance_narrative'):
         ai_html = f'<div class="ai-block">{ai["compliance_narrative"]}</div>'
 
-    def _fmt_int_hours(v):
+    def _fmt_hrs(v, decimals=2):
         try:
-            return str(int(float(v)))
+            f = float(v)
+            return f'{f:.{decimals}f}' if f != int(f) else str(int(f))
         except (TypeError, ValueError):
             return '—'
 
@@ -1521,7 +1547,9 @@ def _render_feeder_compliance_table(data, ai):
         bucket  = fd.get('bucket') or fd.get('status', 'critical')
         b_col   = _bucket_color(bucket)
         b_txt   = _bucket_text_color(bucket)
-        ach     = float(fd.get('achievement_pct') or fd.get('pct_achieved', 0))
+        ach     = float(fd.get('compliance_pct') or fd.get('achievement_pct') or fd.get('pct_achieved', 0))
+        target  = float(fd.get('band_minimum_hours') or fd.get('target_hours', 0))
+        actual  = float(fd.get('avg_daily_hours') or fd.get('actual_hours', 0))
         gap     = float(fd.get('gap_hours') or fd.get('gap', 0))
         gap_col = _C['success'] if gap >= 0 else _C['error']
 
@@ -1540,9 +1568,9 @@ def _render_feeder_compliance_table(data, ai):
         rows_html += (
             f'<tr style="background:{b_col}10;">'
             f'<td>{name_cell}</td>'
-            f'<td style="text-align:right;">{_fmt_int_hours(fd.get("target_hours",0))}</td>'
-            f'<td style="text-align:right;">{_fmt_int_hours(fd.get("actual_hours",0))}</td>'
-            f'<td style="text-align:right;color:{gap_col};">{_fmt_int_hours(gap)}</td>'
+            f'<td style="text-align:right;">{_fmt_hrs(target)}</td>'
+            f'<td style="text-align:right;">{_fmt_hrs(actual)}</td>'
+            f'<td style="text-align:right;color:{gap_col};">{_fmt_hrs(gap)}</td>'
             f'<td style="text-align:right;">'
             f'<span class="chip" style="background:{b_col};color:{b_txt};">{ach:.0f}%</span>'
             f'</td></tr>'
@@ -1594,12 +1622,17 @@ def _render_compliance_by_segment(data, ai):
     # Pre-compute true percentages then apply floor; true values kept for labels
     processed = []
     for seg in segments:
-        total = max(seg.get('total', 1), 1)
+        total = max(seg.get('total_feeders', seg.get('total', 1)), 1)
         entry = {'label': seg.get('segment', ''), 'segment': seg.get('segment', '')}
+        buckets_data = seg.get('buckets', {})
         true_pcts = {}
         for bk in BUCKETS:
-            cnt = seg.get(bk, {}).get('count', 0) if isinstance(seg.get(bk), dict) else 0
-            true_pcts[bk] = cnt / total * 100
+            bucket = buckets_data.get(bk) or seg.get(bk) or {}
+            if isinstance(bucket, dict):
+                cnt = bucket.get('count', 0)
+            else:
+                cnt = float(bucket or 0)
+            true_pcts[bk] = round(cnt / total * 100, 1) if total else 0.0
         display_pcts = _apply_floor(true_pcts)
         for bk in BUCKETS:
             # Store display height + true value for labels
@@ -1613,7 +1646,7 @@ def _render_compliance_by_segment(data, ai):
 
     legend_global = ' '.join(
         f'<span style="display:inline-flex;align-items:center;gap:4px;font-size:8px;">'
-        f'<span style="width:10px;height:10px;border-radius:2px;background:{_C[bk]};display:inline-block;"></span>'
+        f'<span style="width:10px;height:10px;border-radius:50%;background:{_C[bk]};display:inline-block;"></span>'
         f'{BUCKET_LABELS[bk]}</span>'
         for bk in BUCKETS
     )
@@ -1625,38 +1658,44 @@ def _render_compliance_by_segment(data, ai):
     )
 
 
+_MINIGRID_CYAN = '#29B6D6'   # matches dashboard minigrid bar colour
+
 def _render_minigrids_daily(data, ai):
-    """5.6 — One card per feeder: single-series vertical bar per day (#5D87FF)."""
+    """5.6 — One card per feeder: single-series vertical bar per day, cyan bar."""
     feeders = data.get('feeders') or []
     ai_html = f'<div class="ai-block">{ai["minigrids_narrative"]}</div>' if ai.get('minigrids_narrative') else ''
 
-    if not feeders:
-        # Single-feeder response shape
-        days = data.get('days') or data.get('daily') or []
-        name = data.get('feeder_name') or 'Feeder'
-        svg  = _svg_single_bar(days, 'mwh', _C['primary'], y_title='MWh') if days else ''
+    def _feeder_card(fname, ftype, days):
         total = sum(float(d.get('mwh', 0) or 0) for d in days)
+        svg   = _svg_single_bar(days, 'mwh', _MINIGRID_CYAN, y_title='MWh') if days else ''
+        subtitle = f'{fname} — {ftype}' if ftype else fname
         return (
-            f'<div class="section-heading">Minigrids Daily Energy — {name}</div>'
-            f'{ai_html}'
-            f'<div style="margin-bottom:6px;font-size:8.5px;color:{_C["grey"]};">'
-            f'Total: {_fmt_mwh(total)}</div>'
-            f'<div style="overflow-x:auto;">{svg}</div>'
-        )
-
-    cards = ''
-    for fd in feeders[:10]:
-        fname = fd.get('feeder_name') or fd.get('name') or 'Feeder'
-        days  = fd.get('daily') or fd.get('days') or []
-        total = sum(float(d.get('mwh', 0) or 0) for d in days)
-        svg   = _svg_single_bar(days, 'mwh', _C['primary'], y_title='MWh') if days else ''
-        cards += (
             f'<div style="margin-bottom:18px;">'
-            f'<div style="font-size:9px;font-weight:700;color:{_C["primary"]};margin-bottom:4px;">'
-            f'{fname} — <span style="font-weight:400;color:{_C["grey"]};">Total {_fmt_mwh(total)}</span></div>'
+            f'<div style="font-size:9.5px;font-weight:700;color:{_C["primary"]};margin-bottom:1px;">'
+            f'{subtitle}</div>'
+            f'<div style="font-size:8px;color:{_C["grey"]};margin-bottom:6px;">Daily energy received (MWh)</div>'
             f'<div style="overflow-x:auto;">{svg}</div>'
             f'</div>'
         )
+
+    if not feeders:
+        days  = data.get('days') or data.get('daily') or []
+        fname = data.get('feeder_name') or 'Feeder'
+        ftype = data.get('feeder_type') or data.get('minigrid_type') or ''
+        return (
+            f'<div class="section-heading">Minigrids Daily Energy</div>'
+            f'{ai_html}'
+            f'{_feeder_card(fname, ftype, days)}'
+        )
+
+    cards = ''.join(
+        _feeder_card(
+            fd.get('feeder_name') or fd.get('name') or 'Feeder',
+            fd.get('feeder_type') or fd.get('minigrid_type') or '',
+            fd.get('daily') or fd.get('days') or [],
+        )
+        for fd in feeders[:10]
+    )
 
     return (
         f'<div class="section-heading">Minigrids Daily Energy</div>'
@@ -1666,63 +1705,161 @@ def _render_minigrids_daily(data, ai):
 
 
 def _render_pear(data, ai):
-    mtd  = data.get('mtd')       or {}
-    yest = data.get('yesterday') or {}
-    tgt  = data.get('target')    or {'md_pct': 60, 'nmd_pct': 40}
+    mtd  = data.get('mtd')        or {}
+    yest = data.get('yesterday')  or {}
+    tgt  = data.get('target_mix') or {}
 
-    ai_html = ''
-    if ai.get('pear_narrative'):
-        ai_html = f'<div class="ai-block">{ai["pear_narrative"]}</div>'
+    tgt_md   = float(tgt.get('md_pct',  65) or 65)
+    tgt_nmd  = float(tgt.get('nmd_pct', 35) or 35)
+    yest_md  = float(yest.get('md_share_pct',  0) or 0)
+    yest_nmd = float(yest.get('nmd_share_pct', 0) or 0)
+    mtd_md   = float(mtd.get('md_share_pct',   0) or 0)
+    mtd_nmd  = float(mtd.get('nmd_share_pct',  0) or 0)
 
-    def _pear_bar(label, md_pct, nmd_pct):
-        md_pct  = float(md_pct  or 0)
-        nmd_pct = float(nmd_pct or 0)
+    ai_html = f'<div class="ai-block">{ai["pear_narrative"]}</div>' if ai.get('pear_narrative') else ''
+
+    BAR_H = 200   # px height for each vertical bar
+    BAR_W = 80
+
+    def _vert_bar(label, md, nmd):
+        nmd_h = round(nmd / 100 * BAR_H)
+        md_h  = BAR_H - nmd_h
         return (
-            f'<div style="margin-bottom:10px;">'
-            f'<div style="font-size:9px;font-weight:600;margin-bottom:4px;">{label}</div>'
-            f'<div class="stacked-bar">'
-            f'<div class="stacked-segment" style="width:{nmd_pct:.1f}%;background:{_C["warning"]};">'
-            f'{"NMD " + _fmt_pct(nmd_pct) if nmd_pct > 12 else ""}</div>'
-            f'<div class="stacked-segment" style="width:{md_pct:.1f}%;background:{_C["primary"]};">'
-            f'{"MD " + _fmt_pct(md_pct) if md_pct > 12 else ""}</div>'
-            f'</div></div>'
+            f'<div style="display:flex;flex-direction:column;align-items:center;gap:4px;">'
+            f'<div style="width:{BAR_W}px;height:{BAR_H}px;display:flex;flex-direction:column;border-radius:4px;overflow:hidden;">'
+            # MD on top (blue)
+            f'<div style="flex:{md:.1f};background:{_C["primary"]};display:flex;align-items:center;justify-content:center;color:#fff;font-size:9px;font-weight:700;">'
+            f'{"MD " + str(round(md)) + "%" if md >= 12 else ""}</div>'
+            # NMD on bottom (orange)
+            f'<div style="flex:{nmd:.1f};background:{_C["warning"]};display:flex;align-items:center;justify-content:center;color:#fff;font-size:9px;font-weight:700;">'
+            f'{"NMD " + str(round(nmd)) + "%" if nmd >= 12 else ""}</div>'
+            f'</div>'
+            f'<div style="font-size:8.5px;color:{_C["grey"]};text-align:center;">{label}</div>'
+            f'</div>'
         )
+
+    legend = (
+        f'<div style="display:flex;gap:12px;font-size:8.5px;margin-bottom:10px;">'
+        f'<span style="display:flex;align-items:center;gap:4px;">'
+        f'<span style="width:10px;height:10px;border-radius:50%;background:{_C["warning"]};display:inline-block;"></span>NMD</span>'
+        f'<span style="display:flex;align-items:center;gap:4px;">'
+        f'<span style="width:10px;height:10px;border-radius:50%;background:{_C["primary"]};display:inline-block;"></span>MD</span>'
+        f'</div>'
+    )
 
     return (
         f'<div class="section-heading">PEAR — Premium Energy Allocation Ratio</div>'
         f'{ai_html}'
-        f'{_pear_bar("Target Mix",     tgt.get("md_pct", 60),  tgt.get("nmd_pct", 40))}'
-        f'{_pear_bar("Yesterday",      yest.get("md_pct", 0),  yest.get("nmd_pct", 0))}'
-        f'{_pear_bar("MTD Average",    mtd.get("md_pct", 0),   mtd.get("nmd_pct", 0))}'
-        f'<div style="display:flex;gap:12px;font-size:8.5px;margin-top:6px;">'
-        f'<span style="display:flex;align-items:center;gap:4px;">'
-        f'<span style="width:10px;height:10px;border-radius:2px;background:{_C["warning"]};display:inline-block;"></span>NMD (Non-MD)</span>'
-        f'<span style="display:flex;align-items:center;gap:4px;">'
-        f'<span style="width:10px;height:10px;border-radius:2px;background:{_C["primary"]};display:inline-block;"></span>MD (Premium)</span>'
+        f'{legend}'
+        f'<div style="display:flex;gap:40px;align-items:flex-end;">'
+        f'<div>'
+        f'<div style="font-size:8.5px;font-weight:600;margin-bottom:8px;">Target Mix of Energy</div>'
+        f'{_vert_bar("Target Mix", tgt_md, tgt_nmd)}'
+        f'</div>'
+        f'<div style="width:1px;background:#e0e0e0;align-self:stretch;"></div>'
+        f'<div>'
+        f'<div style="font-size:8.5px;font-weight:600;margin-bottom:8px;">Share of Energy: PEAR</div>'
+        f'<div style="display:flex;gap:16px;">'
+        f'{_vert_bar("Yesterday", yest_md, yest_nmd)}'
+        f'{_vert_bar("MTD Average", mtd_md, mtd_nmd)}'
+        f'</div>'
+        f'</div>'
         f'</div>'
     )
 
 
+def _svg_donut_chart(segs_in, total_gwh):
+    """SVG donut chart matching dashboard: ring chart with arc labels + center text.
+    segs_in = [(disp_name, pct, color, energy_gwh), ...]
+    """
+    CX, CY = 100, 100
+    R    = 62   # ring centre radius
+    SW   = 38   # stroke-width (ring thickness)
+    CIRC = 2 * math.pi * R
+
+    svg = (
+        f'<svg viewBox="0 0 200 200" width="190" height="190" '
+        f'style="flex-shrink:0;overflow:visible;">'
+    )
+    # Grey background track
+    svg += (
+        f'<circle cx="{CX}" cy="{CY}" r="{R}" fill="none" '
+        f'stroke="#f0f2f5" stroke-width="{SW}"/>'
+    )
+
+    # Accumulate arcs
+    cum_deg = 0.0
+    arc_data = []
+    for disp_name, pct, color, energy in segs_in:
+        pct = max(0.0, float(pct or 0))
+        dash = pct / 100 * CIRC
+        arc_data.append((disp_name, pct, color, energy, dash, cum_deg))
+        cum_deg += pct / 100 * 360
+
+    # Draw arcs (stroke-dasharray circles, rotated from 12 o'clock)
+    for disp_name, pct, color, energy, dash, start_deg in arc_data:
+        svg += (
+            f'<circle cx="{CX}" cy="{CY}" r="{R}" fill="none" stroke="{color}" '
+            f'stroke-width="{SW}" '
+            f'stroke-dasharray="{dash:.3f} {CIRC:.3f}" '
+            f'stroke-dashoffset="{-(start_deg / 360 * CIRC):.3f}" '
+            f'transform="rotate(-90 {CX} {CY})"/>'
+        )
+
+    # Arc labels (GWh + %)
+    for disp_name, pct, color, energy, dash, start_deg in arc_data:
+        if pct < 5:
+            continue
+        mid_deg = start_deg + pct / 2
+        mid_rad = math.radians(mid_deg - 90)
+        lx = CX + R * math.cos(mid_rad)
+        ly = CY + R * math.sin(mid_rad)
+        svg += (
+            f'<text x="{lx:.1f}" y="{ly - 4:.1f}" text-anchor="middle" '
+            f'font-size="8.5" font-weight="700" fill="#fff">{energy:.2f}</text>'
+            f'<text x="{lx:.1f}" y="{ly + 7:.1f}" text-anchor="middle" '
+            f'font-size="8" fill="#fff">{pct:.1f}%</text>'
+        )
+
+    # Center label: name of the largest segment + its pct
+    if arc_data:
+        biggest = max(arc_data, key=lambda x: x[1])
+        svg += (
+            f'<text x="{CX}" y="{CY - 6}" text-anchor="middle" '
+            f'font-size="9.5" font-weight="600" fill="{biggest[2]}">{biggest[0]}</text>'
+            f'<text x="{CX}" y="{CY + 8}" text-anchor="middle" '
+            f'font-size="12" font-weight="700" fill="{_C["text"]}">{biggest[1]:.1f}</text>'
+        )
+
+    svg += '</svg>'
+    return svg
+
+
 def _render_energy_pnl_donut(data, ai):
-    """5.9 — 100%-stacked bar + legend: MDI→'MD Industrial', MDNI→'MD Non-Industrial', Regions→'Regions'."""
+    """5.9 — Donut chart per period: MDI/MDNI/Regions with arc labels, matching dashboard."""
     yesterday = data.get('yesterday') or {}
     mtd       = data.get('mtd')       or {}
 
-    def _donut_card(title, d):
+    def _build_segs(d):
         segs      = d.get('segments') or []
-        # Dashboard donut shows MDI/MDNI/Regions only — no Minigrid slice
         segs      = [s for s in segs if 'MINI' not in str(s.get('segment', '')).upper()]
-        total_gwh = float(d.get('total_gwh', d.get('total_energy_gwh', 0)) or 0)
-
-        bar_segs    = []
-        legend_html = ''
+        total_gwh = float(d.get('total_gwh', 0) or 0)
+        out = []
         for s in segs:
-            raw_name    = s.get('segment', '')
-            disp_name   = _seg_display_name(raw_name)
-            color       = _seg_color(raw_name)
-            pct         = float(s.get('pct', 0))
-            energy      = float(s.get('energy_gwh', s.get('total_mwh', s.get('gwh', 0))) or 0)
-            bar_segs.append((disp_name, pct, color))
+            raw_name  = s.get('segment', '')
+            disp_name = _seg_display_name(raw_name)
+            color     = _seg_color(raw_name)
+            pct       = float(s.get('pct', 0) or 0)
+            energy    = float(s.get('energy_gwh', 0) or 0)
+            out.append((disp_name, pct, color, energy))
+        return out, total_gwh
+
+    def _donut_card(title, d):
+        segs, total_gwh = _build_segs(d)
+        svg = _svg_donut_chart(segs, total_gwh)
+
+        legend_html = ''
+        for disp_name, pct, color, energy in segs:
             legend_html += (
                 f'<div class="donut-legend-row">'
                 f'<div class="donut-dot" style="background:{color};"></div>'
@@ -1732,13 +1869,15 @@ def _render_energy_pnl_donut(data, ai):
                 f'</div>'
             )
 
-        bar = _css_100pct_bar(bar_segs, height=14) if bar_segs else ''
         return (
             f'<div class="donut-card">'
             f'<div class="donut-title">{title}</div>'
-            f'{bar}'
-            f'<div style="margin-top:8px;">{legend_html}</div>'
-            f'<div style="margin-top:8px;font-size:9px;font-weight:700;">Total: {_fmt_gwh(total_gwh)}</div>'
+            f'<div style="display:flex;align-items:center;gap:16px;">'
+            f'{svg}'
+            f'<div style="min-width:130px;">{legend_html}'
+            f'<div style="margin-top:8px;font-size:9px;font-weight:700;color:{_C["text"]};">'
+            f'Total: {_fmt_gwh(total_gwh)} GWh</div>'
+            f'</div></div>'
             f'</div>'
         )
 
@@ -1748,78 +1887,106 @@ def _render_energy_pnl_donut(data, ai):
         f'<div class="section-heading">Energy by P&L Segment</div>'
         f'{ai_html}'
         f'<div class="donut-row">'
-        f'{_donut_card("Yesterday", yesterday)}'
-        f'{_donut_card("Month-to-Date", mtd)}'
+        f'{_donut_card("Yesterday: Daily Total Energy Consumed per P&L (GWh & %)", yesterday)}'
+        f'{_donut_card("Month till Date: Total Energy Consumed per P&L (GWh & %)", mtd)}'
         f'</div>'
     )
 
 
 def _render_energy_by_voltage(data, ai):
-    """5.10 — Per-segment stacked bar: 33KV (#5D87FF, white label) + 11KV (#FFAE1F, text label)."""
-    segments = data.get('segments') or []
-    if not segments:
+    """5.10 — Per-segment daily stacked bar (33KV base + 11KV top) + prev/curr month comparison."""
+    raw_days       = data.get('days') or []
+    month_comp     = data.get('month_comparison') or {}
+    period         = data.get('period') or {}
+
+    if not raw_days and not month_comp:
         return '<p style="font-size:9px;color:#999;">No voltage breakdown data.</p>'
 
     ai_html = f'<div class="ai-block">{ai["voltage_narrative"]}</div>' if ai.get('voltage_narrative') else ''
 
+    # Derive month labels from period
+    try:
+        from_dt   = _dt.strptime(period.get('from', ''), '%Y-%m-%d')
+        curr_lbl  = from_dt.strftime('%B %Y')
+        prev_m    = from_dt.month - 1 or 12
+        prev_y    = from_dt.year if from_dt.month > 1 else from_dt.year - 1
+        prev_lbl  = _dt(prev_y, prev_m, 1).strftime('%B %Y')
+    except Exception:
+        curr_lbl, prev_lbl = 'This Month', 'Prev Month'
+
+    # Display name mapping (service uses 'Regional', dashboard shows 'Regions')
+    _seg_disp = {'MDI': 'MDI', 'MDNI': 'MDNI', 'Regional': 'Regions'}
+
+    SERIES = [('gwh_33kv', _C['primary']), ('gwh_11kv', _C['warning'])]
+
     legend = (
-        f'<div style="display:flex;gap:14px;font-size:8.5px;margin-bottom:10px;">'
+        f'<div style="display:flex;gap:14px;font-size:8.5px;margin-bottom:6px;">'
         f'<span style="display:flex;align-items:center;gap:4px;">'
-        f'<span style="width:10px;height:10px;border-radius:2px;background:{_C["primary"]};display:inline-block;"></span>33KV</span>'
+        f'<span style="width:10px;height:10px;border-radius:2px;background:{_C["primary"]};display:inline-block;"></span>'
+        f'<strong>33KV</strong></span>'
         f'<span style="display:flex;align-items:center;gap:4px;">'
-        f'<span style="width:10px;height:10px;border-radius:2px;background:{_C["warning"]};display:inline-block;"></span>11KV</span>'
+        f'<span style="width:10px;height:10px;border-radius:2px;background:{_C["warning"]};display:inline-block;"></span>'
+        f'<strong>11KV</strong></span>'
         f'</div>'
     )
 
     cards_html = ''
-    for seg in segments:
-        seg_name  = seg.get('segment', '')
-        days      = seg.get('days') or seg.get('daily') or []
-        total_33  = float(seg.get('total_33kv_gwh', seg.get('gwh_33kv', 0)) or 0)
-        total_11  = float(seg.get('total_11kv_gwh', seg.get('gwh_11kv', 0)) or 0)
+    for seg_key in ('MDI', 'MDNI', 'Regional'):
+        disp_name = _seg_disp.get(seg_key, seg_key)
 
-        # Normalise daily keys so SVG helper can find them
+        # Build per-day list for this segment
         normalised = []
-        for d in days:
+        for d in raw_days:
+            seg_data = (d.get('segments') or {}).get(seg_key) or {}
             normalised.append({
-                'label':    d.get('label', d.get('day', '')),
-                'gwh_33kv': float(d.get('total_33kv_gwh', d.get('gwh_33kv', 0)) or 0),
-                'gwh_11kv': float(d.get('total_11kv_gwh', d.get('gwh_11kv', 0)) or 0),
+                'label':    d.get('day', ''),
+                'gwh_33kv': float(seg_data.get('energy_33kv_gwh', 0) or 0),
+                'gwh_11kv': float(seg_data.get('energy_11kv_gwh', 0) or 0),
             })
 
-        svg = _svg_stacked_bar(
+        if not any(d['gwh_33kv'] or d['gwh_11kv'] for d in normalised):
+            continue  # skip empty segments
+
+        main_svg = _svg_stacked_bar(
             normalised,
-            [('gwh_33kv', _C['primary']), ('gwh_11kv', _C['warning'])],
+            SERIES,
             y_title='GWh',
-        ) if normalised else ''
+        )
 
-        # Period comparison panel: prev month vs current month
-        prev      = seg.get('prev_month') or {}
-        prev_33   = float(prev.get('total_33kv_gwh', prev.get('gwh_33kv', 0)) or 0)
-        prev_11   = float(prev.get('total_11kv_gwh', prev.get('gwh_11kv', 0)) or 0)
-        prev_lbl  = prev.get('month_label', 'Prev Month')
-        curr_lbl  = seg.get('month_label', 'This Month')
-        comp_months = []
-        if prev_33 or prev_11:
-            comp_months.append({'label': prev_lbl, 'gwh_33kv': prev_33, 'gwh_11kv': prev_11})
-        comp_months.append({'label': curr_lbl, 'gwh_33kv': total_33, 'gwh_11kv': total_11})
-
+        # Comparison chart: previous month vs current month
+        mc        = month_comp.get(seg_key) or {}
+        curr_mc   = mc.get('current_month')  or {}
+        prev_mc   = mc.get('previous_month') or {}
+        comp_data = [
+            {
+                'label':    prev_lbl,
+                'gwh_33kv': float(prev_mc.get('energy_33kv_gwh', 0) or 0),
+                'gwh_11kv': float(prev_mc.get('energy_11kv_gwh', 0) or 0),
+            },
+            {
+                'label':    curr_lbl,
+                'gwh_33kv': float(curr_mc.get('energy_33kv_gwh', 0) or 0),
+                'gwh_11kv': float(curr_mc.get('energy_11kv_gwh', 0) or 0),
+            },
+        ]
         comp_svg = _svg_period_stacked_total(
-            comp_months,
-            [('gwh_33kv', _C['primary']), ('gwh_11kv', _C['warning'])],
-            title='Comparison\nBetween Present\nand Previous\nMonth (Total)',
-            label_colors=['#fff', _C['text']],  # white on 33KV/blue, dark on 11KV/yellow §7.10
-        ) if len(comp_months) >= 1 else ''
+            comp_data,
+            SERIES,
+            title='Comparison Between Present\nand Previous\nMonth (Total)',
+            label_colors=['#fff', _C['text']],
+        )
 
         cards_html += (
-            f'<div style="margin-bottom:18px;">'
-            f'<div style="font-size:9px;font-weight:700;color:{_C["primary"]};margin-bottom:4px;">'
-            f'{seg_name}'
-            f'<span style="font-weight:400;color:{_C["grey"]};margin-left:8px;">'
-            f'33KV: {_fmt_gwh(total_33)} &nbsp;|&nbsp; 11KV: {_fmt_gwh(total_11)}'
-            f'</span></div>'
+            f'<div style="margin-bottom:20px;page-break-inside:avoid;">'
+            f'<div style="font-size:9.5px;font-weight:700;color:{_C["text"]};margin-bottom:6px;">'
+            f'{disp_name} 33KV &amp; 11KV Summary: Daily Energy Allocation (GWh)'
+            f'<span style="margin-left:8px;padding:2px 6px;background:{_C["primary"]}22;'
+            f'color:{_C["primary"]};border-radius:4px;font-size:8px;font-weight:600;">'
+            f'{curr_lbl}</span>'
+            f'</div>'
+            f'{legend}'
             f'<div style="display:flex;align-items:flex-start;gap:8px;">'
-            f'<div style="flex:1;overflow-x:auto;">{svg}</div>'
+            f'<div style="flex:1;overflow-x:auto;">{main_svg}</div>'
             f'{comp_svg}'
             f'</div></div>'
         )
@@ -1827,7 +1994,6 @@ def _render_energy_by_voltage(data, ai):
     return (
         f'<div class="section-heading">Daily Energy by Segment &amp; Voltage</div>'
         f'{ai_html}'
-        f'{legend}'
         f'{cards_html}'
     )
 
@@ -1892,10 +2058,33 @@ def _render_pnl_deficit(data, ai):
 
     ai_html = f'<div class="ai-block">{ai["pnl_deficit_narrative"]}</div>' if ai.get('pnl_deficit_narrative') else ''
 
-    cats     = [_seg_display_name(s.get('segment', f'Cat {i}')) for i, s in enumerate(segments, 1)]
-    consumed = [max(0.0, float(s.get('consumed_gwh', 0) or 0)) for s in segments]
-    gaps     = [abs(float(s.get('gap_gwh', 0) or 0))           for s in segments]  # abs() — includes surplus
-    targets  = [max(0.0, float(s.get('target_gwh', 0) or 0))   for s in segments]
+    cats = [_seg_display_name(s.get('segment', f'Cat {i}')) for i, s in enumerate(segments, 1)]
+
+    def _to_gwh(s, *keys):
+        for k in keys:
+            v = s.get(k)
+            if v is not None:
+                return float(v)
+        return 0.0
+
+    consumed = []
+    gaps     = []
+    targets  = []
+    for s in segments:
+        # Support both GWh keys (from get_gcr) and MWh keys (from get_pnl_targets)
+        if s.get('consumed_gwh') is not None:
+            c = max(0.0, float(s['consumed_gwh']))
+            t = max(0.0, float(s.get('target_gwh', 0) or 0))
+            g = abs(float(s.get('gap_gwh', t - c) or 0))
+        else:
+            c_mwh = max(0.0, float(s.get('actual_energy_mwh', 0) or 0))
+            t_mwh = max(0.0, float(s.get('target_energy_mwh', 0) or 0))
+            c = round(c_mwh / 1000, 4)
+            t = round(t_mwh / 1000, 4)
+            g = abs(round((t_mwh - c_mwh) / 1000, 4))
+        consumed.append(c)
+        targets.append(t)
+        gaps.append(g)
 
     # Total bar height = consumed + abs_gap + target (all three stacked)
     totals = [c + g + t for c, g, t in zip(consumed, gaps, targets)]
@@ -1967,11 +2156,11 @@ def _render_pnl_deficit(data, ai):
     legend = (
         f'<div style="display:flex;gap:14px;font-size:8.5px;margin-bottom:8px;">'
         f'<span style="display:flex;align-items:center;gap:4px;">'
-        f'<span style="width:10px;height:10px;border-radius:2px;background:{_C["primary"]};display:inline-block;"></span>Energy Consumed</span>'
+        f'<span style="width:10px;height:10px;border-radius:50%;background:{_C["primary"]};display:inline-block;"></span>Energy Consumed</span>'
         f'<span style="display:flex;align-items:center;gap:4px;">'
-        f'<span style="width:10px;height:10px;border-radius:2px;background:{_C["gap_green"]};display:inline-block;"></span>Gap</span>'
+        f'<span style="width:10px;height:10px;border-radius:50%;background:{_C["gap_green"]};display:inline-block;"></span>Gap</span>'
         f'<span style="display:flex;align-items:center;gap:4px;">'
-        f'<span style="width:10px;height:10px;border-radius:2px;background:{_C["target_yellow"]};display:inline-block;"></span>Energy Target</span>'
+        f'<span style="width:10px;height:10px;border-radius:50%;background:{_C["target_yellow"]};display:inline-block;"></span>Energy Target</span>'
         f'</div>'
     )
 
@@ -1985,9 +2174,12 @@ def _render_pnl_deficit(data, ai):
 
 def _render_gcr(data, ai):
     """5.13 — 11-column GCR table; Gap Bill Value in error color; Total row bold + primary tint."""
-    segments = data.get('segments') or []
-    totals   = data.get('totals')   or data.get('total') or {}
-    if not segments:
+    all_segs = data.get('segments') or data.get('rows') or []
+    # get_gcr() includes the Total row inside segments; split it out
+    segments = [s for s in all_segs if str(s.get('segment', '')).lower() != 'total']
+    total_row = next((s for s in all_segs if str(s.get('segment', '')).lower() == 'total'), None)
+    totals    = data.get('totals') or data.get('total') or total_row or {}
+    if not segments and not totals:
         return '<p style="font-size:9px;color:#999;">No GCR data.</p>'
 
     ai_html = f'<div class="ai-block">{ai["gcr_narrative"]}</div>' if ai.get('gcr_narrative') else ''
@@ -1995,8 +2187,8 @@ def _render_gcr(data, ai):
     def _row(i, seg, is_total=False):
         ach      = float(seg.get('mtd_achievement_pct', seg.get('achievement_pct', 0)) or 0)
         gap_pct  = float(seg.get('gap_pct', seg.get('gap_in_pct', 0)) or 0)
-        tariff   = float(seg.get('avg_tariff', seg.get('average_tariff', 0)) or 0)
-        mtd_bill = float(seg.get('mtd_expected_bill_value', seg.get('mtd_bill_value', 0)) or 0)
+        tariff   = float(seg.get('average_tariff_per_kwh', seg.get('avg_tariff', seg.get('average_tariff', 0))) or 0)
+        mtd_bill = float(seg.get('mtd_bill_value', seg.get('mtd_expected_bill_value', 0)) or 0)
         ach_col  = (
             _C['success'] if ach >= 95 else
             _C['info']    if ach >= 85 else
@@ -2058,7 +2250,7 @@ def _render_volatility(data, ai):
 
     rows_html = ''
     for i, r in enumerate(rows, 1):
-        diff = float(r.get('difference', 0) or 0)
+        diff = float(r.get('difference_pct', r.get('difference', 0)) or 0)
         if diff > 1:
             diff_col = _C['success']
             diff_str = f'+{diff:.1f}%'
@@ -2069,13 +2261,13 @@ def _render_volatility(data, ai):
             diff_col = _C['grey']
             diff_str = f'{diff:.1f}%'
 
-        remark  = str(r.get('remarks', r.get('remark', '')) or '').strip()
+        remark  = str(r.get('remark', r.get('remarks', '')) or '').strip()
         rows_html += (
             f'<tr><td>{i}</td>'
             f'<td style="font-weight:600;">{r.get("segment","")}</td>'
             f'<td style="color:{diff_col if remark.lower() != "stable" else _C["grey"]};">{remark}</td>'
-            f'<td style="text-align:right;">{_fmt_pct(r.get("yesterday_share",0))}</td>'
-            f'<td style="text-align:right;">{_fmt_pct(r.get("mtd_share",0))}</td>'
+            f'<td style="text-align:right;">{_fmt_pct(r.get("yesterday_share_pct", r.get("yesterday_share", 0)))}</td>'
+            f'<td style="text-align:right;">{_fmt_pct(r.get("mtd_share_pct", r.get("mtd_share", 0)))}</td>'
             f'<td style="text-align:right;font-weight:600;color:{diff_col};">{diff_str}</td>'
             f'</tr>'
         )

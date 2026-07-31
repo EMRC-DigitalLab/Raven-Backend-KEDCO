@@ -19,7 +19,7 @@ from technical.utils.energy_utils import (
     calculate_energy_delivered_per_feeder,
 )
 from tmo.constants import STANDARD_DAILY_FORECAST_GWH
-from tmo.models import TMODailyAllocation, TMOFeederSupplyTarget, TMOIncident, TMOMonthlySegmentTarget, TMONetworkConfig, TMOSupplyHoursTarget
+from tmo.models import TMODailyAllocation, TMOFeederSupplyTarget, TMOIncident, TMOMonthlySegmentTarget, TMONetworkConfig, TMONetworkDispatch, TMOSupplyHoursTarget
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -1839,34 +1839,21 @@ class TMOService:
 
     def get_daily_allocation(self):
         """
-        Per-day comparison of TCN/NERC expected allocation (MW) vs actual
-        average network consumption (MW) from HourlyLoad.
-        Red bar = expected_mw − actual_mw (negative = allocation exceeds consumption).
-        Covers the 'KEDCO Daily real time allocation Based on Available Generation' chart.
+        Per-day comparison of KEDCO allocation vs DISCO offtake from TMONetworkDispatch.
+        Uses the same data source as the live dashboard (tmo_tmonetworkdispatch table).
+        kedco_allocation_mw → expected_mw
+        disco_offtake_mw    → actual_mw
+        variance_mw         → unpicked_mw (positive = underpicked, negative = overrun)
         """
-        feeder_ids = list(self._base_feeder_qs().values_list('id', flat=True))
-
-        # Actual avg consumption per day: avg(load_mw) across all feeders × hours recorded
-        consumption_map = {}
-        for row in (
-            HourlyLoad.objects
-            .filter(feeder_id__in=feeder_ids, date__gte=self.from_date, date__lte=self.to_date, load_mw__gt=0)
-            .values('date')
-            .annotate(avg_mw=Avg('load_mw'))
-        ):
-            consumption_map[str(row['date'])] = float(row['avg_mw'] or 0)
-
-        # TCN allocation entered by admin
-        allocation_map = {
-            str(a.date): float(a.expected_mw)
-            for a in TMODailyAllocation.objects.filter(
+        dispatch_map = {
+            str(obj.date): obj
+            for obj in TMONetworkDispatch.objects.filter(
                 date__gte=self.from_date,
                 date__lte=self.to_date,
-            )
+            ).order_by('date')
         }
 
-        # Union of all dates
-        all_dates = set(consumption_map) | set(allocation_map)
+        all_dates = set(dispatch_map.keys())
         cur = self.from_date
         while cur <= self.to_date:
             all_dates.add(str(cur))
@@ -1874,15 +1861,16 @@ class TMOService:
 
         days = []
         for d_str in sorted(all_dates):
-            expected = allocation_map.get(d_str, 0.0)
-            actual   = consumption_map.get(d_str, 0.0)
-            unpicked = expected - actual
+            obj      = dispatch_map.get(d_str)
+            expected = float(obj.kedco_allocation_mw or 0) if obj else 0.0
+            actual   = float(obj.disco_offtake_mw    or 0) if obj else 0.0
+            unpicked = float(obj.variance_mw         or 0) if obj else 0.0
             days.append({
-                'date':         d_str,
-                'day':          int(d_str.split('-')[2]),
-                'expected_mw':  round(expected, 2),
-                'actual_mw':    round(actual, 2),
-                'unpicked_mw':  round(unpicked, 2),
+                'date':        d_str,
+                'day':         int(d_str.split('-')[2]),
+                'expected_mw': round(expected, 2),
+                'actual_mw':   round(actual,   2),
+                'unpicked_mw': round(unpicked,  2),
             })
 
         total_expected = sum(d['expected_mw'] for d in days)
@@ -1893,7 +1881,7 @@ class TMOService:
             'period': {'from': str(self.from_date), 'to': str(self.to_date)},
             'summary': {
                 'total_expected_mw':  round(total_expected, 2),
-                'total_actual_mw':    round(total_actual, 2),
+                'total_actual_mw':    round(total_actual,   2),
                 'total_unpicked_mw':  round(total_unpicked, 2),
             },
             'days': days,

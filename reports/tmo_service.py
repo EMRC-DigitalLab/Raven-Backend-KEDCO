@@ -225,7 +225,24 @@ class TMOReportService:
     # ── Dashboard sections ────────────────────────────────────────────────────
 
     def section_tmo_overview(self):
-        return self._tmo().get_overview()
+        # get_overview() uses TMOFeederTarget (old model, no current data).
+        # Pull from get_daily_energy() + get_supply_compliance() which use the
+        # live TMONetworkConfig / technical_hourlyload data sources.
+        energy = self._tmo().get_daily_energy()
+        supply_data = self._tmo().get_supply_compliance()
+        summary = supply_data.get('summary', {})
+        return {
+            'period':              energy.get('period', {}),
+            'monthly_target_gwh':  energy.get('monthly_target_gwh', 0),
+            'total_actual_gwh':    energy.get('total_actual_gwh', 0),
+            'mtd_achievement_pct': energy.get('mtd_achievement_pct', 0),
+            'mtd_status':          energy.get('mtd_status', 'critical'),
+            'supply': {
+                'compliance_pct':    summary.get('compliance_rate_pct', 0),
+                'compliant_feeders': summary.get('compliant_feeders', 0),
+                'total_feeders':     summary.get('total_feeders', 0),
+            },
+        }
 
     def section_tmo_daily_network_energy(self):
         return self._tmo().get_daily_energy()
@@ -238,14 +255,34 @@ class TMOReportService:
         return self._tmo().get_daily_allocation()
 
     def section_tmo_feeder_compliance_table(self):
-        return self._tmo().get_supply_compliance()
+        # Compliance table shows a single day: yesterday if to_date is today,
+        # otherwise to_date itself (last complete day of the report period).
+        from datetime import date as _date, timedelta
+        today = _date.today()
+        effective = self.to_date if self.to_date < today else today - timedelta(days=1)
+        from tmo.services import TMOService
+        svc = TMOService(effective, effective, filters={})
+        return svc.get_supply_compliance()
 
     def section_tmo_compliance_by_segment(self):
-        return self._tmo().get_compliance_summary()
+        # Same single-day logic as feeder compliance table
+        from datetime import date as _date, timedelta
+        today = _date.today()
+        effective = self.to_date if self.to_date < today else today - timedelta(days=1)
+        from tmo.services import TMOService
+        svc = TMOService(effective, effective, filters={})
+        return svc.get_compliance_summary()
 
     def section_tmo_minigrids_daily(self, config=None):
+        # MTD: month start → yesterday (cap at yesterday if to_date is today or future)
+        from datetime import date as _date, timedelta
+        today      = _date.today()
+        mtd_from   = self.from_date.replace(day=1)
+        mtd_to     = self.to_date if self.to_date < today else today - timedelta(days=1)
+        from tmo.services import TMOService
+        svc = TMOService(mtd_from, mtd_to, filters={})
         c = config or {}
-        return self._tmo().get_minigrids_daily(
+        return svc.get_minigrids_daily(
             feeder_slug=c.get('feeder_slug') or None,
             q=c.get('q') or None,
             band=c.get('band') or None,
@@ -256,7 +293,32 @@ class TMOReportService:
         return self._tmo().get_pear()
 
     def section_tmo_energy_pnl_donut(self):
-        return self._tmo().get_energy_by_segment()
+        from datetime import date as _date, timedelta
+        from tmo.services import TMOService
+        today    = _date.today()
+        yest     = self.to_date if self.to_date < today else today - timedelta(days=1)
+        mtd_from = self.from_date.replace(day=1)
+
+        def _fmt(raw):
+            segs      = raw.get('segments', [])
+            total_mwh = raw.get('total_actual_mwh', 0) or 1
+            total_gwh = round(total_mwh / 1000, 4)
+            out = []
+            for s in segs:
+                mwh = float(s.get('actual_mwh', 0) or 0)
+                out.append({
+                    'segment':    s.get('segment'),
+                    'energy_gwh': round(mwh / 1000, 4),
+                    'pct':        round(mwh / (total_mwh or 1) * 100, 1),
+                })
+            return {'segments': out, 'total_gwh': total_gwh}
+
+        yest_data = TMOService(yest, yest, filters={}).get_energy_by_segment()
+        mtd_data  = TMOService(mtd_from, yest, filters={}).get_energy_by_segment()
+        return {
+            'yesterday': _fmt(yest_data),
+            'mtd':       _fmt(mtd_data),
+        }
 
     def section_tmo_energy_by_voltage(self):
         return self._tmo().get_energy_by_voltage()
