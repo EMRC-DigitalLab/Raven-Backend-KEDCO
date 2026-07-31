@@ -431,13 +431,16 @@ def sync_33kv_sheet(spreadsheet_id: str, year: int, month: int,
                         )
 
                 if dispatch_daily:
+                    _zero = Decimal('0')
                     daily_obj, _ = TMONetworkDispatch.objects.update_or_create(
                         date=reading_date,
                         defaults={
-                            'disco_offtake_mw':        _safe_mw(dispatch_daily.get('disco_offtake'), 'disco_offtake'),
-                            'kedco_allocation_mw':     _safe_mw(dispatch_daily.get('kedco_alloc'), 'kedco_alloc'),
+                            # NOT NULL fields — fall back to 0 when sheet has no data
+                            'disco_offtake_mw':        _safe_mw(dispatch_daily.get('disco_offtake'), 'disco_offtake') or _zero,
+                            'kedco_allocation_mw':     _safe_mw(dispatch_daily.get('kedco_alloc'), 'kedco_alloc') or _zero,
+                            'variance_mw':             _safe_mw(dispatch_daily.get('variance'), 'variance') or _zero,
+                            # nullable field — None is fine
                             'available_generation_mw': _safe_mw(dispatch_daily.get('available_gen'), 'available_gen'),
-                            'variance_mw':             _safe_mw(dispatch_daily.get('variance'), 'variance'),
                             'source': 'manual',
                         }
                     )
