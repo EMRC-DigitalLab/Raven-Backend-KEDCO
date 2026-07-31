@@ -327,7 +327,11 @@ class TMOReportService:
         return self._tmo().get_incidents()
 
     def section_tmo_pnl_deficit(self):
-        return self._tmo().get_pnl_targets()
+        # get_pnl_targets() only covers MDI/MDNI and reads TMOMonthlySegmentTarget
+        # which may have no current-month data.
+        # get_gcr() covers MDI/MDNI/Regions/Total with the same keys the renderer
+        # expects (consumed_gwh, gap_gwh, target_gwh) so use that instead.
+        return self._tmo().get_gcr()
 
     def section_tmo_gcr(self):
         return self._tmo().get_gcr()

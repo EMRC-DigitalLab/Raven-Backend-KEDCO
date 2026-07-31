@@ -2079,13 +2079,25 @@ def _render_incidents(data, ai):
 
 def _render_pnl_deficit(data, ai):
     """5.12 — STACKED vertical bar per category (bottom→top): Consumed (#5D87FF) → |Gap| (#2E7D32) → Target (#FFAE1F).
-    Gap uses abs() so surplus segments (MDNI) still show the magnitude.
-    Category labels use _seg_display_name for clean display names."""
-    segments = data.get('segments') or []
+    Data comes from get_gcr() which has MDI/MDNI/Regions/Total with correct GWh keys."""
+    all_segs = data.get('segments') or data.get('rows') or []
+    # include Total bar (4th column on dashboard)
+    segments = all_segs
     if not segments:
         return '<p style="font-size:9px;color:#999;">No P&L deficit data.</p>'
 
     ai_html = f'<div class="ai-block">{ai["pnl_deficit_narrative"]}</div>' if ai.get('pnl_deficit_narrative') else ''
+
+    period = data.get('period') or {}
+    try:
+        period_lbl = _dt.strptime(period.get('from', ''), '%Y-%m-%d').strftime('%B %Y')
+    except Exception:
+        period_lbl = ''
+    period_tag = (
+        f'<span style="margin-left:8px;padding:2px 6px;background:{_C["primary"]}22;'
+        f'color:{_C["primary"]};border-radius:4px;font-size:8px;font-weight:600;">'
+        f'{period_lbl}</span>'
+    ) if period_lbl else ''
 
     cats = [_seg_display_name(s.get('segment', f'Cat {i}')) for i, s in enumerate(segments, 1)]
 
@@ -2189,12 +2201,14 @@ def _render_pnl_deficit(data, ai):
         f'<span style="display:flex;align-items:center;gap:4px;">'
         f'<span style="width:10px;height:10px;border-radius:50%;background:{_C["gap_green"]};display:inline-block;"></span>Gap</span>'
         f'<span style="display:flex;align-items:center;gap:4px;">'
-        f'<span style="width:10px;height:10px;border-radius:50%;background:{_C["target_yellow"]};display:inline-block;"></span>Energy Target</span>'
+        f'<span style="width:10px;height:10px;border-radius:50%;background:{_C["target_yellow"]};display:inline-block;"></span>Energy target</span>'
         f'</div>'
     )
 
     return (
-        f'<div class="section-heading">P&L Target Realization Deficit</div>'
+        f'<div class="section-heading">P&L Target Realization Deficit{period_tag}</div>'
+        f'<div style="font-size:8px;color:{_C["grey"]};margin-bottom:10px;">'
+        f'Energy consumed vs the gap to target, by segment (GWh)</div>'
         f'{ai_html}'
         f'{legend}'
         f'<div style="overflow-x:auto;">{svg}</div>'
