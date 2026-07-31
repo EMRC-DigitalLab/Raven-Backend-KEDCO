@@ -2254,7 +2254,7 @@ def _render_gcr(data, ai):
             f'<span class="chip" style="background:{ach_col}22;color:{ach_col};">{_fmt_pct(ach)}</span>'
             f'</td>'
             f'<td style="text-align:right;color:{_C["error"]};">{_fmt_pct(gap_pct)}</td>'
-            f'<td style="text-align:right;">₦{tariff:.2f}</td>'
+            f'<td style="text-align:right;">{"—" if is_total else f"{tariff:.2f}"}</td>'
             f'</tr>'
         )
 
@@ -2262,22 +2262,35 @@ def _render_gcr(data, ai):
     if totals:
         rows_html += _row(None, totals, is_total=True)
 
+    period = data.get('period') or {}
+    try:
+        gcr_period_lbl = _dt.strptime(period.get('from', ''), '%Y-%m-%d').strftime('%B %Y')
+    except Exception:
+        gcr_period_lbl = ''
+    gcr_period_tag = (
+        f'<span style="margin-left:8px;padding:2px 6px;background:{_C["primary"]}22;'
+        f'color:{_C["primary"]};border-radius:4px;font-size:8px;font-weight:600;">'
+        f'{gcr_period_lbl}</span>'
+    ) if gcr_period_lbl else ''
+
     return (
-        f'<div class="section-heading">GCR — P&L Target vs Billing Value</div>'
+        f'<div class="section-heading">P&L Target vs Billing Value (GCR){gcr_period_tag}</div>'
+        f'<div style="font-size:8px;color:{_C["grey"]};margin-bottom:10px;">'
+        f'Energy gap converted to lost billing value, by segment</div>'
         f'{ai_html}'
         f'<div style="overflow-x:auto;">'
         f'<table class="data-table" style="font-size:7.5px;min-width:700px;">'
         f'<thead><tr>'
         f'<th>#</th><th>Segment</th>'
-        f'<th style="text-align:right;">Target (GWh)</th>'
-        f'<th style="text-align:right;">Consumed (GWh)</th>'
-        f'<th style="text-align:right;">Gap (GWh)</th>'
+        f'<th style="text-align:right;">Target(GWh)</th>'
+        f'<th style="text-align:right;">Consumed(GWh)</th>'
+        f'<th style="text-align:right;">Gap(GWh)</th>'
         f'<th style="text-align:right;">Expected Bill Value</th>'
-        f'<th style="text-align:right;">MTD Expected Bill</th>'
+        f'<th style="text-align:right;">MTD Expected Bill Value</th>'
         f'<th style="text-align:right;color:{_C["error"]};">Gap Bill Value</th>'
-        f'<th style="text-align:right;">MTD % Achieved</th>'
-        f'<th style="text-align:right;">Gap %</th>'
-        f'<th style="text-align:right;">Avg Tariff (₦/kWh)</th>'
+        f'<th style="text-align:right;">MTD in % Achieved</th>'
+        f'<th style="text-align:right;">Gap in %</th>'
+        f'<th style="text-align:right;">Average Tariff (₦/kWh)</th>'
         f'</tr></thead>'
         f'<tbody>{rows_html}</tbody></table>'
         f'</div>'
@@ -2304,23 +2317,39 @@ def _render_volatility(data, ai):
             diff_col = _C['grey']
             diff_str = f'{diff:.1f}%'
 
-        remark  = str(r.get('remark', r.get('remarks', '')) or '').strip()
+        remark     = str(r.get('remark', r.get('remarks', '')) or '').strip()
+        is_stable  = remark.lower() == 'stable'
+        remark_col = _C['grey'] if is_stable else diff_col
+        remark_html = (
+            f'<span style="color:{remark_col};">'
+            f'{"" if is_stable else "△ "}{remark}</span>'
+        )
         rows_html += (
             f'<tr><td>{i}</td>'
             f'<td style="font-weight:600;">{r.get("segment","")}</td>'
-            f'<td style="color:{diff_col if remark.lower() != "stable" else _C["grey"]};">{remark}</td>'
+            f'<td>{remark_html}</td>'
             f'<td style="text-align:right;">{_fmt_pct(r.get("yesterday_share_pct", r.get("yesterday_share", 0)))}</td>'
             f'<td style="text-align:right;">{_fmt_pct(r.get("mtd_share_pct", r.get("mtd_share", 0)))}</td>'
             f'<td style="text-align:right;font-weight:600;color:{diff_col};">{diff_str}</td>'
             f'</tr>'
         )
 
+    vol_period_tag = (
+        f'<span style="margin-left:8px;padding:2px 6px;background:{_C["info"]}22;'
+        f'color:{_C["info"]};border-radius:4px;font-size:8px;font-weight:600;">'
+        f'Yesterday vs Month-to-Date</span>'
+    )
+
     return (
-        f'<div class="section-heading">P&L Mix Volatility Index</div>'
+        f'<div class="section-heading">P&L Mix Volatility Index{vol_period_tag}</div>'
+        f'<div style="font-size:8px;color:{_C["grey"]};margin-bottom:10px;">'
+        f'Segment share shift — yesterday vs month-to-date</div>'
         f'{ai_html}'
         f'<table class="data-table">'
         f'<thead><tr><th>#</th><th>Segment</th><th>Remarks</th>'
-        f'<th>Yesterday Share</th><th>MTD Share</th><th>Difference</th></tr></thead>'
+        f'<th style="text-align:right;">Yesterday Shares</th>'
+        f'<th style="text-align:right;">MTD Shares</th>'
+        f'<th style="text-align:right;">Difference</th></tr></thead>'
         f'<tbody>{rows_html}</tbody></table>'
     )
 

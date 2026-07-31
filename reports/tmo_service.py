@@ -337,7 +337,14 @@ class TMOReportService:
         return self._tmo().get_gcr()
 
     def section_tmo_volatility(self):
-        return self._tmo().get_volatility()
+        # get_volatility() uses to_date as the reference "yesterday" day.
+        # If to_date is today, no energy data exists yet — use actual yesterday.
+        from datetime import date as _date, timedelta
+        from tmo.services import TMOService
+        today    = _date.today()
+        ref_date = self.to_date if self.to_date < today else today - timedelta(days=1)
+        svc = TMOService(ref_date.replace(day=1), ref_date, filters={})
+        return svc.get_volatility()
 
     # ── Legacy sections ───────────────────────────────────────────────────────
 

@@ -1610,6 +1610,22 @@ class TMOService:
         )
         targets = {t.segment: t for t in target_qs}
 
+        # Fallback: if current month has no targets, use the most recent available month
+        if not targets:
+            latest = (
+                TMOMonthlySegmentTarget.objects
+                .order_by('-year', '-month')
+                .values_list('year', 'month')
+                .first()
+            )
+            if latest:
+                targets = {
+                    t.segment: t
+                    for t in TMOMonthlySegmentTarget.objects.filter(
+                        year=latest[0], month=latest[1],
+                    )
+                }
+
         # GCR measures energy at the 33KV level only — 11KV distribution feeders
         # are downstream of these and would double-count if included.
         kv33_ids = set(
