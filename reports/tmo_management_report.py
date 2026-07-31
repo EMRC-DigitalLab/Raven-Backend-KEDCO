@@ -1084,10 +1084,13 @@ def _svg_period_total(bars, title='Period\nTotal', h=None):
 
 # ── Period comparison stacked mini-chart (prev vs current month) ──────────────
 
-def _svg_period_stacked_total(months, series, title='Comparison\nPrev vs Current', h=None):
+def _svg_period_stacked_total(months, series, title='Comparison\nPrev vs Current', h=None,
+                              label_colors=None):
     """
-    months : list of dicts with 'label' and value keys from series.
-    series : list of (key, color) — bottom series first.
+    months       : list of dicts with 'label' and value keys from series.
+    series       : list of (key, color) — bottom series first.
+    label_colors : optional list of text colors per series (matches series order).
+                   Defaults to '#fff' for every series.
     Returns a 130×h SVG.
     """
     h = h or _SVG_H
@@ -1102,8 +1105,15 @@ def _svg_period_stacked_total(months, series, title='Comparison\nPrev vs Current
     BW = max(10, (W - ML - MR - (n - 1) * 10) // max(n, 1))
     CH = h - MT - MB
 
+    if label_colors is None:
+        label_colors = ['#fff'] * len(series)
+
+    # 20%-of-max floor so thin segments stay visible (§7.10 spec)
     totals = [sum(abs(float(m.get(k, 0) or 0)) for k, _ in series) for m in months]
     y_max  = max(totals) * 1.2 if any(t > 0 for t in totals) else 1.0
+    comp_max = max(y_max, 0.001)
+    floor_px_ratio = 0.20  # 20% of chart height as minimum bar segment
+
     span   = y_max if y_max > 0 else 1.0
     base   = MT + CH
 
@@ -1120,17 +1130,21 @@ def _svg_period_stacked_total(months, series, title='Comparison\nPrev vs Current
     for mi, month in enumerate(months):
         bx    = ML + mi * (BW + 10)
         stack = base
-        for key, color in series:
-            v  = abs(float(month.get(key, 0) or 0))
-            bh = max(v / span * CH, 1)
+        for si, (key, color) in enumerate(series):
+            true_v = abs(float(month.get(key, 0) or 0))
+            if true_v <= 0:
+                continue
+            nat_bh = true_v / span * CH
+            bh = max(nat_bh, CH * floor_px_ratio) if true_v > 0 else 0
             by = stack - bh
+            lbl_color = label_colors[si] if si < len(label_colors) else '#fff'
             svg += f'<rect x="{bx}" y="{by:.1f}" width="{BW}" height="{bh:.1f}" fill="{color}" rx="1"/>'
             svg += f'<line x1="{bx}" y1="{by:.1f}" x2="{bx+BW}" y2="{by:.1f}" stroke="#fff" stroke-width="0.5"/>'
-            if bh > 12:
+            if bh > 10:
                 svg += (
                     f'<text x="{bx + BW/2:.1f}" y="{by + bh/2 + 2.5:.1f}" '
-                    f'text-anchor="middle" font-size="5" fill="#fff" font-weight="600">'
-                    f'{v:.2f}</text>'
+                    f'text-anchor="middle" font-size="5" fill="{lbl_color}" font-weight="600">'
+                    f'{true_v:.2f}</text>'
                 )
             stack = by
         svg += (
@@ -1147,8 +1161,11 @@ def _svg_period_stacked_total(months, series, title='Comparison\nPrev vs Current
 
 def _svg_100pct_stacked_vertical(segments, series_buckets, h=200, label_min_pct=5):
     """
-    segments      : list of dicts with 'label' key and bucket pct float values.
+    segments      : list of dicts with 'label' key, bucket display pct values,
+                    and optional '{key}_true' keys for the printed label text.
     series_buckets: list of (key, color) bottom bucket first (exceeding → critical).
+    Bar height uses 'key' (already floored by caller); label uses 'key_true' when
+    present (shows the true unfloored percentage), else falls back to 'key'.
     Returns a full-width SVG string.
     """
     if not segments:
@@ -1177,19 +1194,20 @@ def _svg_100pct_stacked_vertical(segments, series_buckets, h=200, label_min_pct=
         bx    = _ML + si * slot_w + (slot_w - bar_w) // 2
         stack = base_y
         for key, color in series_buckets:
-            pct = float(seg.get(key, 0) or 0)
-            if pct <= 0:
+            display_pct = float(seg.get(key, 0) or 0)
+            if display_pct <= 0:
                 continue
-            display_pct = max(pct, label_min_pct)
+            true_pct = float(seg.get(f'{key}_true', display_pct) or 0)
             bh = display_pct / 100 * CH2
             by = stack - bh
             svg += f'<rect x="{bx}" y="{by:.1f}" width="{bar_w}" height="{bh:.1f}" fill="{color}" rx="1"/>'
             svg += f'<line x1="{bx}" y1="{by:.1f}" x2="{bx+bar_w}" y2="{by:.1f}" stroke="#fff" stroke-width="1"/>'
-            if pct >= 3 and bh > 10:
+            # Label shows true value (empty string when true value is 0)
+            if true_pct > 0 and bh > 10:
                 svg += (
                     f'<text x="{bx + bar_w/2:.1f}" y="{by + bh/2 + 2.5:.1f}" '
-                    f'text-anchor="middle" font-size="7" fill="#fff" font-weight="600">'
-                    f'{pct:.0f}%</text>'
+                    f'text-anchor="middle" font-size="7" fill="#fff" font-weight="700">'
+                    f'{true_pct:.0f}%</text>'
                 )
             stack = by
 
@@ -1395,9 +1413,9 @@ def _render_daily_energy_consumed(data, ai):
 
 
 def _render_daily_allocation(data, ai):
-    """5.3 — Diverging bar: Expected (blue) base + excess (orange, actual-expected) above zero;
-    Unpicked below zero (green if actual≥expected, red if shortfall).
-    Period Total panel: Expected vs Actual side-by-side."""
+    """5.3 — Diverging bar per spec §7.3.
+    Red when actual > expected (overrun), green when actual ≤ expected.
+    Period Total: fixed thirds (66.67% pos / 33.33% neg), always REAL_RED negative."""
     days    = data.get('days') or []
     summary = data.get('summary') or {}
 
@@ -1406,10 +1424,9 @@ def _render_daily_allocation(data, ai):
         ai_html = f'<div class="ai-block">{ai["allocation_narrative"]}</div>'
 
     def _unpicked_color(d):
-        return _C['gap_green'] if float(d.get('actual_mw', 0) or 0) >= float(d.get('expected_mw', 0) or 0) else _C['critical']
+        # Red = consumed MORE than available (overrun); green = consumed less (§7.3)
+        return _C['critical'] if float(d.get('actual_mw', 0) or 0) > float(d.get('expected_mw', 0) or 0) else _C['gap_green']
 
-    # Pre-compute excess_mw = max(0, actual - expected) so the stacked bar
-    # shows only the portion above expected, not the full actual on top.
     processed_days = []
     for d in days:
         exp = float(d.get('expected_mw', 0) or 0)
@@ -1424,24 +1441,44 @@ def _render_daily_allocation(data, ai):
         y_title='MW',
     ) if processed_days else '<p style="font-size:9px;color:#999;">No allocation data.</p>'
 
-    period_total = _svg_period_total(
-        [
-            ('Expected', summary.get('total_expected_mw', 0), _C['primary']),
-            ('Actual',   summary.get('total_actual_mw',   0), _C['warning']),
-        ],
-        title='Period\nTotal',
+    # Period Total panel — fixed thirds, not proportional (§7.3)
+    tot_exp = float(summary.get('total_expected_mw', 0) or 0)
+    tot_act = float(summary.get('total_actual_mw',   0) or 0)
+    variance_signed   = tot_act - tot_exp
+    variance_magnitude = abs(variance_signed)
+    REAL_RED = '#E53935'
+    period_total = (
+        f'<div style="width:90px;flex-shrink:0;display:flex;flex-direction:column;'
+        f'font-size:6.5px;font-weight:600;color:#fff;">'
+        f'<div style="font-size:6px;color:#7C8FAC;text-align:center;margin-bottom:3px;font-weight:400;">Period Total</div>'
+        f'<div style="flex:1;display:flex;flex-direction:column;">'
+        # Positive portion: fixed flex:2 (66.67%) split into two equal halves
+        f'<div style="flex:2;display:flex;flex-direction:column;">'
+        f'<div style="flex:1;background:{_C["primary"]};display:flex;align-items:center;'
+        f'justify-content:center;border-radius:3px 3px 0 0;">{round(tot_exp):,}</div>'
+        f'<div style="flex:1;background:{_C["warning"]};display:flex;align-items:center;'
+        f'justify-content:center;">{round(tot_act):,}</div>'
+        f'</div>'
+        # Zero divider
+        f'<div style="height:2px;background:#2A3547;flex-shrink:0;"></div>'
+        # Negative portion: fixed flex:1 (33.33%), always REAL_RED
+        + (f'<div style="flex:1;background:{REAL_RED};display:flex;align-items:center;'
+           f'justify-content:center;border-radius:0 0 3px 3px;">-{round(variance_magnitude):,}</div>'
+           if variance_magnitude > 0 else
+           f'<div style="flex:1;"></div>')
+        + f'</div></div>'
     )
 
+    # Legend: 3 swatches only — green swatch intentionally omitted (§7.3)
     legend = (
         f'<div style="display:flex;gap:14px;font-size:8.5px;margin-bottom:8px;flex-wrap:wrap;">'
         f'<span style="display:flex;align-items:center;gap:4px;">'
-        f'<span style="width:10px;height:10px;border-radius:2px;background:{_C["primary"]};display:inline-block;"></span>Hourly Expected Allocation</span>'
+        f'<span style="width:10px;height:10px;border-radius:2px;background:{_C["primary"]};display:inline-block;"></span>Hourly Expected allocation</span>'
         f'<span style="display:flex;align-items:center;gap:4px;">'
-        f'<span style="width:10px;height:10px;border-radius:2px;background:{_C["warning"]};display:inline-block;"></span>Hourly Avg Consumption</span>'
+        f'<span style="width:10px;height:10px;border-radius:2px;background:{_C["warning"]};display:inline-block;"></span>Hourly average consumption</span>'
         f'<span style="display:flex;align-items:center;gap:4px;">'
-        f'<span style="width:10px;height:10px;border-radius:2px;background:{_C["gap_green"]};display:inline-block;"></span>Consumed more than available</span>'
-        f'<span style="display:flex;align-items:center;gap:4px;">'
-        f'<span style="width:10px;height:10px;border-radius:2px;background:{_C["critical"]};display:inline-block;"></span>Consumed less than available</span>'
+        f'<span style="width:10px;height:10px;border-radius:2px;background:{REAL_RED};display:inline-block;"></span>'
+        f'Unpicked energy due to low energy and TCN constraints </span>'
         f'</div>'
     )
 
@@ -1457,7 +1494,7 @@ def _render_daily_allocation(data, ai):
         f'<div class="kpi-value">{_fmt_mw(summary.get("total_unpicked_mw", 0))}</div></div>'
         f'</div>'
         f'{legend}'
-        f'<div style="display:flex;align-items:flex-start;gap:8px;">'
+        f'<div style="display:flex;align-items:stretch;gap:8px;">'
         f'<div style="flex:1;overflow-x:auto;">{svg}</div>'
         f'{period_total}'
         f'</div>'
@@ -1527,21 +1564,47 @@ def _render_compliance_by_segment(data, ai):
 
     BUCKETS = ['exceeding', 'on_target', 'below_target', 'poor', 'critical']
     BUCKET_LABELS = {
-        'exceeding':    'Exceeding (>105%)',
-        'on_target':    'On Target (95%-105%)',
-        'below_target': 'Below Target (85%-94%)',
-        'poor':         'Poor (75%-84%)',
-        'critical':     'Critical (<75%)',
+        'exceeding':    'Exceeding(>105%)',
+        'on_target':    'On Target(95%-105%)',
+        'below_target': 'Below target(85%-94%)',
+        'poor':         'Poor(75%-84%)',
+        'critical':     'Critical(<75%)',
     }
+    MIN_VISIBLE_PCT = 10.0  # §7.5: any nonzero bucket < 10% raised to 10%
 
-    # Pre-compute percentage for each bucket per segment
+    def _apply_floor(raw: dict) -> dict:
+        """Floor nonzero buckets to MIN_VISIBLE_PCT; subtract proportionally from donors."""
+        result = dict(raw)
+        deficit = 0.0
+        for bk in BUCKETS:
+            v = result.get(bk, 0)
+            if 0 < v < MIN_VISIBLE_PCT:
+                deficit += MIN_VISIBLE_PCT - v
+                result[bk] = MIN_VISIBLE_PCT
+        if deficit <= 0:
+            return result
+        donors = {bk: result[bk] for bk in BUCKETS
+                  if result.get(bk, 0) >= MIN_VISIBLE_PCT and raw.get(bk, 0) >= MIN_VISIBLE_PCT}
+        donor_total = sum(donors.values())
+        if donor_total > 0:
+            for bk in donors:
+                result[bk] -= deficit * (donors[bk] / donor_total)
+        return result
+
+    # Pre-compute true percentages then apply floor; true values kept for labels
     processed = []
     for seg in segments:
         total = max(seg.get('total', 1), 1)
         entry = {'label': seg.get('segment', ''), 'segment': seg.get('segment', '')}
+        true_pcts = {}
         for bk in BUCKETS:
             cnt = seg.get(bk, {}).get('count', 0) if isinstance(seg.get(bk), dict) else 0
-            entry[bk] = cnt / total * 100
+            true_pcts[bk] = cnt / total * 100
+        display_pcts = _apply_floor(true_pcts)
+        for bk in BUCKETS:
+            # Store display height + true value for labels
+            entry[bk]              = display_pcts[bk]   # used for bar height
+            entry[f'{bk}_true']    = true_pcts[bk]       # used for label text
         processed.append(entry)
 
     # series_buckets: exceeding at bottom, critical at top (matches dashboard stacking)
@@ -1745,6 +1808,7 @@ def _render_energy_by_voltage(data, ai):
             comp_months,
             [('gwh_33kv', _C['primary']), ('gwh_11kv', _C['warning'])],
             title='Comparison\nBetween Present\nand Previous\nMonth (Total)',
+            label_colors=['#fff', _C['text']],  # white on 33KV/blue, dark on 11KV/yellow §7.10
         ) if len(comp_months) >= 1 else ''
 
         cards_html += (
