@@ -255,22 +255,24 @@ class TMOReportService:
         return self._tmo().get_daily_allocation()
 
     def section_tmo_feeder_compliance_table(self):
-        # Compliance table shows a single day: yesterday if to_date is today,
-        # otherwise to_date itself (last complete day of the report period).
+        # MTD compliance: full period from month start to yesterday (or to_date for past months).
+        # Using full period gives average daily compliance — not a single snapshot day.
         from datetime import date as _date, timedelta
-        today = _date.today()
-        effective = self.to_date if self.to_date < today else today - timedelta(days=1)
+        today     = _date.today()
+        mtd_from  = self.from_date.replace(day=1)
+        mtd_to    = self.to_date if self.to_date < today else today - timedelta(days=1)
         from tmo.services import TMOService
-        svc = TMOService(effective, effective, filters={})
+        svc = TMOService(mtd_from, mtd_to, filters={})
         return svc.get_supply_compliance()
 
     def section_tmo_compliance_by_segment(self):
-        # Same single-day logic as feeder compliance table
+        # MTD compliance by segment — same full-period logic as feeder table.
         from datetime import date as _date, timedelta
-        today = _date.today()
-        effective = self.to_date if self.to_date < today else today - timedelta(days=1)
+        today     = _date.today()
+        mtd_from  = self.from_date.replace(day=1)
+        mtd_to    = self.to_date if self.to_date < today else today - timedelta(days=1)
         from tmo.services import TMOService
-        svc = TMOService(effective, effective, filters={})
+        svc = TMOService(mtd_from, mtd_to, filters={})
         return svc.get_compliance_summary()
 
     def section_tmo_minigrids_daily(self, config=None):
