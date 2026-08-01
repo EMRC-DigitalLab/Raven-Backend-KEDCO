@@ -85,8 +85,12 @@ TMO_EXTRA = """
 .bk-poor        { background:#FFCDD2; color:#B71C1C; }
 .bk-critical    { background:#FFCDD2; color:#B71C1C; }
 
-/* Allow long-content pages (feeder table, incidents) to expand past 297mm in browser */
-@media screen { .page { height: auto !important; min-height: 265mm; overflow: visible !important; } }
+/* Allow long-content pages to expand past 297mm in browser preview */
+@media screen {
+  .page          { height: auto !important; min-height: 265mm; overflow: visible !important; }
+  .page-content  { overflow: visible !important; }
+  .two-col-half  { overflow: visible !important; }
+}
 
 .chart-wrap { margin: 4px 0 6px; }
 
@@ -218,8 +222,8 @@ _LC = '#7C8FAC'   # label colour
 
 def _svg_open(w=_W, h=_H):
     return (f'<svg xmlns="http://www.w3.org/2000/svg" '
-            f'viewBox="0 0 {w} {h}" width="100%" height="auto" '
-            f'style="display:block;font-family:sans-serif;">')
+            f'viewBox="0 0 {w} {h}" width="100%" '
+            f'style="display:block;font-family:sans-serif;aspect-ratio:{w}/{h};">')
 
 
 def _svg_grid(y_max, y_min=0, n=4, w=_W, h=_H):
@@ -381,8 +385,8 @@ def svg_hbar_segments(segments):
     H_TOT = len(segments) * (ROW_H + PAD) + 14
 
     svg = (f'<svg xmlns="http://www.w3.org/2000/svg" '
-           f'viewBox="0 0 500 {H_TOT}" width="100%" height="auto" '
-           f'style="display:block;font-family:sans-serif;">')
+           f'viewBox="0 0 500 {H_TOT}" width="100%" '
+           f'style="display:block;font-family:sans-serif;aspect-ratio:500/{H_TOT};">')
 
     for si, seg in enumerate(segments):
         y   = 8 + si * (ROW_H + PAD)
@@ -476,7 +480,7 @@ def svg_line_chart(days, series, y_title='GWh', h=170, every_day=False):
         return MT + CH - (v / span) * CH
 
     svg = (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {H}" '
-           f'width="100%" height="auto" style="display:block;font-family:sans-serif;">')
+           f'width="100%" style="display:block;font-family:sans-serif;aspect-ratio:{W}/{H};">')
 
     cx, cy = ML - 28, MT + CH // 2
     svg += (f'<text x="{cx}" y="{cy}" text-anchor="middle" font-size="7" fill="{_LC}" '
@@ -575,7 +579,7 @@ def svg_line_allocation(days):
         return MT + CH - (v / span) * CH
 
     svg = (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {H}" '
-           f'width="100%" height="auto" style="display:block;font-family:sans-serif;">')
+           f'width="100%" style="display:block;font-family:sans-serif;aspect-ratio:{W}/{H};">')
 
     cx, cy = ML - 28, MT + CH // 2
     svg += (f'<text x="{cx}" y="{cy}" text-anchor="middle" font-size="7" fill="{_LC}" '
