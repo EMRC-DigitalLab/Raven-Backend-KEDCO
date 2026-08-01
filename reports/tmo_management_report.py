@@ -85,12 +85,10 @@ TMO_EXTRA = """
 .bk-poor        { background:#FFCDD2; color:#B71C1C; }
 .bk-critical    { background:#FFCDD2; color:#B71C1C; }
 
-/* Allow long-content pages to expand past 297mm in browser preview */
-@media screen {
-  .page          { height: auto !important; min-height: 265mm; overflow: visible !important; }
-  .page-content  { overflow: visible !important; }
-  .two-col-half  { overflow: visible !important; }
-}
+/* TMO report: pages expand to fit content — no clipping */
+.page         { height: auto !important; min-height: 265mm; overflow: visible !important; }
+.page-content { overflow: visible !important; height: auto !important; flex: none !important; }
+.two-col-half { overflow: visible !important; }
 
 .chart-wrap { margin: 4px 0 6px; }
 
