@@ -1842,7 +1842,7 @@ class TMOManagementPDFGenerator:
         sections      list[str] — subset of ALL_SECTIONS; omit for all
     """
 
-    def __init__(self, report_config: dict, data_service):
+    def __init__(self, report_config: dict, data_service, user=None):
         import base64 as _b64
         from django.conf import settings
 
