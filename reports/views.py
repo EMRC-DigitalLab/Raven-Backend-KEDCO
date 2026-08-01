@@ -931,20 +931,31 @@ def generate_tmo_management_report(request):
     }
     """
     from .tmo_service import TMOReportService
-    from .tmo_management_report import TMOManagementPDFGenerator
+    from .tmo_management_report import TMOManagementPDFGenerator, _compute_period
+    import calendar as _cal
 
+    # Accept year+month (preferred) OR legacy filters.from_date/to_date
+    year  = request.data.get('year')
+    month = request.data.get('month')
     filters = request.data.get('filters', {})
-    if not filters.get('from_date') or not filters.get('to_date'):
+
+    if year and month:
+        from_d, to_d, _, _ = _compute_period(int(year), int(month))
+        from_date = str(from_d)
+        to_date   = str(to_d)
+    elif filters.get('from_date') and filters.get('to_date'):
+        from_date = filters['from_date']
+        to_date   = filters['to_date']
+        year  = int(from_date[:4])
+        month = int(from_date[5:7])
+    else:
         return Response(
-            {'error': 'from_date and to_date are required in filters'},
+            {'error': 'Provide year+month, or filters.from_date and filters.to_date'},
             status=status.HTTP_400_BAD_REQUEST,
         )
 
     try:
-        tmo_service = TMOReportService({
-            'from_date': filters['from_date'],
-            'to_date':   filters['to_date'],
-        })
+        tmo_service = TMOReportService({'from_date': from_date, 'to_date': to_date})
 
         report_config = {
             'report_title':    request.data.get('report_title', 'TMO Dashboard Report'),
@@ -953,6 +964,8 @@ def generate_tmo_management_report(request):
             'theme':           request.data.get('theme', {}),
             'include_ai':      bool(request.data.get('include_ai', True)),
             'sections':        request.data.get('sections') or None,
+            'year':            int(year),
+            'month':           int(month),
         }
 
         generator = TMOManagementPDFGenerator(report_config, tmo_service, user=request.user)
@@ -982,27 +995,39 @@ def generate_tmo_management_html_preview(request):
     include_ai defaults to false for speed.
     """
     from .tmo_service import TMOReportService
-    from .tmo_management_report import TMOManagementPDFGenerator
+    from .tmo_management_report import TMOManagementPDFGenerator, _compute_period
 
+    # Accept year+month (preferred) OR legacy filters.from_date/to_date
+    year  = request.data.get('year')
+    month = request.data.get('month')
     filters = request.data.get('filters', {})
-    if not filters.get('from_date') or not filters.get('to_date'):
+
+    if year and month:
+        from_d, to_d, _, _ = _compute_period(int(year), int(month))
+        from_date = str(from_d)
+        to_date   = str(to_d)
+    elif filters.get('from_date') and filters.get('to_date'):
+        from_date = filters['from_date']
+        to_date   = filters['to_date']
+        year  = int(from_date[:4])
+        month = int(from_date[5:7])
+    else:
         return Response(
-            {'error': 'from_date and to_date are required in filters'},
+            {'error': 'Provide year+month, or filters.from_date and filters.to_date'},
             status=status.HTTP_400_BAD_REQUEST,
         )
 
     try:
-        tmo_service = TMOReportService({
-            'from_date': filters['from_date'],
-            'to_date':   filters['to_date'],
-        })
+        tmo_service = TMOReportService({'from_date': from_date, 'to_date': to_date})
         report_config = {
             'report_title':    request.data.get('report_title', 'TMO Dashboard Report'),
             'report_subtitle': request.data.get('report_subtitle', ''),
             'company_name':    request.data.get('company_name', 'KANO ELECTRICITY DISTRIBUTION COMPANY'),
             'theme':           request.data.get('theme', {}),
-            'include_ai':      False,
+            'include_ai':      bool(request.data.get('include_ai', False)),
             'sections':        request.data.get('sections') or None,
+            'year':            int(year),
+            'month':           int(month),
         }
         generator = TMOManagementPDFGenerator(report_config, tmo_service, user=request.user)
         return Response({'html': generator.generate_html()})
