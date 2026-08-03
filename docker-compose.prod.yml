@@ -104,8 +104,8 @@ services:
     env_file: .env
     environment:
       - REDIS_URL=redis://redis:6379/2
-    entrypoint: ["/bin/sh", "-c",
-                 "chmod 777 /app/celerybeat && exec celery -A raven beat -l info --schedule /app/celerybeat/celerybeat-schedule"]
+    entrypoint: ["celery", "-A", "raven", "beat", "-l", "info",
+                 "--schedule", "/app/celerybeat/celerybeat-schedule"]
     volumes:
       - celerybeat_prod:/app/celerybeat
     networks:
