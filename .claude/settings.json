@@ -159,7 +159,18 @@
       "Bash(python -c \"from thefuzz import fuzz; print\\('thefuzz available'\\)\")",
       "Bash(python -c \"import difflib; print\\('difflib \\(builtin\\) available'\\)\")",
       "Bash(PYTHONIOENCODING=utf-8 python \"C:\\\\Users\\\\TRIUMP~1\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-TriumphAdeniran-OneDrive---Market-and-Regulatory-Consultants-Ltd-Desktop-Raven-Code-Base-Raven-Backend-KEDCO\\\\eced7ae1-261a-4f46-b7f4-deaa213b715a\\\\scratchpad\\\\fix_funtua_textile_mill.py\")",
-      "Bash(PYTHONIOENCODING=utf-8 python \"C:\\\\Users\\\\TRIUMP~1\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-TriumphAdeniran-OneDrive---Market-and-Regulatory-Consultants-Ltd-Desktop-Raven-Code-Base-Raven-Backend-KEDCO\\\\eced7ae1-261a-4f46-b7f4-deaa213b715a\\\\scratchpad\\\\check_variance_days.py\")"
+      "Bash(PYTHONIOENCODING=utf-8 python \"C:\\\\Users\\\\TRIUMP~1\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-TriumphAdeniran-OneDrive---Market-and-Regulatory-Consultants-Ltd-Desktop-Raven-Code-Base-Raven-Backend-KEDCO\\\\eced7ae1-261a-4f46-b7f4-deaa213b715a\\\\scratchpad\\\\check_variance_days.py\")",
+      "Bash(PYTHONIOENCODING=utf-8 python \"C:\\\\Users\\\\TRIUMP~1\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-TriumphAdeniran-OneDrive---Market-and-Regulatory-Consultants-Ltd-Desktop-Raven-Code-Base-Raven-Backend-KEDCO\\\\eced7ae1-261a-4f46-b7f4-deaa213b715a\\\\scratchpad\\\\reverse_check.py\")",
+      "Bash(python \"C:\\\\Users\\\\TRIUMP~1\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-TriumphAdeniran-OneDrive---Market-and-Regulatory-Consultants-Ltd-Desktop-Raven-Code-Base-Raven-Backend-KEDCO\\\\eced7ae1-261a-4f46-b7f4-deaa213b715a\\\\scratchpad\\\\inspect_mapping.py\")",
+      "Bash(python \"C:\\\\Users\\\\TRIUMP~1\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-TriumphAdeniran-OneDrive---Market-and-Regulatory-Consultants-Ltd-Desktop-Raven-Code-Base-Raven-Backend-KEDCO\\\\eced7ae1-261a-4f46-b7f4-deaa213b715a\\\\scratchpad\\\\search_mdni_gaps.py\")",
+      "Bash(python \"C:\\\\Users\\\\TRIUMP~1\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-TriumphAdeniran-OneDrive---Market-and-Regulatory-Consultants-Ltd-Desktop-Raven-Code-Base-Raven-Backend-KEDCO\\\\eced7ae1-261a-4f46-b7f4-deaa213b715a\\\\scratchpad\\\\mass_search_regions.py\")",
+      "Bash(python \"C:\\\\Users\\\\TRIUMP~1\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-TriumphAdeniran-OneDrive---Market-and-Regulatory-Consultants-Ltd-Desktop-Raven-Code-Base-Raven-Backend-KEDCO\\\\eced7ae1-261a-4f46-b7f4-deaa213b715a\\\\scratchpad\\\\mass_pull_regions.py\")",
+      "Bash(python \"C:\\\\Users\\\\TRIUMP~1\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-TriumphAdeniran-OneDrive---Market-and-Regulatory-Consultants-Ltd-Desktop-Raven-Code-Base-Raven-Backend-KEDCO\\\\eced7ae1-261a-4f46-b7f4-deaa213b715a\\\\scratchpad\\\\quality_check_regions.py\")",
+      "Bash(PYTHONIOENCODING=utf-8 python \"C:\\\\Users\\\\TRIUMP~1\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-TriumphAdeniran-OneDrive---Market-and-Regulatory-Consultants-Ltd-Desktop-Raven-Code-Base-Raven-Backend-KEDCO\\\\eced7ae1-261a-4f46-b7f4-deaa213b715a\\\\scratchpad\\\\bulk_import_regions92.py\")",
+      "Bash(PYTHONIOENCODING=utf-8 python \"C:\\\\Users\\\\TRIUMP~1\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-TriumphAdeniran-OneDrive---Market-and-Regulatory-Consultants-Ltd-Desktop-Raven-Code-Base-Raven-Backend-KEDCO\\\\eced7ae1-261a-4f46-b7f4-deaa213b715a\\\\scratchpad\\\\full_mdni_scan.py\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('tmo/services.py', encoding='utf-8'\\).read\\(\\)\\)\")",
+      "Bash(PYTHONIOENCODING=utf-8 python -c ' *)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('tmo/services.py', encoding='utf-8'\\).read\\(\\)\\); print\\('syntax OK'\\)\")"
     ],
     "additionalDirectories": [
       "c:\\c\\Users\\TriumphAdeniran\\OneDrive - Market and Regulatory Consultants Ltd\\Desktop\\Raven Code Base\\Raven-Backend-KEDCO"
