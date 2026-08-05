@@ -22,6 +22,14 @@ from tmo.constants import STANDARD_DAILY_FORECAST_GWH
 from tmo.models import TMODailyAllocation, TMOFeederSupplyTarget, TMOIncident, TMOMonthlySegmentTarget, TMONetworkConfig, TMONetworkDispatch, TMOSupplyHoursTarget
 
 
+# Confirmed phantom duplicate feeder records (same physical feeder re-onboarded
+# under a second substation with no real meter history). Excluded here rather
+# than deleted because each has real HourlyLoad/billing/interruption history
+# attached that a straight delete would destroy — proper merge is a separate,
+# larger data-cleanup effort.
+DUPLICATE_FEEDER_SLUGS = ['KN-DAK-RAN', 'KN-DAK-GEZ', 'KN-NAI-DAW']
+
+
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 
@@ -934,7 +942,13 @@ class TMOService:
         Compares against daily target derived from monthly GWh target in TMONetworkConfig.
         Covers Slides 2 & 3 (Daily Energy Forecast / Daily Energy Allocation).
         """
-        feeder_ids = list(self._base_feeder_qs().filter(voltage_level='33kv').values_list('id', flat=True))
+        feeder_ids = list(
+            self._base_feeder_qs()
+            .filter(voltage_level='33kv')
+            .exclude(slug__in=DUPLICATE_FEEDER_SLUGS)
+            .exclude(is_minigrid=True)
+            .values_list('id', flat=True)
+        )
 
         # 33KV-only: no double-count risk from upstream/downstream pairs, skip _energy_ids()
         daily_map = _daily_energy_breakdown(feeder_ids, self.from_date, self.to_date)
