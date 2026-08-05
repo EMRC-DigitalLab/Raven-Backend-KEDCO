@@ -49,7 +49,8 @@ def _classify_feeders(feeder_ids, from_date, to_date):
     )
     meter_ids = set()
     for row in stats:
-        if int(row['cnt'] or 0) > 0 and float(row['max_daily'] or 0) <= DAILY_BALLOON_LIMIT:
+        max_daily = float(row['max_daily'] or 0)
+        if int(row['cnt'] or 0) > 0 and 0 < max_daily <= DAILY_BALLOON_LIMIT:
             meter_ids.add(row['feeder_id'])
     balloon_ids = set(feeder_ids) - meter_ids
     return meter_ids, balloon_ids
@@ -899,8 +900,23 @@ class TMOService:
                 return 0.0
             return calculate_energy_delivered(self._energy_ids(list(ids)), from_d, to_d)['total_mwh']
 
-        def _total(from_d, to_d):
+        def _raw_total(from_d, to_d):
             return calculate_energy_delivered(self._energy_ids(list(feeder_ids)), from_d, to_d)['total_mwh']
+
+        # Bulk network total — same feeder population/method as get_daily_energy()
+        # and get_energy_by_segment(), so this reconciles with the Daily Energy
+        # Allocation / P&L segment slides instead of silently diverging by the
+        # technical/distribution loss between bulk 33KV injection and retail
+        # 11KV delivery.
+        def _bulk_total(from_d, to_d):
+            bulk_ids = list(
+                self._base_feeder_qs()
+                .filter(voltage_level='33kv')
+                .exclude(slug__in=DUPLICATE_FEEDER_SLUGS)
+                .exclude(is_minigrid=True)
+                .values_list('id', flat=True)
+            )
+            return calculate_energy_delivered(bulk_ids, from_d, to_d)['total_mwh']
 
         def _share(part, total):
             return round(_pct(part, total), 1) if total else 0.0
@@ -919,17 +935,29 @@ class TMOService:
                     return 'Declining –'
                 return 'Stable'
 
-        # Day totals — Regions = everything that isn't MDI or MDNI (minigrids included)
-        day_total = _total(day, day)
-        day_mdi   = _energy(self.mdi_ids & feeder_ids, day, day)
-        day_mdni  = _energy(self.mdni_ids & feeder_ids, day, day)
-        day_reg   = max(day_total - day_mdi - day_mdni, 0.0)
+        # Retail-level (11KV/customer) energy per segment, used ONLY to derive
+        # accurate segment SHARE percentages — see get_energy_by_segment().
+        # Day — Regions = everything that isn't MDI or MDNI (minigrids included)
+        day_raw_total = _raw_total(day, day)
+        day_mdi_raw   = _energy(self.mdi_ids & feeder_ids, day, day)
+        day_mdni_raw  = _energy(self.mdni_ids & feeder_ids, day, day)
+        day_reg_raw   = max(day_raw_total - day_mdi_raw - day_mdni_raw, 0.0)
 
-        # MTD totals
-        mtd_total = _total(mtd_start, day)
-        mtd_mdi   = _energy(self.mdi_ids & feeder_ids, mtd_start, day)
-        mtd_mdni  = _energy(self.mdni_ids & feeder_ids, mtd_start, day)
-        mtd_reg   = max(mtd_total - mtd_mdi - mtd_mdni, 0.0)
+        day_total = _bulk_total(day, day)
+        day_mdi   = day_total * (day_mdi_raw / day_raw_total) if day_raw_total else 0.0
+        day_mdni  = day_total * (day_mdni_raw / day_raw_total) if day_raw_total else 0.0
+        day_reg   = day_total * (day_reg_raw / day_raw_total) if day_raw_total else 0.0
+
+        # MTD
+        mtd_raw_total = _raw_total(mtd_start, day)
+        mtd_mdi_raw   = _energy(self.mdi_ids & feeder_ids, mtd_start, day)
+        mtd_mdni_raw  = _energy(self.mdni_ids & feeder_ids, mtd_start, day)
+        mtd_reg_raw   = max(mtd_raw_total - mtd_mdi_raw - mtd_mdni_raw, 0.0)
+
+        mtd_total = _bulk_total(mtd_start, day)
+        mtd_mdi   = mtd_total * (mtd_mdi_raw / mtd_raw_total) if mtd_raw_total else 0.0
+        mtd_mdni  = mtd_total * (mtd_mdni_raw / mtd_raw_total) if mtd_raw_total else 0.0
+        mtd_reg   = mtd_total * (mtd_reg_raw / mtd_raw_total) if mtd_raw_total else 0.0
 
         segments = []
         for seg, d_val, m_val in [
@@ -1084,6 +1112,36 @@ class TMOService:
                 '33kv': _breakdown(ids_33, prev_month_first, prev_month_last),
                 '11kv': _breakdown(ids_11, prev_month_first, prev_month_last),
             }
+
+        # Scale retail-level per-day totals onto the bulk 33KV network total (same
+        # population/method as get_daily_energy()), same rationale as
+        # get_energy_by_segment()/get_energy_by_voltage(): the retail-level MDI/MDNI/
+        # Regions split is only meaningful at that level, but the network's true
+        # magnitude includes technical/distribution losses that only show up in the
+        # bulk figure. Without this, this endpoint's MTD total silently diverges from
+        # every other segment total on the dashboard.
+        def _bulk_total_mwh(fd, td):
+            bulk_ids = list(
+                self._base_feeder_qs()
+                .filter(voltage_level='33kv')
+                .exclude(slug__in=DUPLICATE_FEEDER_SLUGS)
+                .exclude(is_minigrid=True)
+                .values_list('id', flat=True)
+            )
+            return calculate_energy_delivered(bulk_ids, fd, td)['total_mwh']
+
+        def _scale_period(period: dict, fd, td):
+            raw_total = sum(v for seg in period.values() for volt in seg.values() for v in volt.values())
+            if not raw_total:
+                return period
+            factor = _bulk_total_mwh(fd, td) / raw_total
+            return {
+                seg: {volt: {d: mwh * factor for d, mwh in by_date.items()} for volt, by_date in v.items()}
+                for seg, v in period.items()
+            }
+
+        curr = _scale_period(curr, self.from_date, self.to_date)
+        prev = _scale_period(prev, prev_month_first, prev_month_last)
 
         # Index previous-month data by day number (1-31) for easy lookup
         def _by_day_number(voltage_daily: dict) -> dict[int, float]:
