@@ -461,10 +461,32 @@ class TMOService:
                 ).aggregate(t=Sum('target_mwh'))['t'] or 0
             )
 
+        # Retail-level (11KV/customer) energy per segment. MDI/MDNI classification
+        # is only meaningful at this level — a bulk 33KV feeder often serves a mixed
+        # customer base and can't be reliably tagged as a single segment (e.g. a
+        # whole-district feeder inheriting "MDNI" from one downstream customer).
+        # Used ONLY to derive accurate segment SHARE percentages, not absolute totals.
+        raw_actual = {name: _energy(ids) for name, ids in buckets.items()}
+        raw_total  = sum(raw_actual.values())
+
+        # Bulk network total — same feeder population/method as get_daily_energy(),
+        # so this always reconciles with the Daily Energy Allocation slide instead of
+        # silently diverging by the technical/distribution loss between bulk 33KV
+        # injection and retail 11KV delivery.
+        bulk_ids = list(
+            self._base_feeder_qs()
+            .filter(voltage_level='33kv')
+            .exclude(slug__in=DUPLICATE_FEEDER_SLUGS)
+            .exclude(is_minigrid=True)
+            .values_list('id', flat=True)
+        )
+        bulk_total = calculate_energy_delivered(bulk_ids, self.from_date, self.to_date)['total_mwh']
+
         segments = []
         totals   = {'actual': 0.0, 'target': 0.0}
         for name, ids in buckets.items():
-            actual = _energy(ids)
+            share  = (raw_actual[name] / raw_total) if raw_total else 0.0
+            actual = bulk_total * share
             target = _target(ids)
             ach    = _pct(actual, target)
             totals['actual'] += actual
@@ -1445,6 +1467,59 @@ class TMOService:
         curr_totals = _vol_totals(self.from_date, self.to_date)
         prev_totals = _vol_totals(prev_start, prev_end)
 
+        # Scale retail-level totals onto the bulk 33KV network total (same population/
+        # method as get_daily_energy()), same rationale as get_energy_by_segment(): MDI/
+        # MDNI/Regions and 33KV/11KV splits are only meaningful at the retail level, but
+        # the network's true magnitude includes technical/distribution losses that only
+        # show up in the bulk figure. Scaling preserves the retail-derived proportions
+        # while making the grand total reconcile with Daily Energy Allocation.
+        def _bulk_total_mwh(fd, td):
+            bulk_ids = list(
+                self._base_feeder_qs()
+                .filter(voltage_level='33kv')
+                .exclude(slug__in=DUPLICATE_FEEDER_SLUGS)
+                .exclude(is_minigrid=True)
+                .values_list('id', flat=True)
+            )
+            return calculate_energy_delivered(bulk_ids, fd, td)['total_mwh']
+
+        def _scale(totals, fd, td):
+            raw_total = sum(v for seg in totals.values() for v in seg.values())
+            if not raw_total:
+                return totals
+            factor = _bulk_total_mwh(fd, td) / raw_total
+            return {
+                seg: {vol: mwh * factor for vol, mwh in v.items()}
+                for seg, v in totals.items()
+            }
+
+        curr_totals = _scale(curr_totals, self.from_date, self.to_date)
+        prev_totals = _scale(prev_totals, prev_start, prev_end)
+
+        # Apply the same current-month scale factor to the daily series so the "days"
+        # breakdown reconciles with the (now-scaled) month_comparison totals.
+        curr_raw_total = sum(
+            vol_val
+            for d_str in day_agg
+            for seg in ('MDI', 'MDNI', 'Regional')
+            for vol_val in day_agg[d_str].get(seg, {'33kv': 0.0, '11kv': 0.0}).values()
+        )
+        if curr_raw_total:
+            day_scale_factor = _bulk_total_mwh(self.from_date, self.to_date) / curr_raw_total
+            for entry in days:
+                for seg in ('MDI', 'MDNI', 'Regional'):
+                    s = entry['segments'][seg]
+                    mwh_33 = s['energy_33kv_mwh'] * day_scale_factor
+                    mwh_11 = s['energy_11kv_mwh'] * day_scale_factor
+                    entry['segments'][seg] = {
+                        'energy_33kv_mwh': round(mwh_33, 4),
+                        'energy_11kv_mwh': round(mwh_11, 4),
+                        'total_mwh':       round(mwh_33 + mwh_11, 4),
+                        'energy_33kv_gwh': round(mwh_33 / 1000, 4),
+                        'energy_11kv_gwh': round(mwh_11 / 1000, 4),
+                        'total_gwh':       round((mwh_33 + mwh_11) / 1000, 4),
+                    }
+
         month_comparison = {}
         for seg in ('MDI', 'MDNI', 'Regional'):
             c = curr_totals.get(seg, {'33kv': 0.0, '11kv': 0.0})
@@ -1640,25 +1715,22 @@ class TMOService:
                     )
                 }
 
-        # GCR measures energy at the 33KV level only — 11KV distribution feeders
-        # are downstream of these and would double-count if included.
-        kv33_ids = set(
-            Feeder.objects.filter(id__in=feeder_ids, voltage_level='33kv')
-            .values_list('id', flat=True)
-        )
+        # Reuse get_energy_by_segment()'s actual_mwh — it's the single source of truth
+        # for "actual energy consumed per segment" (retail-level classification, scaled
+        # onto the bulk network total). Previously this method recomputed its own 33KV-
+        # only, unstripped total here, which double-counted district bulk feeders (e.g.
+        # BRISCOE, ZARIA ROAD) that also supply metered downstream 11KV feeders — that
+        # produced a "consumed_gwh" wildly inconsistent with the actual-consumption
+        # slide for the same segment/period.
+        seg_actual_mwh = {s['segment']: s['actual_mwh'] for s in self.get_energy_by_segment()['segments']}
 
-        def _actual(ids):
-            ids_33 = ids & kv33_ids
-            if not ids_33:
-                return 0.0
-            return calculate_energy_delivered(list(ids_33), self.from_date, self.to_date)['total_mwh']
-
-        regional_ids = feeder_ids - self.mdi_ids - self.mdni_ids
+        def _actual(seg_name):
+            return seg_actual_mwh.get(seg_name, 0.0)
 
         seg_data = [
             ('MDI',     self.mdi_ids & feeder_ids),
             ('MDNI',    self.mdni_ids & feeder_ids),
-            ('Regions', regional_ids),
+            ('Regions', feeder_ids - self.mdi_ids - self.mdni_ids),
         ]
 
         rows = []
@@ -1671,7 +1743,7 @@ class TMOService:
             t = targets.get(seg_name)
             target_mwh  = float(t.target_energy_mwh) if t else 0.0
             tariff      = float(t.average_tariff_per_kwh) if t else 0.0
-            actual_mwh  = _actual(ids)
+            actual_mwh  = _actual(seg_name)
             gap_mwh     = target_mwh - actual_mwh
             # tariff is ₦/kWh; convert MWh → kWh before multiplying
             exp_bill    = target_mwh * 1_000 * tariff
