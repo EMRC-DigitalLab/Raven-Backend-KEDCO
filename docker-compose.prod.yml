@@ -105,9 +105,8 @@ services:
     environment:
       - REDIS_URL=redis://redis:6379/2
     entrypoint: ["celery", "-A", "raven", "beat", "-l", "info",
-                 "--schedule", "/app/celerybeat/celerybeat-schedule"]
-    volumes:
-      - celerybeat_prod:/app/celerybeat
+                 "--schedule", "/tmp/celerybeat-schedule"]
+    volumes: []
     networks:
       - prod_net
     restart: always
