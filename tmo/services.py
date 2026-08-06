@@ -1271,7 +1271,9 @@ class TMOService:
         Compares yesterday vs MTD average, against the configured target mix.
         Covers Slide 10.
         """
-        day       = self.to_date
+        # Clamp to yesterday — same rule as get_daily_energy() and everywhere
+        # else: today's cross-day diff is really yesterday's energy.
+        day       = min(self.to_date, date.today() - timedelta(days=1))
         mtd_start = day.replace(day=1)
 
         feeder_qs  = self._base_feeder_qs()
