@@ -423,6 +423,12 @@ class TMOService:
     # ── 3. Energy by Segment ─────────────────────────────────────────────────
 
     def get_energy_by_segment(self):
+        # Clamp to yesterday — today's cross-day diff is really yesterday's
+        # energy filed under today's date (see get_daily_energy()), so this
+        # total must not include it either or it silently diverges from
+        # get_volatility()'s MTD total for the same period.
+        to_date = min(self.to_date, date.today() - timedelta(days=1))
+
         feeder_qs  = self._base_feeder_qs()
         all_ids    = set(feeder_qs.values_list('id', flat=True))
 
@@ -449,7 +455,7 @@ class TMOService:
         def _energy(ids):
             if not ids:
                 return 0.0
-            return calculate_energy_delivered(self._energy_ids(list(ids)), self.from_date, self.to_date)['total_mwh']
+            return calculate_energy_delivered(self._energy_ids(list(ids)), self.from_date, to_date)['total_mwh']
 
         def _target(ids):
             if not ids:
@@ -458,7 +464,7 @@ class TMOService:
                 TMOFeederTarget.objects.filter(
                     feeder_id__in=ids,
                     target_date__gte=self.from_date,
-                    target_date__lte=self.to_date,
+                    target_date__lte=to_date,
                 ).aggregate(t=Sum('target_mwh'))['t'] or 0
             )
 
@@ -481,7 +487,7 @@ class TMOService:
             .exclude(is_minigrid=True)
             .values_list('id', flat=True)
         )
-        bulk_total = calculate_energy_delivered(bulk_ids, self.from_date, self.to_date)['total_mwh']
+        bulk_total = calculate_energy_delivered(bulk_ids, self.from_date, to_date)['total_mwh']
 
         segments = []
         totals   = {'actual': 0.0, 'target': 0.0}
@@ -1443,6 +1449,11 @@ class TMOService:
         """
         from datetime import date as date_type
 
+        # Clamp to yesterday — today's cross-day diff is really yesterday's
+        # energy filed under today's date (see get_daily_energy()), so the
+        # month-comparison total must not include it either.
+        to_date = min(self.to_date, date.today() - timedelta(days=1))
+
         feeder_qs  = self._base_feeder_qs()
         feeder_ids = list(feeder_qs.values_list('id', flat=True))
 
@@ -1495,6 +1506,10 @@ class TMOService:
 
         days = []
         for d_str in sorted(day_agg):
+            # Today's cross-day diff is really yesterday's energy filed under
+            # today's date (see get_daily_energy()) — never show it as final.
+            if d_str == str(date.today()):
+                continue
             entry = {'date': d_str, 'day': int(d_str.split('-')[2]), 'segments': {}}
             for seg in ('MDI', 'MDNI', 'Regional'):
                 v      = day_agg[d_str].get(seg, {'33kv': 0.0, '11kv': 0.0})
@@ -1530,7 +1545,7 @@ class TMOService:
                 seg_vol[seg]['33kv' if vol == '33kv' else '11kv'] += data['mwh']
             return seg_vol
 
-        curr_totals = _vol_totals(self.from_date, self.to_date)
+        curr_totals = _vol_totals(self.from_date, to_date)
         prev_totals = _vol_totals(prev_start, prev_end)
 
         # Scale retail-level totals onto the bulk 33KV network total (same population/
@@ -1559,7 +1574,7 @@ class TMOService:
                 for seg, v in totals.items()
             }
 
-        curr_totals = _scale(curr_totals, self.from_date, self.to_date)
+        curr_totals = _scale(curr_totals, self.from_date, to_date)
         prev_totals = _scale(prev_totals, prev_start, prev_end)
 
         # Apply the same current-month scale factor to the daily series so the "days"
@@ -1567,11 +1582,12 @@ class TMOService:
         curr_raw_total = sum(
             vol_val
             for d_str in day_agg
+            if d_str != str(date.today())
             for seg in ('MDI', 'MDNI', 'Regional')
             for vol_val in day_agg[d_str].get(seg, {'33kv': 0.0, '11kv': 0.0}).values()
         )
         if curr_raw_total:
-            day_scale_factor = _bulk_total_mwh(self.from_date, self.to_date) / curr_raw_total
+            day_scale_factor = _bulk_total_mwh(self.from_date, to_date) / curr_raw_total
             for entry in days:
                 for seg in ('MDI', 'MDNI', 'Regional'):
                     s = entry['segments'][seg]
