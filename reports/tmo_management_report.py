@@ -493,11 +493,8 @@ def svg_line_chart(days, series, y_title='GWh', h=170, every_day=False):
                 f'<text x="{ML-4}" y="{y+3:.1f}" text-anchor="end" '
                 f'font-size="7" fill="{_LC}">{lbl}</text>')
 
-    # Which indices to show labels at
-    if every_day:
-        lbl_idx = set(range(n))
-    else:
-        lbl_idx = _day_label_set(days)
+    # Value labels only on key days regardless of every_day — prevents clutter
+    lbl_idx = _day_label_set(days)
 
     base_y = gy(0)
 
@@ -531,15 +528,10 @@ def svg_line_chart(days, series, y_title='GWh', h=170, every_day=False):
             r = 2 if every_day else 3
             svg += (f'<circle cx="{px_:.1f}" cy="{py_:.1f}" r="{r}" '
                     f'fill="{color}" stroke="#fff" stroke-width="0.8"/>')
-            if i in lbl_idx:
+            if i in lbl_idx and v > 0:
                 lbl = f'{v:.1f}'
-                if every_day:
-                    # Alternate above/below to reduce overlap
-                    y_text = py_ - 5 if i % 2 == 0 else py_ + 11
-                    fs = '5.5'
-                else:
-                    y_text = py_ - 7 if py_ > MT + 20 else py_ + 14
-                    fs = '6.5'
+                y_text = py_ - 7 if py_ > MT + 20 else py_ + 14
+                fs = '6.5'
                 svg += (f'<text x="{px_:.1f}" y="{y_text:.1f}" text-anchor="middle" '
                         f'font-size="{fs}" fill="{color}" font-weight="700">{lbl}</text>')
 
@@ -625,7 +617,8 @@ def svg_line_allocation(days):
     svg += lpath(pts_e, _C['primary'], dashed=True)
     svg += lpath(pts_a, _C['warning'])
 
-    # Circles at ALL days; staggered labels for all days
+    # Circles at ALL days; value labels only on key days
+    show = _day_label_set(days)
     for i in range(len(days)):
         e, a = exps[i], acts[i]
         px_e, py_e = gx(i), gy(e)
@@ -634,13 +627,13 @@ def svg_line_allocation(days):
                 f'fill="{_C["primary"]}" stroke="#fff" stroke-width="0.8"/>')
         svg += (f'<circle cx="{px_a:.1f}" cy="{py_a:.1f}" r="2" '
                 f'fill="{_C["warning"]}" stroke="#fff" stroke-width="0.8"/>')
-        # Stagger labels above/below alternately
-        a_y = py_a - 5 if i % 2 == 0 else py_a + 10
-        e_y = py_e + 10 if i % 2 == 0 else py_e - 5
-        svg += (f'<text x="{px_a:.1f}" y="{a_y:.1f}" text-anchor="middle" '
-                f'font-size="5.5" fill="{_C["warning"]}" font-weight="700">{a:.0f}</text>')
-        svg += (f'<text x="{px_e:.1f}" y="{e_y:.1f}" text-anchor="middle" '
-                f'font-size="5.5" fill="{_C["primary"]}" font-weight="700">{e:.0f}</text>')
+        if i in show:
+            a_y = py_a - 7 if py_a > MT + 20 else py_a + 12
+            e_y = py_e - 7 if py_e > MT + 20 else py_e + 12
+            svg += (f'<text x="{px_a:.1f}" y="{a_y:.1f}" text-anchor="middle" '
+                    f'font-size="6.5" fill="{_C["warning"]}" font-weight="700">{a:.0f}</text>')
+            svg += (f'<text x="{px_e:.1f}" y="{e_y:.1f}" text-anchor="middle" '
+                    f'font-size="6.5" fill="{_C["primary"]}" font-weight="700">{e:.0f}</text>')
 
     for i, d in enumerate(days):
         svg += (f'<text x="{gx(i):.1f}" y="{H-4}" text-anchor="middle" '
@@ -1200,28 +1193,48 @@ def render_daily_energy(data: dict, ai: dict, context: dict, pg: int) -> str:
     chart1 = svg_line_chart(
         days,
         [
-            ('target_gwh', _C['primary'], 0.08, True),
-            ('actual_gwh', '#64B5F6',     0.18, False),
+            ('target_gwh', '#2A3547', 0.05, True),   # dark navy — clearly distinct from actual
+            ('actual_gwh', _C['primary'], 0.18, False),  # bright primary blue
         ],
         y_title='GWh',
         every_day=True,
     )
-    # Single-series: actual daily consumed — every day visible
+    # Single-series: actual daily consumed
     chart2 = svg_line_chart(
         days,
-        [('actual_gwh', '#64B5F6', 0.2, False)],
+        [('actual_gwh', _C['primary'], 0.2, False)],
         y_title='GWh',
         h=130,
         every_day=True,
     )
 
-    leg1 = _legend([('Daily Target (dashed)', _C['primary']), ('Actual Consumed', '#64B5F6')])
+    leg1 = _legend([('Daily Target (dashed)', '#2A3547'), ('Actual Consumed', _C['primary'])])
     narrative = f'<p class="narrative">{narr}</p>' if narr else ''
 
     tot_target = energy.get('monthly_target_gwh', 0)
     tot_actual = energy.get('total_actual_gwh', sum(float(d.get('actual_gwh', 0) or 0) for d in days))
     mtd_ach    = energy.get('mtd_achievement_pct', 0)
     ach_col    = _C['success'] if float(mtd_ach or 0) >= 95 else (_C['warning'] if float(mtd_ach or 0) >= 80 else _C['error'])
+
+    # Daily breakdown table rows
+    energy_rows = ''
+    for d in days:
+        tgt  = float(d.get('target_gwh', 0) or 0)
+        act  = float(d.get('actual_gwh',  0) or 0)
+        var  = act - tgt
+        ach  = float(d.get('achievement_pct', 0) or 0)
+        var_col = _C['success'] if var >= 0 else _C['error']
+        ach_col_row = _C['success'] if ach >= 95 else (_C['warning'] if ach >= 80 else _C['error'])
+        var_sym = '+' if var >= 0 else ''
+        energy_rows += (
+            f'<tr>'
+            f'<td style="text-align:center;font-weight:600;">{d.get("day","")}</td>'
+            f'<td style="text-align:right;">{tgt:.2f}</td>'
+            f'<td style="text-align:right;font-weight:700;">{act:.2f}</td>'
+            f'<td style="text-align:right;color:{var_col};font-weight:600;">{var_sym}{var:.2f}</td>'
+            f'<td style="text-align:right;color:{ach_col_row};font-weight:700;">{ach:.1f}%</td>'
+            f'</tr>'
+        )
 
     content = f"""
         <h1 class="section-title">3. Daily Energy Review</h1>
@@ -1238,7 +1251,18 @@ def render_daily_energy(data: dict, ai: dict, context: dict, pg: int) -> str:
                  <div style="font-size:16px;font-weight:800;color:{ach_col};">{_pct(mtd_ach)}</div></div>
         </div>
         <div class="subsection-title">Daily Energy Consumed (GWh)</div>
-        <div class="chart-wrap">{chart2}</div>"""
+        <div class="chart-wrap">{chart2}</div>
+        <div class="subsection-title" style="margin-top:10px;">Daily Breakdown</div>
+        <table class="mgmt-table" style="width:100%;table-layout:fixed;">
+            <thead><tr>
+                <th style="text-align:center;width:32px;">Day</th>
+                <th style="text-align:right;">Target (GWh)</th>
+                <th style="text-align:right;">Actual (GWh)</th>
+                <th style="text-align:right;">Variance (GWh)</th>
+                <th style="text-align:right;">Achievement</th>
+            </tr></thead>
+            <tbody>{energy_rows or "<tr><td colspan='5'>No data</td></tr>"}</tbody>
+        </table>"""
     return _page(content, context, pg)
 
 
@@ -1266,6 +1290,25 @@ def render_daily_allocation(data: dict, ai: dict, context: dict, pg: int) -> str
     ])
     narrative = f'<p class="narrative">{narr}</p>' if narr else ''
 
+    # Daily allocation table rows — Day | TCN Allocated | KEDCO Actual | Variance
+    alloc_rows = ''
+    for d in days:
+        exp = float(d.get('expected_mw', 0) or 0)
+        act = float(d.get('actual_mw',   0) or 0)
+        var = float(d.get('unpicked_mw', exp - act) or (exp - act))
+        # positive var = underpicked (good/neutral); negative = overrun (bad)
+        var_col = _C['error'] if var < 0 else (_C['success'] if var > 0 else _C['grey'])
+        var_sym = '+' if var > 0 else ''
+        row_bg  = 'background:rgba(220,53,69,0.06);' if var < 0 else ''
+        alloc_rows += (
+            f'<tr style="{row_bg}">'
+            f'<td style="text-align:center;font-weight:600;">{d.get("day","")}</td>'
+            f'<td style="text-align:right;">{exp:.1f}</td>'
+            f'<td style="text-align:right;font-weight:700;">{act:.1f}</td>'
+            f'<td style="text-align:right;color:{var_col};font-weight:600;">{var_sym}{var:.1f}</td>'
+            f'</tr>'
+        )
+
     content = f"""
         <h1 class="section-title">4. Daily Real-Time Allocation</h1>
         {narrative}
@@ -1284,7 +1327,17 @@ def render_daily_allocation(data: dict, ai: dict, context: dict, pg: int) -> str
             {'&#9650; KEDCO consumed more than its TCN allocation — indicates ungated or unmetered load above dispatch level.'
              if is_overrun else
              '&#9660; KEDCO consumed less than allocated — energy left unpicked on the TCN side.'}
-        </p>"""
+        </p>
+        <div class="subsection-title" style="margin-top:10px;">Daily Allocation Breakdown</div>
+        <table class="mgmt-table" style="width:100%;table-layout:fixed;">
+            <thead><tr>
+                <th style="text-align:center;width:32px;">Day</th>
+                <th style="text-align:right;">TCN Allocated (MW)</th>
+                <th style="text-align:right;">KEDCO Actual (MW)</th>
+                <th style="text-align:right;">Variance (MW)</th>
+            </tr></thead>
+            <tbody>{alloc_rows or "<tr><td colspan='4'>No data</td></tr>"}</tbody>
+        </table>"""
     return _page(content, context, pg)
 
 
@@ -1313,8 +1366,19 @@ def render_feeder_compliance(data: dict, ai: dict, context: dict, pg: int) -> st
     mdi_total = len(mdi_feeders)
     mdi_critical = sum(1 for f in mdi_feeders if f.get('bucket', f.get('status','')) in ('critical','poor'))
 
+    # Sort: green (exceeding→on_target) first, then yellow, then red — top 10 only
+    _BUCKET_RANK = {'exceeding': 0, 'on_target': 1, 'below_target': 2, 'poor': 3, 'critical': 4}
+    mdi_feeders_sorted = sorted(
+        mdi_feeders,
+        key=lambda f: (
+            _BUCKET_RANK.get(f.get('bucket', f.get('status', '')), 5),
+            -float(f.get('compliance_pct', f.get('supply_compliance_pct', 0)) or 0),
+        )
+    )
+    display_feeders = mdi_feeders_sorted[:10]
+
     rows = ''
-    for f in mdi_feeders:
+    for f in display_feeders:
         bucket = f.get('bucket', f.get('status', ''))
         rows += f"""
         <tr>
@@ -1331,10 +1395,11 @@ def render_feeder_compliance(data: dict, ai: dict, context: dict, pg: int) -> st
         ('Below Target', '#FBC02D'), ('Poor', '#EF9A9A'), ('Critical', '#E53935'),
     ])
 
+    remaining = mdi_total - 10
     mdi_context_note = (
         f'<p style="font-size:8.5px;color:{_C["grey"]};margin:4px 0 6px;line-height:1.5;">'
         f'MDI and MDNI customers represent KEDCO\'s highest-revenue segments — '
-        f'showing {mdi_total} MDI/MDNI feeders (of {total_feeder_count} total). '
+        f'showing top 10 of {mdi_total} MDI/MDNI feeders (of {total_feeder_count} total), best performers first. '
         f'{mdi_critical} are in critical/poor status and require immediate field intervention.</p>'
     ) if mdi_feeders else ''
 
@@ -1346,7 +1411,7 @@ def render_feeder_compliance(data: dict, ai: dict, context: dict, pg: int) -> st
         <div class="chart-wrap">{seg_chart}</div>
         <div class="subsection-title">MDI / MDNI Feeder Criticality
             <span style="font-size:8px;font-weight:400;color:{_C['grey']};margin-left:8px;">
-                Priority revenue segment — {mdi_total} feeders shown</span>
+                Top 10 of {mdi_total} feeders — best performers first</span>
         </div>
         {mdi_context_note}
         <table class="mgmt-table">
