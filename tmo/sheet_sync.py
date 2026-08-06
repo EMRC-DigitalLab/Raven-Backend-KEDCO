@@ -22,8 +22,9 @@ from google.auth.transport.requests import Request as GoogleRequest
 from google.oauth2.credentials import Credentials
 
 from common.models import Feeder
-from technical.models import CumulativeMeterReading, DailyHoursOfSupply, HourlyLoad
+from technical.models import CumulativeMeterReading, DailyHoursOfSupply, EnergyDelivered, HourlyLoad
 from tmo.models import TMONetworkDispatch, TMONetworkDispatchHourly
+from tmo.services import DUPLICATE_FEEDER_SLUGS
 
 logger = logging.getLogger(__name__)
 
@@ -205,8 +206,9 @@ def _sheet_day(name):
 
 
 def _build_feeder_lookup():
+    # Same exclusion as sync_11kv_sheet's feeder_map — see comment there.
     lookup = {}
-    for f in Feeder.objects.filter(voltage_level='33kv'):
+    for f in Feeder.objects.filter(voltage_level='33kv').exclude(slug__in=DUPLICATE_FEEDER_SLUGS):
         key = re.sub(r'\s+', ' ', f.name.upper().strip())
         lookup[key] = f
     return lookup
@@ -424,10 +426,16 @@ def sync_33kv_sheet(spreadsheet_id: str, year: int, month: int,
                     for feeder, hour, mw in hl_rows:
                         if mw > 0:
                             supply_hrs[feeder] = supply_hrs.get(feeder, 0) + 1
-                    for feeder, hrs in supply_hrs.items():
-                        DailyHoursOfSupply.objects.update_or_create(
-                            feeder=feeder, date=reading_date,
-                            defaults={'hours_supplied': hrs},
+                    if supply_hrs:
+                        DailyHoursOfSupply.objects.bulk_create(
+                            [
+                                DailyHoursOfSupply(feeder=feeder, date=reading_date, hours_supplied=hrs)
+                                for feeder, hrs in supply_hrs.items()
+                            ],
+                            update_conflicts=True,
+                            unique_fields=['feeder', 'date'],
+                            update_fields=['hours_supplied'],
+                            batch_size=500,
                         )
 
                 if dispatch_daily:
@@ -439,8 +447,9 @@ def sync_33kv_sheet(spreadsheet_id: str, year: int, month: int,
                             'disco_offtake_mw':        _safe_mw(dispatch_daily.get('disco_offtake'), 'disco_offtake') or _zero,
                             'kedco_allocation_mw':     _safe_mw(dispatch_daily.get('kedco_alloc'), 'kedco_alloc') or _zero,
                             'variance_mw':             _safe_mw(dispatch_daily.get('variance'), 'variance') or _zero,
-                            # nullable field — None is fine
-                            'available_generation_mw': _safe_mw(dispatch_daily.get('available_gen'), 'available_gen'),
+                            # NOT NULL (default=0) — TMONetworkDispatchHourly's version of this
+                            # field is nullable, this daily one is not; fall back like the rest
+                            'available_generation_mw': _safe_mw(dispatch_daily.get('available_gen'), 'available_gen') or _zero,
                             'source': 'manual',
                         }
                     )
@@ -573,9 +582,15 @@ def sync_11kv_sheet(spreadsheet_id: str, year: int, month: int,
     if log_fn is None:
         log_fn = logger.info
 
+    # Excludes confirmed phantom duplicate feeder records — a plain name-keyed dict
+    # would otherwise let a real feeder's data silently land on its excluded
+    # duplicate whenever two records share the exact same name (e.g. RANGAZA has
+    # both KN-SMA-RAN and the phantom KN-DAK-RAN; without this exclusion, sheet
+    # rows for "RANGAZA" could resolve to the excluded record and vanish from
+    # every dashboard total that filters DUPLICATE_FEEDER_SLUGS out).
     feeder_map = {
         f.name.upper(): f
-        for f in Feeder.objects.filter(is_onboarded=True)
+        for f in Feeder.objects.filter(is_onboarded=True).exclude(slug__in=DUPLICATE_FEEDER_SLUGS)
     }
 
     gc = _get_gspread_client()
@@ -692,10 +707,20 @@ def sync_11kv_sheet(spreadsheet_id: str, year: int, month: int,
                             if mw > 0:
                                 supply_hrs[feeder] = supply_hrs.get(feeder, 0) + 1
                         # Feeders with all-zero/fault hours still get 0 hours recorded
-                        for feeder in {r[0] for r in rows_to_write}:
-                            DailyHoursOfSupply.objects.update_or_create(
-                                feeder=feeder, date=reading_date,
-                                defaults={'hours_supplied': supply_hrs.get(feeder, 0)},
+                        all_written_feeders = {r[0] for r in rows_to_write}
+                        if all_written_feeders:
+                            DailyHoursOfSupply.objects.bulk_create(
+                                [
+                                    DailyHoursOfSupply(
+                                        feeder=feeder, date=reading_date,
+                                        hours_supplied=supply_hrs.get(feeder, 0),
+                                    )
+                                    for feeder in all_written_feeders
+                                ],
+                                update_conflicts=True,
+                                unique_fields=['feeder', 'date'],
+                                update_fields=['hours_supplied'],
+                                batch_size=500,
                             )
 
             days_synced += 1
@@ -875,21 +900,54 @@ def sync_33kv_energy_sheet(spreadsheet_id: str, year: int, month: int,
                 .values_list('feeder_id', flat=True)
             )
 
-            for feeder, cumulative_mwh in parsed:
-                if feeder.id in dso_feeder_ids:
-                    continue   # DSO owns this slot
+            to_write = [(feeder, mwh) for feeder, mwh in parsed if feeder.id not in dso_feeder_ids]
 
-                CumulativeMeterReading.objects.update_or_create(
-                    feeder=feeder,
-                    reading_date=reading_date,
-                    defaults={
-                        'cumulative_mwh':  cumulative_mwh,
-                        'submission_type': 'admin_override',
-                        'is_estimated':    False,
-                        'notes':           'Synced from 33KV Energy Accounting Google Sheet',
-                    },
+            if to_write:
+                CumulativeMeterReading.objects.bulk_create(
+                    [
+                        CumulativeMeterReading(
+                            feeder=feeder,
+                            reading_date=reading_date,
+                            cumulative_mwh=mwh,
+                            submission_type='admin_override',
+                            is_estimated=False,
+                            notes='Synced from 33KV Energy Accounting Google Sheet',
+                        )
+                        for feeder, mwh in to_write
+                    ],
+                    update_conflicts=True,
+                    unique_fields=['feeder', 'reading_date'],
+                    update_fields=['cumulative_mwh', 'submission_type', 'is_estimated', 'notes'],
+                    batch_size=500,
                 )
-                written += 1
+                written = len(to_write)
+
+                # Replicate CumulativeMeterReading.save()'s EnergyDelivered side effect
+                # in bulk: energy_mwh = today's reading − yesterday's reading, skipped
+                # if there's no previous reading or the diff is negative (meter reset).
+                prev_date = reading_date - timedelta(days=1)
+                prev_readings = dict(
+                    CumulativeMeterReading.objects
+                    .filter(feeder_id__in=[f.id for f, _ in to_write], reading_date=prev_date)
+                    .values_list('feeder_id', 'cumulative_mwh')
+                )
+                ed_rows = []
+                for feeder, mwh in to_write:
+                    prev = prev_readings.get(feeder.id)
+                    if prev is None:
+                        continue
+                    diff = mwh - prev
+                    if diff < 0:
+                        continue
+                    ed_rows.append(EnergyDelivered(feeder=feeder, date=reading_date, energy_mwh=diff))
+                if ed_rows:
+                    EnergyDelivered.objects.bulk_create(
+                        ed_rows,
+                        update_conflicts=True,
+                        unique_fields=['feeder', 'date'],
+                        update_fields=['energy_mwh'],
+                        batch_size=500,
+                    )
 
             total_cmr   += written
             days_synced += 1
