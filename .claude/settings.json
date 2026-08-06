@@ -170,7 +170,12 @@
       "Bash(PYTHONIOENCODING=utf-8 python \"C:\\\\Users\\\\TRIUMP~1\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-TriumphAdeniran-OneDrive---Market-and-Regulatory-Consultants-Ltd-Desktop-Raven-Code-Base-Raven-Backend-KEDCO\\\\eced7ae1-261a-4f46-b7f4-deaa213b715a\\\\scratchpad\\\\full_mdni_scan.py\")",
       "Bash(python -c \"import ast; ast.parse\\(open\\('tmo/services.py', encoding='utf-8'\\).read\\(\\)\\)\")",
       "Bash(PYTHONIOENCODING=utf-8 python -c ' *)",
-      "Bash(python -c \"import ast; ast.parse\\(open\\('tmo/services.py', encoding='utf-8'\\).read\\(\\)\\); print\\('syntax OK'\\)\")"
+      "Bash(python -c \"import ast; ast.parse\\(open\\('tmo/services.py', encoding='utf-8'\\).read\\(\\)\\); print\\('syntax OK'\\)\")",
+      "Bash(PYTHONIOENCODING=utf-8 timeout 100 python -c ' *)",
+      "Bash(python -c \"import json,sys; d=json.load\\(sys.stdin\\); k=list\\(d.keys\\(\\)\\)[0]; print\\('client_id:', d[k]['client_id']\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('tmo/sheet_sync.py', encoding='utf-8'\\).read\\(\\)\\); print\\('syntax OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('tmo/services.py', encoding='utf-8'\\).read\\(\\)\\); print\\('services.py syntax OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('tmo/sheet_sync.py', encoding='utf-8'\\).read\\(\\)\\); print\\('sheet_sync.py syntax OK'\\)\")"
     ],
     "additionalDirectories": [
       "c:\\c\\Users\\TriumphAdeniran\\OneDrive - Market and Regulatory Consultants Ltd\\Desktop\\Raven Code Base\\Raven-Backend-KEDCO"

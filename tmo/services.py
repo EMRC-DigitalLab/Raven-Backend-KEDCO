@@ -888,8 +888,10 @@ class TMOService:
           - month-to-date (start of that month → selected day)
         Flags when high-ROI segment share is declining vs MTD average.
         """
-        # Day = to_date (T-1 or user-selected date)
-        day = self.to_date
+        # Day = to_date (T-1 or user-selected date), clamped to never reach today —
+        # today can never have a real, finished number (see get_daily_energy()), so
+        # "yesterday" and "month-to-date" must never include it either.
+        day = min(self.to_date, date.today() - timedelta(days=1))
         mtd_start = day.replace(day=1)
 
         feeder_qs  = self._base_feeder_qs()
@@ -1027,6 +1029,12 @@ class TMOService:
 
         days = []
         for row in daily:
+            # The cumulative-meter diff for "today" is really yesterday's energy
+            # (today's reading − yesterday's reading = yesterday's full 24h span),
+            # filed under today's date. There's no way to compute a real, final
+            # number for today until today is over — so don't show one.
+            if row['date'] == date.today():
+                continue
             standard_gwh = STANDARD_DAILY_FORECAST_GWH.get(row['date'].day, flat_daily_target_gwh)
             daily_target_gwh = alloc_map.get(str(row['date']), standard_gwh)
             actual_gwh = float(row['total_mwh'] or 0) / 1000
@@ -2021,6 +2029,11 @@ class TMOService:
 
         days = []
         for d_str in sorted(all_dates):
+            # Today's row is only ever a partial-day average of whatever hours have
+            # been entered in the sheet so far — not a finished day. Don't show it
+            # as if it were final, same rule as get_daily_energy().
+            if d_str == str(date.today()):
+                continue
             obj      = dispatch_map.get(d_str)
             expected = float(obj.kedco_allocation_mw or 0) if obj else 0.0
             actual   = float(obj.disco_offtake_mw    or 0) if obj else 0.0
