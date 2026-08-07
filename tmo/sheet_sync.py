@@ -494,9 +494,14 @@ def sync_33kv_sheet(spreadsheet_id: str, year: int, month: int,
 # Row 0: headers  — col 0=STATION, col 1=TR RATING, col 2=TR PEAK LOAD,
 #                   col 3=Feeder, col 4=Band,
 #                   cols 5-28 = hours 1:00…0:00  (h_idx 0-23 → HourlyLoad.hour 0-23)
-#                   cols 29-34 = MIN/AVE/PEAK/PREV ENERGY/PRESENT ENERGY/VARIANCE (skip)
+#                   cols 29-34 = MIN/AVE/PEAK/PREV ENERGY/PRESENT ENERGY/VARIANCE
 FEEDER_COL_11KV = 3
 HOUR_COLS_11KV  = list(range(5, 29))   # 24 hour columns
+# The sheet's own PRESENT − PREVIOUS energy figure — a real metered value, far
+# more accurate than reconstructing energy from an avg-load × supply-hours
+# estimate over the 24 hour columns. Used as EnergyDelivered whenever a feeder
+# has no CumulativeMeterReading-based reading for the day (see write block).
+ENERGY_VARIANCE_COL_11KV = 34
 
 # Rows to ignore — transformer instrument rows and summary totals
 SKIP_NAMES_11KV = frozenset({
@@ -602,6 +607,7 @@ def sync_11kv_sheet(spreadsheet_id: str, year: int, month: int,
 
     days_synced = 0
     total_hl    = 0
+    total_ed    = 0
     unmatched:  set  = set()
     errors:     list = []
 
@@ -617,6 +623,7 @@ def sync_11kv_sheet(spreadsheet_id: str, year: int, month: int,
 
         # ── Parse feeder rows ────────────────────────────────────────────────
         hl_rows: list[tuple] = []   # (feeder, h_idx, mw)
+        variance_rows: dict  = {}   # feeder -> energy_mwh (last one wins if dup rows)
         day_unmatched: list  = []
 
         for row in rows[1:]:
@@ -643,6 +650,11 @@ def sync_11kv_sheet(spreadsheet_id: str, year: int, month: int,
                 if mw is None:
                     mw = 0.0        # non-numeric (blank, fault code, etc.) → 0
                 hl_rows.append((feeder, h_idx, round(max(mw, 0.0), 4)))
+
+            variance_val = row[ENERGY_VARIANCE_COL_11KV] if ENERGY_VARIANCE_COL_11KV < len(row) else ''
+            variance_mwh = _safe_float(variance_val)
+            if variance_mwh is not None:
+                variance_rows[feeder] = round(variance_mwh, 2)
 
         unmatched.update(day_unmatched)
 
@@ -723,9 +735,51 @@ def sync_11kv_sheet(spreadsheet_id: str, year: int, month: int,
                                 batch_size=500,
                             )
 
+                # ── ENERGY VARIANCE → EnergyDelivered ───────────────────────
+                # Only for feeders with no 33KV Energy Accounting meter reading
+                # for this date — that source is the authoritative bulk meter
+                # and takes priority whenever both exist (mirrors TCN's own
+                # "bulk parent" vs "standalone lookup" row-formula split).
+                # Never overwrites a real meter-difference or manual reading —
+                # only fills gaps or refreshes our own earlier estimates.
+                ed_written = 0
+                if variance_rows:
+                    has_cmr = set(
+                        CumulativeMeterReading.objects
+                        .filter(reading_date=reading_date, feeder__in=variance_rows.keys())
+                        .values_list('feeder_id', flat=True)
+                    )
+                    protected = set(
+                        EnergyDelivered.objects
+                        .filter(
+                            date=reading_date,
+                            feeder__in=variance_rows.keys(),
+                            calculation_method__in=['meter_difference', 'manual_entry'],
+                        )
+                        .values_list('feeder_id', flat=True)
+                    )
+                    ed_to_write = [
+                        EnergyDelivered(
+                            feeder=feeder, date=reading_date, energy_mwh=Decimal(str(mwh)),
+                            is_calculated=True, calculation_method='sheet_variance',
+                        )
+                        for feeder, mwh in variance_rows.items()
+                        if feeder.id not in has_cmr and feeder.id not in protected
+                    ]
+                    if ed_to_write:
+                        EnergyDelivered.objects.bulk_create(
+                            ed_to_write,
+                            update_conflicts=True,
+                            unique_fields=['feeder', 'date'],
+                            update_fields=['energy_mwh', 'calculation_method', 'is_calculated'],
+                            batch_size=500,
+                        )
+                        ed_written = len(ed_to_write)
+                        total_ed  += ed_written
+
             days_synced += 1
             log_fn(
-                f'  {reading_date}: {rows_written} HL'
+                f'  {reading_date}: {rows_written} HL, {ed_written} ED(variance)'
                 + (f'  | unmatched: {day_unmatched}' if day_unmatched else '')
             )
         except Exception as exc:
@@ -735,6 +789,7 @@ def sync_11kv_sheet(spreadsheet_id: str, year: int, month: int,
     return {
         'days_synced': days_synced,
         'hl_rows':     total_hl,
+        'ed_rows':     total_ed,
         'unmatched':   sorted(unmatched),
         'errors':      errors,
     }
@@ -752,17 +807,28 @@ def sync_11kv_sheet(spreadsheet_id: str, year: int, month: int,
 #
 #   Col 0:  REGION          (skip row if starts with 'TOTAL')
 #   Col 7:  ASSOCIATED 33KV FEEDER  ← feeder name
-#   Col 11: METER READING AT 00:00HRS MWH  ← what we store
+#   Col 11: METER READING AT 00:00HRS MWH  ← stored as CumulativeMeterReading
+#   Cols 13, 17, 21, ... (every 4th, 24 of them): PRESENT METER READING MWH for
+#     each hour 1-24 — the last non-blank one is that day's closing reading.
 #
-# We store col 11 as CumulativeMeterReading(feeder, reading_date).
-# CumulativeMeterReading.save() automatically creates/updates EnergyDelivered
-# by differencing today's reading from yesterday's.
+# We store col 11 as CumulativeMeterReading(feeder, reading_date) for reference,
+# but EnergyDelivered is computed as a WITHIN-DAY diff — that day's own closing
+# reading (last hourly "PRESENT METER READING") minus that same day's opening
+# reading (col 11) — NOT a cross-day diff against yesterday's CumulativeMeterReading.
+# Confirmed against TCN's own ground-truth workbook (Aug 2026, 6 days): TCN's real
+# per-feeder figures match the within-day diff, not the cross-day one — e.g. Small
+# Scale Aug 2 is 138 MWh (within-day) vs 72 MWh (cross-day, what this sync used to
+# compute). The cross-day method also depends on two separate days' 00:00 readings
+# both being entered consistently, which is what caused the month-boundary
+# "copy-paste" bug (see project memory) — the within-day method is self-contained
+# per day and doesn't have that failure mode.
 #
 # DSO data wins: if a 'dso' CumulativeMeterReading already exists for the
 # same (feeder, date), we skip that row — the DSO submission is authoritative.
 
 _ENERGY_FEEDER_COL  = 7   # "ASSOCIATED 33KV FEEDER"
-_ENERGY_READING_COL = 11  # "METER READING AT 00:00HRS MWH"
+_ENERGY_READING_COL = 11  # "METER READING AT 00:00HRS MWH" (opening)
+_ENERGY_PRESENT_COLS = [13 + 4 * i for i in range(24)]  # hourly "PRESENT METER READING MWH"
 
 
 def _days_needing_sync_33kv_energy(worksheets, year, month, force=False, only_day=None):
@@ -845,7 +911,7 @@ def sync_33kv_energy_sheet(spreadsheet_id: str, year: int, month: int,
             continue
 
         # ── Parse ─────────────────────────────────────────────────────────────
-        parsed: list[tuple] = []   # (feeder, cumulative_mwh)
+        parsed: list[tuple] = []   # (feeder, opening_mwh, closing_mwh_or_None)
         day_unmatched: list = []
 
         for row in data_rows:
@@ -876,7 +942,15 @@ def sync_33kv_energy_sheet(spreadsheet_id: str, year: int, month: int,
                     day_unmatched.append(raw_name.upper())
                 continue
 
-            parsed.append((feeder, Decimal(str(round(mwh, 4)))))
+            closing_mwh = None
+            for col in reversed(_ENERGY_PRESENT_COLS):
+                if col < len(row):
+                    v = _safe_float(row[col])
+                    if v is not None:
+                        closing_mwh = v
+                        break
+
+            parsed.append((feeder, Decimal(str(round(mwh, 4))), closing_mwh))
 
         unmatched.update(day_unmatched)
 
@@ -892,7 +966,7 @@ def sync_33kv_energy_sheet(spreadsheet_id: str, year: int, month: int,
         written = 0
         try:
             # Fetch existing DSO readings for this date+feeder set in one query
-            feeder_ids = [f.id for f, _ in parsed]
+            feeder_ids = [f.id for f, _, _ in parsed]
             dso_feeder_ids = set(
                 CumulativeMeterReading.objects
                 .filter(reading_date=reading_date, feeder_id__in=feeder_ids,
@@ -900,7 +974,7 @@ def sync_33kv_energy_sheet(spreadsheet_id: str, year: int, month: int,
                 .values_list('feeder_id', flat=True)
             )
 
-            to_write = [(feeder, mwh) for feeder, mwh in parsed if feeder.id not in dso_feeder_ids]
+            to_write = [(feeder, mwh, closing) for feeder, mwh, closing in parsed if feeder.id not in dso_feeder_ids]
 
             if to_write:
                 CumulativeMeterReading.objects.bulk_create(
@@ -913,7 +987,7 @@ def sync_33kv_energy_sheet(spreadsheet_id: str, year: int, month: int,
                             is_estimated=False,
                             notes='Synced from 33KV Energy Accounting Google Sheet',
                         )
-                        for feeder, mwh in to_write
+                        for feeder, mwh, _ in to_write
                     ],
                     update_conflicts=True,
                     unique_fields=['feeder', 'reading_date'],
@@ -922,30 +996,27 @@ def sync_33kv_energy_sheet(spreadsheet_id: str, year: int, month: int,
                 )
                 written = len(to_write)
 
-                # Replicate CumulativeMeterReading.save()'s EnergyDelivered side effect
-                # in bulk: energy_mwh = today's reading − yesterday's reading, skipped
-                # if there's no previous reading or the diff is negative (meter reset).
-                prev_date = reading_date - timedelta(days=1)
-                prev_readings = dict(
-                    CumulativeMeterReading.objects
-                    .filter(feeder_id__in=[f.id for f, _ in to_write], reading_date=prev_date)
-                    .values_list('feeder_id', 'cumulative_mwh')
-                )
+                # EnergyDelivered = today's own closing reading (last hourly "PRESENT
+                # METER READING") minus today's own opening reading — a within-day
+                # diff, self-contained on this single sheet row. See module comment
+                # above for why this replaced the old cross-day CMR diff.
                 ed_rows = []
-                for feeder, mwh in to_write:
-                    prev = prev_readings.get(feeder.id)
-                    if prev is None:
+                for feeder, opening, closing in to_write:
+                    if closing is None:
                         continue
-                    diff = mwh - prev
+                    diff = Decimal(str(round(closing, 4))) - opening
                     if diff < 0:
                         continue
-                    ed_rows.append(EnergyDelivered(feeder=feeder, date=reading_date, energy_mwh=diff))
+                    ed_rows.append(EnergyDelivered(
+                        feeder=feeder, date=reading_date, energy_mwh=diff,
+                        is_calculated=True, calculation_method='meter_difference',
+                    ))
                 if ed_rows:
                     EnergyDelivered.objects.bulk_create(
                         ed_rows,
                         update_conflicts=True,
                         unique_fields=['feeder', 'date'],
-                        update_fields=['energy_mwh'],
+                        update_fields=['energy_mwh', 'is_calculated', 'calculation_method'],
                         batch_size=500,
                     )
 
