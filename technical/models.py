@@ -148,6 +148,7 @@ class EnergyDelivered(UUIDModel, models.Model):
             ('meter_difference', 'Calculated from meter difference'),
             ('manual_entry', 'Manually entered'),
             ('estimated', 'Estimated from historical data'),
+            ('sheet_variance', 'PRESENT − PREVIOUS energy column from source sheet'),
         ]
     )
 

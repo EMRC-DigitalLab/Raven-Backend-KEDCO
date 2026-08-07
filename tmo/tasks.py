@@ -38,8 +38,12 @@ def sync_33kv_sheet_task(self):
     Hourly Celery task: sync the active 33KV Load Flow Google Sheet for the current month.
 
     Reliability behaviour:
-      - Today + last 2 days → always re-synced (catches live data + corrections)
-      - Older past days with partial/missing data → retried automatically
+      - force=True: every day of the month is re-checked on every run, not just
+        the last 3 days — the source sheet gets corrected retroactively at
+        unpredictable points, so completeness alone isn't a safe signal to
+        stop re-checking a day
+      - DataNest (dso) submissions are never overwritten — protected by their
+        own always-on check inside sync_33kv_sheet, independent of force
       - No active feed for this month → alert email sent
       - Failure → retries up to 3× with 5-minute delay
     """
@@ -74,7 +78,13 @@ def sync_33kv_sheet_task(self):
             spreadsheet_id=feed.spreadsheet_id,
             year=year,
             month=month,
-            force=False,
+            # Always re-check every day of the month, not just the last 3 —
+            # the source sheet gets corrected retroactively at unpredictable
+            # points in the month, and force=False would silently miss those
+            # once a day already has "enough" rows. Safe regardless: DataNest
+            # (dso) submissions are protected by their own always-on check in
+            # sync_33kv_sheet, independent of this flag.
+            force=True,
             dry_run=False,
         )
 
@@ -132,7 +142,10 @@ def sync_11kv_sheet_task(self):
             spreadsheet_id=feed.spreadsheet_id,
             year=year,
             month=month,
-            force=False,
+            # See sync_33kv_sheet_task — always re-check every day for
+            # retroactive corrections. DataNest (dso) slots stay protected
+            # by their own always-on check inside sync_11kv_sheet.
+            force=True,
             dry_run=False,
         )
 
@@ -190,7 +203,10 @@ def sync_33kv_energy_sheet_task(self):
             spreadsheet_id=feed.spreadsheet_id,
             year=year,
             month=month,
-            force=False,
+            # See sync_33kv_sheet_task — always re-check every day for
+            # retroactive corrections. DataNest (dso) readings stay protected
+            # by their own always-on check inside sync_33kv_energy_sheet.
+            force=True,
             dry_run=False,
         )
 

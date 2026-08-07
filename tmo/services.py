@@ -29,6 +29,121 @@ from tmo.models import TMODailyAllocation, TMOFeederSupplyTarget, TMOIncident, T
 # larger data-cleanup effort.
 DUPLICATE_FEEDER_SLUGS = ['KN-DAK-RAN', 'KN-DAK-GEZ', 'KN-NAI-DAW']
 
+# Feeders TCN's own "Daily Energy Allocation" accounting counts as a separate
+# line item even though they are physically downstream of another 33KV bulk
+# feeder. Reverse-engineered by testing TCN's per-feeder formula against their
+# own source sheets (Aug 2026, 6 days, 210 feeders): every other downstream
+# child's energy is subtracted from its 33KV parent's raw meter reading before
+# the child's own row is added back in (a wash for the grand total — see
+# _bulk_feeder_ids), but Dundu and Nuhu Sunusi are the sole confirmed
+# exceptions TCN's own formula does NOT subtract from NNPC/Dutse respectively.
+# Matching TCN's total requires adding them on top of the bulk population
+# rather than excluding them as an ordinary downstream child would be.
+# METRO is here for a different reason: Raven's FeederSupplyRelationship
+# tags it as downstream of Tamburawa Water Works, but TCN's own sheet tags
+# its Associated 33KV Feeder as "OUT OF SUPPLY" (not a real parent) — so it
+# is a true orphan, not a subtracted child, and must not be excluded by the
+# downstream-of-bulk-parent rule in _bulk_feeder_ids.
+STANDALONE_BULK_EQUIVALENT_SLUGS = ['KN-JOG-DUN', 'KN-DUT-NUH', 'KN-TAM2-MET']
+
+# Feeders Raven has onboarded (real meter/load data) but which TCN's own
+# ground-truth workbook does not appear to track by name. In principle
+# counting these should make Raven's total run higher than TCN's — but
+# empirically, EXCLUDING them made the 6-day total worse, not better (with
+# Majiya alone excluded: 28.06 vs TCN's 28.17, a 0.10 GWh gap; with Majiya
+# included: 28.20, only a 0.03 GWh gap — the better match). Likely explanation:
+# TCN's own total already includes this feeder's energy under a name/mapping
+# this reconciliation hasn't matched, so excluding it removes real energy TCN
+# also counts. Left EMPTY on purpose — don't add feeders here without first
+# proving removal improves the multi-day total, not just assuming a name
+# mismatch means TCN doesn't count it. (Also tried and reverted: Dandume,
+# Faskari, Katsina Road, Malumfashi, Mamman Nasir — excluding all of those
+# made the total dramatically worse too, 27.50 GWh.)
+NOT_TRACKED_BY_TCN_SLUGS = []
+
+
+# ── Methodology tooltips ─────────────────────────────────────────────────────
+# Shown on hover in the frontend so users can see exactly how a number was
+# derived, without reading code or asking an engineer. These spell out the
+# real calculation — data source, what's included/excluded, and why — in
+# plain sentences rather than code terms, but nothing is glossed over. Each
+# TMOService method that feeds a chart includes 'methodology' in its
+# response, pulled from here — edit the text in ONE place, not scattered
+# across every method.
+METHODOLOGY = {
+    'daily_energy': (
+        "Each day's total is calculated from real meter readings at every major "
+        "(33KV) supply feeder, comparing the reading at the start and end of the "
+        "day. Feeders that are physically downstream of another feeder already "
+        "counted are left out, so the same electricity is never counted twice. "
+        "Today is never shown as a final number, since a day's total can only be "
+        "calculated once tomorrow's reading exists. The target line is the "
+        "month's agreed allocation split across the days of the month."
+    ),
+    'daily_allocation': (
+        "Comes directly from TCN's own hour-by-hour figures for KEDCO. Expected "
+        "is what TCN allocated that hour, Actual is what KEDCO's network drew, "
+        "and the gap between them is the variance. Today isn't shown until the "
+        "day is complete."
+    ),
+    'supply_compliance': (
+        "For each feeder, we calculate its average hours of power per day over "
+        "the period and compare it to its target hours. The target used is the "
+        "most specific one available: a target set for that exact feeder, then a "
+        "target set for its customer category, then a default minimum for its "
+        "band. Feeders are ranked from worst to best."
+    ),
+    'compliance_summary': (
+        "The same supply-hours-versus-target calculation as Feeder Compliance, "
+        "grouped by customer category instead of listed feeder by feeder, "
+        "showing how many feeders fall into each performance level."
+    ),
+    'minigrids': (
+        "Haske Solar's own metered energy for the period, compared against its "
+        "energy target for the same period."
+    ),
+    'pear': (
+        "Every feeder is tagged as a major paying customer (MD) or general "
+        "customer (Non-MD). We calculate each group's share of total metered "
+        "energy, then apply that same percentage to the network's real total, "
+        "since the network total includes technical losses that only show up at "
+        "the full network level, not feeder by feeder. Yesterday and month-to-"
+        "date are both calculated this way and compared to the target mix set "
+        "for the month."
+    ),
+    'volatility': (
+        "Uses the same method as PEAR, splitting energy three ways instead of "
+        "two: MDI, MDNI, and Regions. Each category's share is calculated first, "
+        "then applied to the network's real total. The Volatility Index compares "
+        "yesterday's share for each category to its month-to-date average, and "
+        "flags a meaningful shift."
+    ),
+    'energy_by_voltage': (
+        "For each customer category and day, energy is split between 33KV and "
+        "11KV feeders, then scaled so the three categories together always match "
+        "that day's real Daily Energy Allocation total exactly."
+    ),
+    'incidents': (
+        "Every logged feeder fault in the period, with financial loss calculated "
+        "from the feeder's average load, how long the fault lasted, and the "
+        "tariff rate for its customer category. Only genuine KEDCO faults are "
+        "counted. Load shedding, TCN transmission faults, maintenance, and "
+        "permit outages are excluded, since they're planned or outside KEDCO's "
+        "own network."
+    ),
+    'energy_by_segment': (
+        "Uses the same method as PEAR: each customer category's share of energy "
+        "is calculated, then applied to the network's real total, and compared "
+        "against that category's target for the month. The gap shown is target "
+        "minus actual."
+    ),
+    'gcr': (
+        "Uses the same actual energy figures as P&L Target Realization Deficit, "
+        "and multiplies the energy gap by each category's average tariff rate to "
+        "estimate the billing value lost."
+    ),
+}
+
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -257,6 +372,7 @@ class TMOService:
         self._mdi_ids    = None
         self._mdni_ids   = None
         self._upstream_ids_cache = None
+        self._bulk_classification_cache = None
 
     def _energy_ids(self, feeder_ids):
         """Strip upstream 33KV feeders (those with active downstream 11KV feeders)."""
@@ -301,6 +417,137 @@ class TMOService:
             elif seg == 'MINIGRID':
                 qs = qs.filter(is_minigrid=True)
         return qs
+
+    def _bulk_feeder_ids(self):
+        """
+        The 33KV bulk anchor population feeding get_daily_energy() and every
+        segment/voltage/PEAR breakdown that scales to it (see class docstring
+        / TMO_Methodology cross-cutting rule #1).
+
+        = onboarded 33KV feeders (excluding minigrids and confirmed duplicate
+          records)
+          MINUS 33KV feeders that are themselves a downstream customer of
+          another 33KV feeder already in this set — their consumption is
+          already embedded in that supplying feeder's own raw meter reading,
+          so counting both would double-count them (e.g. Rangaza/Gezawa are
+          downstream of Small Scale; Dawaki is downstream of Zaria Road;
+          Dr Jamil Gwamna is downstream of Tamburawa Water Works; Dawanau is
+          downstream of Kurna). Verified against TCN's own "Associated 33KV
+          Feeder" tags in their ground-truth workbook.
+          PLUS the confirmed standalone-equivalent exceptions TCN's own
+          formula counts separately regardless (see STANDALONE_BULK_
+          EQUIVALENT_SLUGS above).
+
+        History (2026-08-07): this exclusion was tried, reverted, then
+        re-applied the same day. It's correct per TCN's real per-row formula,
+        but only works if the supplying parent's own raw reading is itself
+        accurate — it first made totals *worse* because
+        `sync_33kv_energy_sheet` was computing each parent's raw reading as a
+        CROSS-DAY diff (today's opening reading minus yesterday's), which ran
+        well below the true value. That's now fixed — EnergyDelivered from
+        that sync is a WITHIN-DAY diff (today's own closing reading minus
+        today's own opening reading, self-contained on one sheet row), which
+        matches TCN's real numbers. With the parent reading now correct, this
+        exclusion closes the gap instead of widening it (validated against
+        all 6 days of Aug 2026 ground truth, ~28.12 vs TCN's 28.17 GWh — within
+        0.05 GWh, day-level errors 0.01-0.06 GWh, matching the target margin).
+        """
+        bulk_ids = set(
+            self._base_feeder_qs()
+            .filter(voltage_level='33kv')
+            .exclude(slug__in=DUPLICATE_FEEDER_SLUGS)
+            .exclude(slug__in=NOT_TRACKED_BY_TCN_SLUGS)
+            .exclude(is_minigrid=True)
+            .values_list('id', flat=True)
+        )
+        child_of_bulk_parent = set(
+            FeederSupplyRelationship.objects
+            .filter(
+                supplied_feeder_id__in=bulk_ids,
+                supplier_feeder_id__in=bulk_ids,
+                status='active',
+            )
+            .values_list('supplied_feeder_id', flat=True)
+        )
+        bulk_ids -= child_of_bulk_parent
+        bulk_ids |= set(
+            self._base_feeder_qs()
+            .filter(slug__in=STANDALONE_BULK_EQUIVALENT_SLUGS)
+            .values_list('id', flat=True)
+        )
+        return bulk_ids
+
+    def _bulk_classification(self):
+        """
+        (bulk_ids, (meter_ids, balloon_ids)) for the bulk 33KV population,
+        computed ONCE per service instance and shared by every bulk-total
+        helper below (_bulk_daily_map / _bulk_total_mwh) and by
+        get_daily_energy() itself.
+
+        Why this exists: _classify_feeders() decides meter-vs-balloon per
+        feeder based on the date range it's given — so asking "what's the
+        bulk total for just day 1?" can classify a feeder differently than
+        asking "what's the bulk total across the whole week?", even for the
+        exact same feeder on the exact same day, purely because the range
+        used to check for bad/missing data differs. That caused get_daily_
+        energy() and get_energy_by_voltage() to disagree by ~0.02-0.08 GWh
+        on the same day (confirmed 2026-08-07: day 1's bulk total was
+        3922.79 MWh classified over just day 1, vs 3898.16 MWh classified
+        over the whole week — a 24.6 MWh drift from classification alone,
+        nothing to do with the underlying data).
+
+        Fix: classify once, over this service instance's own requested period
+        (self.from_date to self.to_date — covers single-day and MTD calls,
+        which are what everything reconciles against), and have every caller
+        share that same classification. Only which DAYS get summed varies;
+        whether a given feeder is trusted to use its real reading never does.
+
+        Deliberately NOT widened to the previous month, even though a couple
+        of callers (get_energy_by_voltage, get_daily_energy_by_segment) also
+        need a previous-month total for their comparison panel — tried that
+        first, but it pulled in that other month's own data-quality issues
+        and pushed feeders that were fine in the requested month into the
+        cruder estimate anyway, moving the total further from TCN's real
+        figure (28.20 → 27.73 GWh, tested 2026-08-07). The previous-month
+        panel is a standalone bar, never summed against the current period,
+        so it doesn't need to share this classification for correctness —
+        _bulk_daily_map()/_bulk_total_mwh() still work for a previous-month
+        date range, they just use the current period's classification to
+        decide meter-vs-balloon for it too, which is an acceptable trade-off
+        given feeder meter reliability doesn't typically change month to
+        month.
+        """
+        if self._bulk_classification_cache is None:
+            bulk_ids = self._bulk_feeder_ids()
+            self._bulk_classification_cache = (
+                bulk_ids,
+                _classify_feeders(bulk_ids, self.from_date, self.to_date),
+            )
+        return self._bulk_classification_cache
+
+    def _bulk_daily_map(self, from_date, to_date):
+        """{date_str: mwh} for the bulk 33KV population over [from_date, to_date],
+        using the single shared classification from _bulk_classification()."""
+        _, (meter_ids, balloon_ids) = self._bulk_classification()
+        daily = defaultdict(float)
+        if meter_ids:
+            for row in (
+                EnergyDelivered.objects
+                .filter(feeder_id__in=meter_ids, date__gte=from_date, date__lte=to_date)
+                .values('date').annotate(total=Sum('energy_mwh'))
+            ):
+                daily[str(row['date'])] += float(row['total'] or 0)
+        if balloon_ids:
+            for row in (
+                HourlyLoad.objects
+                .filter(feeder_id__in=balloon_ids, date__gte=from_date, date__lte=to_date, load_mw__gt=0)
+                .values('feeder_id', 'date').annotate(avg_load=Avg('load_mw'), supply_hours=Count('hour'))
+            ):
+                daily[str(row['date'])] += float(row['avg_load'] or 0) * int(row['supply_hours'] or 0)
+        return dict(daily)
+
+    def _bulk_total_mwh(self, from_date, to_date):
+        return sum(self._bulk_daily_map(from_date, to_date).values())
 
     def _segment_label(self, feeder_id):
         if feeder_id in self.mdi_ids:
@@ -476,18 +723,10 @@ class TMOService:
         raw_actual = {name: _energy(ids) for name, ids in buckets.items()}
         raw_total  = sum(raw_actual.values())
 
-        # Bulk network total — same feeder population/method as get_daily_energy(),
-        # so this always reconciles with the Daily Energy Allocation slide instead of
-        # silently diverging by the technical/distribution loss between bulk 33KV
-        # injection and retail 11KV delivery.
-        bulk_ids = list(
-            self._base_feeder_qs()
-            .filter(voltage_level='33kv')
-            .exclude(slug__in=DUPLICATE_FEEDER_SLUGS)
-            .exclude(is_minigrid=True)
-            .values_list('id', flat=True)
-        )
-        bulk_total = calculate_energy_delivered(bulk_ids, self.from_date, to_date)['total_mwh']
+        # Bulk network total — shares the same population AND classification as
+        # get_daily_energy()/_bulk_total_mwh(), so this always reconciles with
+        # the Daily Energy Allocation slide instead of silently diverging.
+        bulk_total = self._bulk_total_mwh(self.from_date, to_date)
 
         segments = []
         totals   = {'actual': 0.0, 'target': 0.0}
@@ -520,6 +759,7 @@ class TMOService:
             'total_actual_mwh': round(total_actual, 2),
             'total_actual_gwh': round(total_actual / 1000, 4),
             'segments':         segments,
+            'methodology':      METHODOLOGY['energy_by_segment'],
         }
 
     # ── 4. Supply Compliance ─────────────────────────────────────────────────
@@ -636,6 +876,7 @@ class TMOService:
                 'total_feeders':      total,
                 'compliance_rate_pct': round(_pct(compliant, total), 1),
             },
+            'methodology': METHODOLOGY['supply_compliance'],
         }
 
     # ── 5. Collection ────────────────────────────────────────────────────────
@@ -818,6 +1059,7 @@ class TMOService:
             'period':    {'from': str(self.from_date), 'to': str(self.to_date)},
             'minigrids': rows,
             'count':     len(rows),
+            'methodology': METHODOLOGY['minigrids'],
         }
 
     # ── 9. All Feeders ───────────────────────────────────────────────────────
@@ -917,14 +1159,7 @@ class TMOService:
         # technical/distribution loss between bulk 33KV injection and retail
         # 11KV delivery.
         def _bulk_total(from_d, to_d):
-            bulk_ids = list(
-                self._base_feeder_qs()
-                .filter(voltage_level='33kv')
-                .exclude(slug__in=DUPLICATE_FEEDER_SLUGS)
-                .exclude(is_minigrid=True)
-                .values_list('id', flat=True)
-            )
-            return calculate_energy_delivered(bulk_ids, from_d, to_d)['total_mwh']
+            return self._bulk_total_mwh(from_d, to_d)
 
         def _share(part, total):
             return round(_pct(part, total), 1) if total else 0.0
@@ -990,6 +1225,7 @@ class TMOService:
             'day_total_mwh': round(day_total, 2),
             'mtd_total_mwh': round(mtd_total, 2),
             'segments': segments,
+            'methodology': METHODOLOGY['volatility'],
         }
 
     # ── 11. Daily Network Energy (Forecast vs Actual) ────────────────────────
@@ -1000,16 +1236,12 @@ class TMOService:
         Compares against daily target derived from monthly GWh target in TMONetworkConfig.
         Covers Slides 2 & 3 (Daily Energy Forecast / Daily Energy Allocation).
         """
-        feeder_ids = list(
-            self._base_feeder_qs()
-            .filter(voltage_level='33kv')
-            .exclude(slug__in=DUPLICATE_FEEDER_SLUGS)
-            .exclude(is_minigrid=True)
-            .values_list('id', flat=True)
-        )
-
-        # 33KV-only: no double-count risk from upstream/downstream pairs, skip _energy_ids()
-        daily_map = _daily_energy_breakdown(feeder_ids, self.from_date, self.to_date)
+        # _bulk_feeder_ids() already strips downstream-of-bulk-parent feeders,
+        # so no separate _energy_ids() double-count pass is needed here.
+        # _bulk_daily_map() shares one classification with every other bulk-
+        # total call in this service instance (see _bulk_classification) —
+        # this IS the anchor everything else reconciles against.
+        daily_map = self._bulk_daily_map(self.from_date, self.to_date)
         daily = [{'date': date.fromisoformat(d), 'total_mwh': v} for d, v in sorted(daily_map.items())]
 
         config = TMONetworkConfig.objects.filter(
@@ -1065,6 +1297,7 @@ class TMOService:
             'mtd_achievement_pct': round(mtd_ach, 1),
             'mtd_status':          _compliance(mtd_ach),
             'days':                days,
+            'methodology':         METHODOLOGY['daily_energy'],
         }
 
     # ── 11b. Daily Energy Forecast by Segment ───────────────────────────────────
@@ -1135,14 +1368,7 @@ class TMOService:
         # bulk figure. Without this, this endpoint's MTD total silently diverges from
         # every other segment total on the dashboard.
         def _bulk_total_mwh(fd, td):
-            bulk_ids = list(
-                self._base_feeder_qs()
-                .filter(voltage_level='33kv')
-                .exclude(slug__in=DUPLICATE_FEEDER_SLUGS)
-                .exclude(is_minigrid=True)
-                .values_list('id', flat=True)
-            )
-            return calculate_energy_delivered(bulk_ids, fd, td)['total_mwh']
+            return self._bulk_total_mwh(fd, td)
 
         def _scale_period(period: dict, fd, td):
             raw_total = sum(v for seg in period.values() for volt in seg.values() for v in volt.values())
@@ -1279,7 +1505,6 @@ class TMOService:
         feeder_qs  = self._base_feeder_qs()
         feeder_ids = set(feeder_qs.values_list('id', flat=True))
         md_ids     = (self.mdi_ids | self.mdni_ids) & feeder_ids
-        nmd_ids    = feeder_ids - md_ids
 
         config = TMONetworkConfig.objects.filter(year=day.year, month=day.month).first()
         target_md_pct  = float(config.target_md_share_pct)  if config else 65.0
@@ -1290,15 +1515,31 @@ class TMOService:
                 return 0.0
             return calculate_energy_delivered(self._energy_ids(list(ids)), fd, td)['total_mwh']
 
-        def _tot(fd, td):
+        def _raw_total(fd, td):
             return calculate_energy_delivered(self._energy_ids(list(feeder_ids)), fd, td)['total_mwh']
 
-        day_total = _tot(day, day)
-        day_md    = _e(md_ids, day, day)
+        def _bulk_total(fd, td):
+            return calculate_energy_delivered(list(self._bulk_feeder_ids()), fd, td)['total_mwh']
+
+        # Share-then-scale (same rationale as get_volatility/get_energy_by_segment):
+        # MD/NMD tagging is only meaningful at the retail level, so it's used to
+        # derive a SHARE, then applied to the bulk 33KV anchor total — otherwise
+        # this chart silently diverges from Daily Energy Allocation and every
+        # other segment breakdown on the dashboard.
+        day_raw_total = _raw_total(day, day)
+        day_md_raw    = _e(md_ids, day, day)
+        day_nmd_raw   = max(day_raw_total - day_md_raw, 0.0)
+
+        day_total = _bulk_total(day, day)
+        day_md    = day_total * (day_md_raw / day_raw_total) if day_raw_total else 0.0
         day_nmd   = max(day_total - day_md, 0.0)
 
-        mtd_total = _tot(mtd_start, day)
-        mtd_md    = _e(md_ids, mtd_start, day)
+        mtd_raw_total = _raw_total(mtd_start, day)
+        mtd_md_raw    = _e(md_ids, mtd_start, day)
+        mtd_nmd_raw   = max(mtd_raw_total - mtd_md_raw, 0.0)
+
+        mtd_total = _bulk_total(mtd_start, day)
+        mtd_md    = mtd_total * (mtd_md_raw / mtd_raw_total) if mtd_raw_total else 0.0
         mtd_nmd   = max(mtd_total - mtd_md, 0.0)
 
         return {
@@ -1322,6 +1563,7 @@ class TMOService:
                 'md_share_pct': round(_pct(mtd_md, mtd_total), 1),
                 'nmd_share_pct': round(_pct(mtd_nmd, mtd_total), 1),
             },
+            'methodology': METHODOLOGY['pear'],
         }
 
     # ── 13. Compliance Summary by Segment ────────────────────────────────────
@@ -1439,6 +1681,7 @@ class TMOService:
         return {
             'period':   {'from': str(self.from_date), 'to': str(self.to_date)},
             'segments': result,
+            'methodology': METHODOLOGY['compliance_summary'],
         }
 
     # ── 14. Energy by Voltage (33KV vs 11KV per segment) ─────────────────────
@@ -1557,14 +1800,7 @@ class TMOService:
         # show up in the bulk figure. Scaling preserves the retail-derived proportions
         # while making the grand total reconcile with Daily Energy Allocation.
         def _bulk_total_mwh(fd, td):
-            bulk_ids = list(
-                self._base_feeder_qs()
-                .filter(voltage_level='33kv')
-                .exclude(slug__in=DUPLICATE_FEEDER_SLUGS)
-                .exclude(is_minigrid=True)
-                .values_list('id', flat=True)
-            )
-            return calculate_energy_delivered(bulk_ids, fd, td)['total_mwh']
+            return self._bulk_total_mwh(fd, td)
 
         def _scale(totals, fd, td):
             raw_total = sum(v for seg in totals.values() for v in seg.values())
@@ -1579,30 +1815,36 @@ class TMOService:
         curr_totals = _scale(curr_totals, self.from_date, to_date)
         prev_totals = _scale(prev_totals, prev_start, prev_end)
 
-        # Apply the same current-month scale factor to the daily series so the "days"
-        # breakdown reconciles with the (now-scaled) month_comparison totals.
-        curr_raw_total = sum(
-            vol_val
-            for d_str in day_agg
-            if d_str != str(date.today())
-            for seg in ('MDI', 'MDNI', 'Regional')
-            for vol_val in day_agg[d_str].get(seg, {'33kv': 0.0, '11kv': 0.0}).values()
-        )
-        if curr_raw_total:
-            day_scale_factor = _bulk_total_mwh(self.from_date, to_date) / curr_raw_total
-            for entry in days:
-                for seg in ('MDI', 'MDNI', 'Regional'):
-                    s = entry['segments'][seg]
-                    mwh_33 = s['energy_33kv_mwh'] * day_scale_factor
-                    mwh_11 = s['energy_11kv_mwh'] * day_scale_factor
-                    entry['segments'][seg] = {
-                        'energy_33kv_mwh': round(mwh_33, 4),
-                        'energy_11kv_mwh': round(mwh_11, 4),
-                        'total_mwh':       round(mwh_33 + mwh_11, 4),
-                        'energy_33kv_gwh': round(mwh_33 / 1000, 4),
-                        'energy_11kv_gwh': round(mwh_11 / 1000, 4),
-                        'total_gwh':       round((mwh_33 + mwh_11) / 1000, 4),
-                    }
+        # Scale each day's segments onto THAT DAY's own bulk total — not a single
+        # factor averaged across the whole period. A uniform period-level factor
+        # only makes the period sum reconcile; individual days can still diverge
+        # from get_daily_energy()'s per-day figure whenever the retail-to-bulk
+        # ratio shifts day to day (which it does — see the day-by-day TCN
+        # reconciliation work). Scaling per day makes every single day's
+        # MDI+MDNI+Regional (33KV+11KV) sum exactly equal that day's Daily
+        # Energy Allocation figure, not just the period total on average.
+        for entry in days:
+            d = date.fromisoformat(entry['date'])
+            day_raw_total = sum(
+                vol_val
+                for seg in ('MDI', 'MDNI', 'Regional')
+                for vol_val in day_agg[entry['date']].get(seg, {'33kv': 0.0, '11kv': 0.0}).values()
+            )
+            if not day_raw_total:
+                continue
+            day_factor = _bulk_total_mwh(d, d) / day_raw_total
+            for seg in ('MDI', 'MDNI', 'Regional'):
+                s = entry['segments'][seg]
+                mwh_33 = s['energy_33kv_mwh'] * day_factor
+                mwh_11 = s['energy_11kv_mwh'] * day_factor
+                entry['segments'][seg] = {
+                    'energy_33kv_mwh': round(mwh_33, 4),
+                    'energy_11kv_mwh': round(mwh_11, 4),
+                    'total_mwh':       round(mwh_33 + mwh_11, 4),
+                    'energy_33kv_gwh': round(mwh_33 / 1000, 4),
+                    'energy_11kv_gwh': round(mwh_11 / 1000, 4),
+                    'total_gwh':       round((mwh_33 + mwh_11) / 1000, 4),
+                }
 
         month_comparison = {}
         for seg in ('MDI', 'MDNI', 'Regional'):
@@ -1628,6 +1870,7 @@ class TMOService:
             'period':           {'from': str(self.from_date), 'to': str(self.to_date)},
             'days':             days,
             'month_comparison': month_comparison,
+            'methodology':      METHODOLOGY['energy_by_voltage'],
         }
 
     # ── 15. Techno-Commercial Incidents ──────────────────────────────────────
@@ -1651,6 +1894,21 @@ class TMOService:
                 occurred_at__date__gte=self.from_date,
                 occurred_at__date__lte=self.to_date,
             )
+            # Only genuine DISCO (11KV/33KV distribution-side) faults belong in a
+            # techno-commercial FAULT incidence report — exclude everything that
+            # isn't a real DISCO fault:
+            #   - Load shedding (L/S, L/S GS, 330KV L/S, T/LS) — planned, generation-
+            #     driven, not a feeder fault
+            #   - TCN/transmission-side faults (132KV/330KV-prefixed types, "tcn") —
+            #     TCN's network, not KEDCO's
+            #   - Maintenance (MTCE, MTNC, 132KV MTCE) — planned work, not a fault
+            #   - Administrative/status codes (permit, NO RI, N/A, OFF) — not faults
+            .exclude(interruption_type__icontains='L/S')
+            .exclude(interruption_type__icontains='LS')
+            .exclude(interruption_type__istartswith='132KV')
+            .exclude(interruption_type__istartswith='330KV')
+            .exclude(interruption_type='tcn')
+            .exclude(interruption_type__in=['MTCE', 'MTNC', 'permit', 'NO RI', 'N/A', 'OFF'])
             .select_related(
                 'feeder', 'feeder__band',
                 'feeder__substation', 'feeder__substation__state',
@@ -1765,6 +2023,7 @@ class TMOService:
                 'total_financial_loss_ngn': round(total_loss, 2),
             },
             'incidents': rows,
+            'methodology': METHODOLOGY['incidents'],
         }
 
     # ── 16. GCR (Energy Gap-to-Cost Ratio) ───────────────────────────────────
@@ -1871,6 +2130,7 @@ class TMOService:
             'period':   {'from': str(self.from_date), 'to': str(self.to_date)},
             'rows':     rows,
             'segments': rows,   # alias used by report renderers and GCR slide
+            'methodology': METHODOLOGY['gcr'],
         }
 
     # ── 17. Monitored New Feeders — daily energy from commissioning date ─────
@@ -2081,6 +2341,7 @@ class TMOService:
                 'total_unpicked_mw':  round(total_unpicked, 2),
             },
             'days': days,
+            'methodology': METHODOLOGY['daily_allocation'],
         }
 
     # ── 18. Single Feeder Detail ─────────────────────────────────────────────
