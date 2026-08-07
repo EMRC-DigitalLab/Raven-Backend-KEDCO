@@ -177,7 +177,15 @@
       "Bash(python -c \"import ast; ast.parse\\(open\\('tmo/services.py', encoding='utf-8'\\).read\\(\\)\\); print\\('services.py syntax OK'\\)\")",
       "Bash(python -c \"import ast; ast.parse\\(open\\('tmo/sheet_sync.py', encoding='utf-8'\\).read\\(\\)\\); print\\('sheet_sync.py syntax OK'\\)\")",
       "Bash(gh pr *)",
-      "Bash(cp \"C:\\\\Users\\\\TRIUMP~1\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-TriumphAdeniran-OneDrive---Market-and-Regulatory-Consultants-Ltd-Desktop-Raven-Code-Base-Raven-Backend-KEDCO\\\\eced7ae1-261a-4f46-b7f4-deaa213b715a\\\\scratchpad\\\\TMO_Methodology.md\" \"/c/Users/TriumphAdeniran/Desktop/TMO_Methodology.md\" && ls -la \"/c/Users/TriumphAdeniran/Desktop/TMO_Methodology.md\")"
+      "Bash(cp \"C:\\\\Users\\\\TRIUMP~1\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-TriumphAdeniran-OneDrive---Market-and-Regulatory-Consultants-Ltd-Desktop-Raven-Code-Base-Raven-Backend-KEDCO\\\\eced7ae1-261a-4f46-b7f4-deaa213b715a\\\\scratchpad\\\\TMO_Methodology.md\" \"/c/Users/TriumphAdeniran/Desktop/TMO_Methodology.md\" && ls -la \"/c/Users/TriumphAdeniran/Desktop/TMO_Methodology.md\")",
+      "Bash(PYTHONIOENCODING=utf-8 PYTHONPATH=\".\" python \"C:\\\\Users\\\\TRIUMP~1\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-TriumphAdeniran-OneDrive---Market-and-Regulatory-Consultants-Ltd-Desktop-Raven-Code-Base-Raven-Backend-KEDCO\\\\eced7ae1-261a-4f46-b7f4-deaa213b715a\\\\scratchpad\\\\full_reconcile.py\")",
+      "Bash(PYTHONIOENCODING=utf-8 PYTHONPATH=. python -c ' *)",
+      "Bash(PowerShell -Command \"Get-FileHash 'segmentation\\(1\\).xlsx', '11kv and 33kv .xlsx' -Algorithm SHA256 | Select-Object Path, Hash\")",
+      "Bash(certutil -hashfile \"segmentation\\(1\\).xlsx\" SHA256)",
+      "Bash(sed \"s|segmentation\\(1\\)\\\\.xlsx|11kv and 33kv .xlsx|\" \"C:\\\\Users\\\\TRIUMP~1\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-TriumphAdeniran-OneDrive---Market-and-Regulatory-Consultants-Ltd-Desktop-Raven-Code-Base-Raven-Backend-KEDCO\\\\eced7ae1-261a-4f46-b7f4-deaa213b715a\\\\scratchpad\\\\full_reconcile.py\")",
+      "Bash(PYTHONIOENCODING=utf-8 PYTHONPATH=\".\" python \"C:\\\\Users\\\\TRIUMP~1\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-TriumphAdeniran-OneDrive---Market-and-Regulatory-Consultants-Ltd-Desktop-Raven-Code-Base-Raven-Backend-KEDCO\\\\eced7ae1-261a-4f46-b7f4-deaa213b715a\\\\scratchpad\\\\full_reconcile_v2.py\")",
+      "Bash(PYTHONIOENCODING=utf-8 PYTHONPATH=\".\" python \"C:\\\\Users\\\\TRIUMP~1\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-TriumphAdeniran-OneDrive---Market-and-Regulatory-Consultants-Ltd-Desktop-Raven-Code-Base-Raven-Backend-KEDCO\\\\eced7ae1-261a-4f46-b7f4-deaa213b715a\\\\scratchpad\\\\full_reconcile3.py\")",
+      "Bash(PYTHONIOENCODING=utf-8 PYTHONPATH=\".\" python \"C:\\\\Users\\\\TRIUMP~1\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-TriumphAdeniran-OneDrive---Market-and-Regulatory-Consultants-Ltd-Desktop-Raven-Code-Base-Raven-Backend-KEDCO\\\\eced7ae1-261a-4f46-b7f4-deaa213b715a\\\\scratchpad\\\\real_mapping_reconcile.py\")"
     ],
     "additionalDirectories": [
       "c:\\c\\Users\\TriumphAdeniran\\OneDrive - Market and Regulatory Consultants Ltd\\Desktop\\Raven Code Base\\Raven-Backend-KEDCO",

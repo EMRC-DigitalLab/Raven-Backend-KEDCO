@@ -1942,6 +1942,11 @@ class TMOService:
         If feeder_slug / q / band / segment provided → any matching feeder.
         Default (no params): minigrid feeders only (original SSF behaviour).
         """
+        # Clamp to yesterday — today's cross-day diff is really yesterday's energy
+        # filed under today's date (see get_daily_energy()), so it can never be a
+        # real, finished number until today is over.
+        to_date = min(self.to_date, date.today() - timedelta(days=1))
+
         feeder_qs = self._base_feeder_qs()
         if feeder_slug:
             feeder_qs = feeder_qs.filter(slug=feeder_slug)
@@ -1958,7 +1963,7 @@ class TMOService:
 
         if not feeder_ids:
             return {
-                'period':   {'from': str(self.from_date), 'to': str(self.to_date)},
+                'period':   {'from': str(self.from_date), 'to': str(to_date)},
                 'feeders':  [],
                 'summary':  {'total_mwh': 0.0, 'days': []},
             }
@@ -1966,7 +1971,7 @@ class TMOService:
         # All dates in the period
         all_dates = []
         cur = self.from_date
-        while cur <= self.to_date:
+        while cur <= to_date:
             all_dates.append(str(cur))
             cur += timedelta(days=1)
 
@@ -1975,7 +1980,7 @@ class TMOService:
         summary_by_date = defaultdict(float)
 
         for feeder in feeder_qs:
-            day_map   = _feeder_energy_by_day(feeder.id, self.from_date, self.to_date)
+            day_map   = _feeder_energy_by_day(feeder.id, self.from_date, to_date)
             total_mwh = sum(day_map.values())
 
             days = []
@@ -2013,7 +2018,7 @@ class TMOService:
         grand_total = round(sum(summary_by_date.values()), 2)
 
         return {
-            'period':  {'from': str(self.from_date), 'to': str(self.to_date)},
+            'period':  {'from': str(self.from_date), 'to': str(to_date)},
             'feeders': feeders_out,          # one entry per minigrid → individual bar charts
             'summary': {                     # aggregated → combined table
                 'total_mwh': grand_total,
