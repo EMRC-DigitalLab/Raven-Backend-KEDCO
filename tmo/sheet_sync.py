@@ -25,6 +25,7 @@ from common.models import Feeder
 from technical.models import CumulativeMeterReading, DailyHoursOfSupply, EnergyDelivered, HourlyLoad
 from tmo.models import TMONetworkDispatch, TMONetworkDispatchHourly
 from tmo.services import DUPLICATE_FEEDER_SLUGS
+from technical.utils.energy_utils import DAILY_BALLOON_LIMIT
 
 logger = logging.getLogger(__name__)
 
@@ -653,7 +654,13 @@ def sync_11kv_sheet(spreadsheet_id: str, year: int, month: int,
 
             variance_val = row[ENERGY_VARIANCE_COL_11KV] if ENERGY_VARIANCE_COL_11KV < len(row) else ''
             variance_mwh = _safe_float(variance_val)
-            if variance_mwh is not None:
+            # Reject garbage sheet values before they ever reach the DB — a bad
+            # PREVIOUS/PRESENT ENERGY entry in the source sheet (meter reset,
+            # typo, blank treated as 0) can produce an absurd variance. Same
+            # sanity bound as the balloon-limit check used everywhere else for
+            # meter-derived energy: negative or implausibly large is rejected,
+            # not saved and silently corrupting downstream totals.
+            if variance_mwh is not None and 0 <= variance_mwh <= DAILY_BALLOON_LIMIT:
                 variance_rows[feeder] = round(variance_mwh, 2)
 
         unmatched.update(day_unmatched)

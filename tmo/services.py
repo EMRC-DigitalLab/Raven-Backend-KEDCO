@@ -281,26 +281,41 @@ def resolve_date_params(request):
     """
     Parse query params → (from_date, to_date).
     Priority: from_date+to_date > month > date > T-1 (yesterday).
+
+    to_date is ALWAYS clamped to yesterday, no matter which branch produced
+    it. This is the single point every TMOService date range passes through,
+    so it's the one place this rule has to hold — individual methods have
+    been re-implementing their own "today isn't final yet" clamp for months
+    (get_daily_energy, get_volatility, get_pear, ...), which works until a
+    new method forgets to. Confirmed 2026-08-08: a request for the current
+    month (?month=2026-08) returned to_date = Aug 31 unclamped — the entire
+    rest of the month treated as already-happened data — which is what
+    produced the 98.9%-to-one-segment P&L donut bug. Clamping here means
+    every TMOService method is protected automatically, not just the ones
+    that remembered to guard themselves.
     """
     p = request.query_params
+    yesterday = date.today() - timedelta(days=1)
 
     if p.get('from_date') and p.get('to_date'):
-        return date.fromisoformat(p['from_date']), date.fromisoformat(p['to_date'])
+        from_date = date.fromisoformat(p['from_date'])
+        to_date   = min(date.fromisoformat(p['to_date']), yesterday)
+        return from_date, to_date
 
     if p.get('month'):
         year, month = map(int, p['month'].split('-'))
         from_date = date(year, month, 1)
         if month == 12:
-            to_date = date(year + 1, 1, 1) - timedelta(days=1)
+            month_end = date(year + 1, 1, 1) - timedelta(days=1)
         else:
-            to_date = date(year, month + 1, 1) - timedelta(days=1)
+            month_end = date(year, month + 1, 1) - timedelta(days=1)
+        to_date = min(month_end, yesterday)
         return from_date, to_date
 
     if p.get('date'):
-        d = date.fromisoformat(p['date'])
+        d = min(date.fromisoformat(p['date']), yesterday)
         return d, d
 
-    yesterday = date.today() - timedelta(days=1)
     return yesterday, yesterday
 
 
@@ -519,9 +534,19 @@ class TMOService:
         """
         if self._bulk_classification_cache is None:
             bulk_ids = self._bulk_feeder_ids()
+            # Never let today (always incomplete — see the "today excluded"
+            # rule used everywhere else in this file) into the classification
+            # window. A caller can legitimately pass to_date=today (that's
+            # the normal default), but classifying meter-vs-balloon using a
+            # partial/missing day can corrupt the decision for feeders that
+            # are otherwise fine — confirmed 2026-08-08: extending the range
+            # by one day to include today turned a healthy MTD split (44/10/46%)
+            # into a broken one (63/1/-0%) with no other change.
+            classify_end = min(self.to_date, date.today() - timedelta(days=1))
+            classify_start = min(self.from_date, classify_end)
             self._bulk_classification_cache = (
                 bulk_ids,
-                _classify_feeders(bulk_ids, self.from_date, self.to_date),
+                _classify_feeders(bulk_ids, classify_start, classify_end),
             )
         return self._bulk_classification_cache
 
