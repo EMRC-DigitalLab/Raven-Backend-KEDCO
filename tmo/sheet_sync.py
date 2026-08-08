@@ -743,19 +743,28 @@ def sync_11kv_sheet(spreadsheet_id: str, year: int, month: int,
                             )
 
                 # ── ENERGY VARIANCE → EnergyDelivered ───────────────────────
-                # Only for feeders with no 33KV Energy Accounting meter reading
-                # for this date — that source is the authoritative bulk meter
-                # and takes priority whenever both exist (mirrors TCN's own
-                # "bulk parent" vs "standalone lookup" row-formula split).
-                # Never overwrites a real meter-difference or manual reading —
-                # only fills gaps or refreshes our own earlier estimates.
+                # Only for feeders with no ALREADY-COMPUTED energy value for
+                # this date — a real meter-difference or manual reading takes
+                # priority whenever one exists (mirrors TCN's own "bulk
+                # parent" vs "standalone lookup" row-formula split).
+                #
+                # Deliberately checks EnergyDelivered, not CumulativeMeterReading
+                # — a feeder can have a CMR row for this date (e.g. a lone
+                # DataNest submission with no adjacent-day reading to diff
+                # against) without ever producing a real EnergyDelivered value.
+                # Gating on CMR existence alone left feeders in that state with
+                # NO energy value at all: not the correct meter-difference
+                # (nothing to diff against yet) and not our own sheet-variance
+                # estimate either (blocked by the CMR check). Confirmed
+                # 2026-08-08: 11KV Ahmadu Bello had a dso CumulativeMeterReading
+                # for Aug 1 but zero EnergyDelivered, silently dropping its real
+                # 13.5 MWh sheet-variance value. Gating on EnergyDelivered
+                # existence instead still lets a later, real meter-difference
+                # calculation (once CumulativeMeterReading.save() has both days
+                # to diff) overwrite this estimate, since that write isn't
+                # gated by calculation_method at all.
                 ed_written = 0
                 if variance_rows:
-                    has_cmr = set(
-                        CumulativeMeterReading.objects
-                        .filter(reading_date=reading_date, feeder__in=variance_rows.keys())
-                        .values_list('feeder_id', flat=True)
-                    )
                     protected = set(
                         EnergyDelivered.objects
                         .filter(
@@ -771,7 +780,7 @@ def sync_11kv_sheet(spreadsheet_id: str, year: int, month: int,
                             is_calculated=True, calculation_method='sheet_variance',
                         )
                         for feeder, mwh in variance_rows.items()
-                        if feeder.id not in has_cmr and feeder.id not in protected
+                        if feeder.id not in protected
                     ]
                     if ed_to_write:
                         EnergyDelivered.objects.bulk_create(
