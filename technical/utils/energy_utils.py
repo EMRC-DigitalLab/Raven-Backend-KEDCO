@@ -20,10 +20,23 @@ Usage:
 """
 
 from django.db import connection
-from django.db.models import Avg, Count, Max, Sum
+from django.db.models import Avg, Count, Max, Q, Sum
 from django.utils import timezone
 
+from common.models import Feeder
 from technical.models import EnergyDelivered, HourlyLoad
+
+# Feeders confirmed against TCN's own ground-truth workbook to have a
+# genuine, real reading of exactly 0 on at least some days (Musawa, Rijiyar
+# Zaki, Spanish 1 report 0 every day; Dan'Agundi 1 alternates 0/1 MWh, both
+# real). Trusted by slug rather than calculation_method because a
+# 'manual_entry' override written to protect one of these gets silently
+# reverted to 'meter_difference' the next time an automated force=True sync
+# recomputes that (feeder, date) — confirmed to happen twice this session.
+# Kept in sync with the identical constant in tmo/services.py (not imported
+# from there to avoid a circular import — tmo.services already imports this
+# module).
+CONFIRMED_ZERO_TRUSTED_SLUGS = ['KS-KAN-MUS', 'KN-KUM-RIJ', 'KN-KUM-SPA', 'KN-DAN-DAN']
 
 # Max acceptable daily energy per feeder (MWh).
 # If ANY single day's reading exceeds this, treat the whole feeder's meter
@@ -67,6 +80,11 @@ def calculate_energy_delivered(feeder_ids, from_date, to_date):
     if not feeder_ids:
         return {'total_mwh': 0.0, 'meter_feeders': 0, 'system_feeders': 0}
 
+    always_trusted_ids = set(
+        Feeder.objects.filter(slug__in=CONFIRMED_ZERO_TRUSTED_SLUGS, id__in=feeder_ids)
+        .values_list('id', flat=True)
+    )
+
     # ── Step 1: Collect valid EnergyDelivered totals per feeder ──────────────
     # Use MAX daily value for the balloon check so that a single bad day
     # rejects the feeder regardless of how long the date range is.
@@ -75,7 +93,10 @@ def calculate_energy_delivered(feeder_ids, from_date, to_date):
         EnergyDelivered.objects
         .filter(feeder_id__in=feeder_ids, date__gte=from_date, date__lte=to_date)
         .values('feeder_id')
-        .annotate(total=Sum('energy_mwh'), max_daily=Max('energy_mwh'), days=Count('id'))
+        .annotate(
+            total=Sum('energy_mwh'), max_daily=Max('energy_mwh'), days=Count('id'),
+            trusted_zero_cnt=Count('id', filter=Q(calculation_method__in=['sheet_variance', 'manual_entry'])),
+        )
     )
     for row in ed_records:
         fid = row['feeder_id']
@@ -84,7 +105,17 @@ def calculate_energy_delivered(feeder_ids, from_date, to_date):
         days = int(row['days'] or 1)
         # ✅ FIX: reject if ANY single day exceeds the balloon limit
         # (previously used avg which masked outlier days over long ranges)
-        if days > 0 and 0 < max_daily <= DAILY_BALLOON_LIMIT:
+        #
+        # max_daily > 0 also guards against a broken meter stuck at exactly
+        # 0 (see DAILY_BALLOON_LIMIT comment history) — but a genuine,
+        # directly-sourced zero (calculation_method='sheet_variance', TCN's
+        # own sheet says zero, not a Raven-computed diff) isn't that failure
+        # mode and shouldn't be overridden by a fabricated system estimate
+        # (confirmed 2026-08-08 for Dawaki/Dawanau/Badume, each reporting a
+        # real 0 across all 6 days per TCN's ground truth). Also see
+        # CONFIRMED_ZERO_TRUSTED_SLUGS for the slug-based trust override.
+        trusted = int(row['trusted_zero_cnt'] or 0) > 0 or fid in always_trusted_ids
+        if days > 0 and max_daily <= DAILY_BALLOON_LIMIT and (max_daily > 0 or trusted):
             ed_by_feeder[fid] = total
 
     # ── Step 2: System estimate for feeders with no valid meter data ──────────
@@ -131,20 +162,33 @@ def calculate_energy_delivered_per_feeder(feeder_ids, from_date, to_date):
     if not feeder_ids:
         return {}
 
+    always_trusted_ids = set(
+        Feeder.objects.filter(slug__in=CONFIRMED_ZERO_TRUSTED_SLUGS, id__in=feeder_ids)
+        .values_list('id', flat=True)
+    )
+
     # ── Step 1: valid meter data per feeder ───────────────────────────────────
+    # See calculate_energy_delivered() for why a genuine, directly-sourced
+    # zero (calculation_method='sheet_variance') is trusted even though
+    # max_daily == 0 — that's not the same failure mode as a broken meter.
+    # Also see CONFIRMED_ZERO_TRUSTED_SLUGS for the slug-based trust override.
     ed_by_feeder = {}
     ed_records = (
         EnergyDelivered.objects
         .filter(feeder_id__in=feeder_ids, date__gte=from_date, date__lte=to_date)
         .values('feeder_id')
-        .annotate(total=Sum('energy_mwh'), max_daily=Max('energy_mwh'), days=Count('id'))
+        .annotate(
+            total=Sum('energy_mwh'), max_daily=Max('energy_mwh'), days=Count('id'),
+            trusted_zero_cnt=Count('id', filter=Q(calculation_method__in=['sheet_variance', 'manual_entry'])),
+        )
     )
     for row in ed_records:
         fid = row['feeder_id']
         total = float(row['total'] or 0)
         max_daily = float(row['max_daily'] or 0)
         days = int(row['days'] or 1)
-        if days > 0 and 0 < max_daily <= DAILY_BALLOON_LIMIT:
+        trusted = int(row['trusted_zero_cnt'] or 0) > 0 or fid in always_trusted_ids
+        if days > 0 and max_daily <= DAILY_BALLOON_LIMIT and (max_daily > 0 or trusted):
             ed_by_feeder[fid] = total
 
     # ── Step 2: system estimate for feeders with no valid meter data ──────────
