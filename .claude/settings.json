@@ -231,7 +231,9 @@
       "Bash(awk -F: '$1 > 1863 && $1 < 2020')",
       "Bash(python manage.py sync_33kv_energy_sheet --month 2026-07 --force)",
       "Bash(python manage.py sync_11kv_sheet --month 2026-07 --force)",
-      "Bash(python -c \"import ast; ast.parse\\(open\\('tmo/tasks.py', encoding='utf-8'\\).read\\(\\)\\)\")"
+      "Bash(python -c \"import ast; ast.parse\\(open\\('tmo/tasks.py', encoding='utf-8'\\).read\\(\\)\\)\")",
+      "Bash(python manage.py shell -c \"exec\\(open\\(r'C:\\\\Users\\\\TRIUMP~1\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-TriumphAdeniran-OneDrive---Market-and-Regulatory-Consultants-Ltd-Desktop-Raven-Code-Base-Raven-Backend-KEDCO\\\\eced7ae1-261a-4f46-b7f4-deaa213b715a\\\\scratchpad\\\\diagnose_july_days.py'\\).read\\(\\)\\)\")",
+      "PowerShell(gh --version)"
     ],
     "additionalDirectories": [
       "c:\\c\\Users\\TriumphAdeniran\\OneDrive - Market and Regulatory Consultants Ltd\\Desktop\\Raven Code Base\\Raven-Backend-KEDCO",

@@ -1238,6 +1238,17 @@ class TMOService:
             diff    = round(d_share - m_share, 1)
             segments.append({
                 'segment':          seg,
+                # Precise absolute values — the frontend should display these
+                # directly, not re-derive GWh by multiplying the *_share_pct
+                # fields below by the total. Those percentages are rounded to
+                # 1dp for display and don't sum to exactly 100%, so computing
+                # GWh from them compounds the rounding error (confirmed
+                # 2026-08-08: 44.6+11.0+44.3=99.9% displayed a 140.67 GWh sum
+                # against the real 140.81 GWh total).
+                'yesterday_mwh':    round(d_val, 2),
+                'yesterday_gwh':    round(d_val / 1000, 4),
+                'mtd_mwh':          round(m_val, 2),
+                'mtd_gwh':          round(m_val / 1000, 4),
                 'yesterday_share_pct': d_share,
                 'mtd_share_pct':    m_share,
                 'difference_pct':   diff,
