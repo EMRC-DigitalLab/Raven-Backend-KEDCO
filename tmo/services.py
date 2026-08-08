@@ -107,6 +107,19 @@ CONFIRMED_SUBTRACTED_CHILD_SLUGS = [
     'KN-WUD3-GAY',  # Gaya <- Wudil
 ]
 
+# 33KV parents individually verified (2026-08-08, against TCN's own ground-
+# truth workbook) to subtract NONE of their topology-listed children at all
+# — their own raw reading already equals TCN's reported figure with nothing
+# removed. Same pattern as DAN'AGUNDI 1: Gano (37.30=37.30), Flour Mills
+# (123=123), Hon. Abubakar (26.84=26.84, verified against Bichi Town).
+PARENT_NEVER_SUBTRACTS_SLUGS = {'KN-DAN-DAN', 'KN-WUD2-GAN', 'KN-DAK-FLO', 'KS-KAN-HON'}
+
+# Children individually verified to never be subtracted from ANY parent,
+# regardless of what FeederSupplyRelationship's topology claims. Excluding
+# Dundu and Asian Plastic gives an EXACT match for NNPC (50.30=50.30);
+# excluding Nuhu Sunusi gives an EXACT match for Dutse (48.55=48.55).
+CHILD_NEVER_SUBTRACTED_SLUGS = {'KN-JOG-DUN', 'KN-DUT-NUH', 'asian-plastic'}
+
 # Feeders that have NO real EnergyDelivered data of their own (never synced —
 # not "broken meter", genuinely nothing to sync) AND whose own row in TCN's
 # ground-truth workbook is blank/zero, confirmed by a full row-by-row audit
@@ -603,6 +616,7 @@ class TMOService:
         self._upstream_ids_cache = None
         self._bulk_classification_cache = None
         self._regions_ids_cache = None
+        self._segment_topology_cache = None
 
     def _energy_ids(self, feeder_ids):
         """Strip upstream 33KV feeders (those with active downstream 11KV feeders)."""
@@ -935,16 +949,13 @@ class TMOService:
         # Regions = every feeder that is neither MDI nor MDNI (includes minigrids)
         region_ids = feeder_ids - mdi_ids - mdni_ids
 
+        # feeder_count/target still use this (per-feeder, topology-agnostic)
+        # population — only the *energy* figure below needed the fix.
         buckets = {
             'MDI':     mdi_ids,
             'MDNI':    mdni_ids,
             'Regions': region_ids,
         }
-
-        def _energy(ids):
-            if not ids:
-                return 0.0
-            return calculate_energy_delivered(self._energy_ids(list(ids)), self.from_date, to_date)['total_mwh']
 
         def _target(ids):
             if not ids:
@@ -957,19 +968,20 @@ class TMOService:
                 ).aggregate(t=Sum('target_mwh'))['t'] or 0
             )
 
-        # Each segment's own classified energy, used directly — NOT scaled to
-        # the bulk 33KV network total. Changed 2026-08-08 to match get_
-        # volatility()/get_pear(): confirmed against the source Excel that
-        # TCN's own P&L breakdown doesn't force MDI+MDNI+Regions to equal the
-        # Daily Energy Allocation total either (some feeders are unclassified
-        # or excluded from the network total's own scope). Previously this
-        # scaled every segment's share onto bulk_total, which made this
-        # endpoint's numbers (and GCR's, which reuses actual_mwh from here)
-        # silently diverge from the donut/PEAR charts for the exact same
-        # period — confirmed 2026-08-08: MDNI showed 2.71 GWh here vs 2.22
-        # GWh on the donut for the same MTD window, a real ~22% mismatch a
-        # user could see just by comparing two charts on the same dashboard.
-        raw_actual = {name: _energy(ids) for name, ids in buckets.items()}
+        # Each segment's own classified energy, from the shared NET-33KV +
+        # all-11KV logic (see _segment_totals() above) — NOT the old _energy_
+        # ids() population, which undercounted badly (confirmed 2026-08-08:
+        # 27.77 GWh vs the validated 33.88 GWh anchor for the same period, an
+        # 18% gap — most 33KV bulk parents were being dropped outright
+        # instead of NET-subtracted). Also not scaled to the bulk 33KV total:
+        # confirmed against the source Excel that TCN's own P&L breakdown
+        # doesn't force MDI+MDNI+Regions to equal the Daily Energy Allocation
+        # total either. This also fixed a real, user-visible inconsistency:
+        # MDNI showed 2.71 GWh here (and on GCR, which reuses actual_mwh from
+        # here) vs 2.22 GWh on the donut for the identical MTD window.
+        raw_actual = self._segment_totals(self.from_date, to_date)
+        raw_actual = {'MDI': raw_actual.get('MDI', 0.0), 'MDNI': raw_actual.get('MDNI', 0.0),
+                      'Regions': raw_actual.get('Regional', 0.0)}
         raw_total  = sum(raw_actual.values())
 
         segments = []
@@ -1385,17 +1397,6 @@ class TMOService:
         day = min(self.to_date, date.today() - timedelta(days=1))
         mtd_start = day.replace(day=1)
 
-        feeder_qs  = self._base_feeder_qs()
-        feeder_ids = set(feeder_qs.values_list('id', flat=True))
-
-        def _energy(ids, from_d, to_d):
-            if not ids:
-                return 0.0
-            return calculate_energy_delivered(self._energy_ids(list(ids)), from_d, to_d)['total_mwh']
-
-        def _raw_total(from_d, to_d):
-            return calculate_energy_delivered(self._energy_ids(list(feeder_ids)), from_d, to_d)['total_mwh']
-
         def _share(part, total):
             return round(_pct(part, total), 1) if total else 0.0
 
@@ -1413,28 +1414,24 @@ class TMOService:
                     return 'Declining –'
                 return 'Stable'
 
-        # Segment energy is used directly, not scaled to the bulk 33KV total.
-        # Confirmed 2026-08-08 against the source Excel's own P&L doughnut
-        # logic: each segment's share is that segment's classified energy
-        # divided by the sum of the three classified segments — the doughnut's
-        # own total is that sum, not the Daily Energy Allocation total. TCN's
-        # own dashboard does NOT reconcile these two numbers to match each
-        # other (confirmed: the Excel's classified total for a day sits ~2%
-        # below that day's real Daily Energy Allocation total — the gap is
-        # unclassified/unmapped feeders, which the P&L breakdown correctly
-        # leaves out rather than folding into a scaled total).
-        # Day — Regions = everything that isn't MDI or MDNI (minigrids included)
-        day_mdi   = _energy(self.mdi_ids & feeder_ids, day, day)
-        day_mdni  = _energy(self.mdni_ids & feeder_ids, day, day)
-        day_raw_total = _raw_total(day, day)
-        day_reg   = max(day_raw_total - day_mdi - day_mdni, 0.0)
+        # Segment energy comes from the shared NET-33KV + all-11KV logic (see
+        # _segment_totals() above), used directly — not scaled to the bulk
+        # 33KV total. Confirmed 2026-08-08 against the source Excel's own P&L
+        # doughnut logic: each segment's share is that segment's classified
+        # energy divided by the sum of the three classified segments — the
+        # doughnut's own total is that sum, not the Daily Energy Allocation
+        # total. TCN's own dashboard does NOT reconcile these two numbers to
+        # match each other.
+        day_totals = self._segment_totals(day, day)
+        day_mdi  = day_totals.get('MDI', 0.0)
+        day_mdni = day_totals.get('MDNI', 0.0)
+        day_reg  = day_totals.get('Regional', 0.0)
         day_total = day_mdi + day_mdni + day_reg
 
-        # MTD
-        mtd_mdi   = _energy(self.mdi_ids & feeder_ids, mtd_start, day)
-        mtd_mdni  = _energy(self.mdni_ids & feeder_ids, mtd_start, day)
-        mtd_raw_total = _raw_total(mtd_start, day)
-        mtd_reg   = max(mtd_raw_total - mtd_mdi - mtd_mdni, 0.0)
+        mtd_totals = self._segment_totals(mtd_start, day)
+        mtd_mdi  = mtd_totals.get('MDI', 0.0)
+        mtd_mdni = mtd_totals.get('MDNI', 0.0)
+        mtd_reg  = mtd_totals.get('Regional', 0.0)
         mtd_total = mtd_mdi + mtd_mdni + mtd_reg
 
         segments = []
@@ -1556,63 +1553,41 @@ class TMOService:
         Daily forecast = TMOMonthlySegmentTarget.target_energy_mwh / days_in_month.
         Actual uses balloon+system fallback via _daily_energy_breakdown.
         """
-        # All onboarded feeders with a pl_segment, both voltages
-        feeder_qs = self._base_feeder_qs().filter(pl_segment__isnull=False)
-
-        # Build { segment → { '33kv': [ids], '11kv': [ids] } }
-        seg_voltage: dict[str, dict[str, list]] = {
-            'MDI':     {'33kv': [], '11kv': []},
-            'MDNI':    {'33kv': [], '11kv': []},
-            'Regions': {'33kv': [], '11kv': []},
-        }
-        for row in feeder_qs.values('id', 'pl_segment', 'voltage_level'):
-            seg = row['pl_segment']
-            vlt = '33kv' if row['voltage_level'] == '33kv' else '11kv'
-            if seg in seg_voltage:
-                seg_voltage[seg][vlt].append(row['id'])
-
-        # 33KV feeders that supply downstream 11KV feeders — exclude to avoid double-counting
-        upstream_33kv_ids = set(
-            FeederSupplyRelationship.objects
-            .filter(supplier_feeder__voltage_level='33kv', status='active')
-            .values_list('supplier_feeder_id', flat=True)
-        )
-
-        def _safe_33kv(ids):
-            return [fid for fid in ids if fid not in upstream_33kv_ids] if ids else []
-
-        def _breakdown(ids, fd, td):
-            return _daily_energy_breakdown(ids, fd, td) if ids else {}
-
-        # Current period breakdowns
-        curr = {}
-        for seg, v in seg_voltage.items():
-            ids_33 = _safe_33kv(v['33kv'])
-            ids_11 = v['11kv']
-            curr[seg] = {
-                '33kv': _breakdown(ids_33, self.from_date, self.to_date),
-                '11kv': _breakdown(ids_11, self.from_date, self.to_date),
-            }
-
-        # Previous month breakdowns (same day numbers for comparison bars)
+        # Current and previous-month period breakdowns, from the shared NET-
+        # 33KV + all-11KV logic (see _segment_voltage_daily_map() above).
+        # Rewritten 2026-08-08 — this used to build its own population via
+        # _daily_energy_breakdown()/_safe_33kv() (drop any 33KV feeder with an
+        # active downstream 11KV relationship, never add its energy back),
+        # the same undercounting bug fixed in get_volatility()/get_pear()/
+        # get_energy_by_segment(): confirmed this endpoint's MTD total sat at
+        # 27-28 GWh vs the validated 33.88 GWh anchor for the same period.
         prev_month_last  = self.from_date.replace(day=1) - timedelta(days=1)
         prev_month_first = prev_month_last.replace(day=1)
-        prev: dict[str, dict[str, dict]] = {}
-        for seg, v in seg_voltage.items():
-            ids_33 = _safe_33kv(v['33kv'])
-            ids_11 = v['11kv']
-            prev[seg] = {
-                '33kv': _breakdown(ids_33, prev_month_first, prev_month_last),
-                '11kv': _breakdown(ids_11, prev_month_first, prev_month_last),
-            }
 
-        # No scaling: each segment's own classified energy is used directly.
-        # Changed 2026-08-08 — this used to scale onto the bulk 33KV network
-        # total (same as get_energy_by_segment() did until the same fix),
-        # which made this endpoint's MTD numbers silently diverge from the
-        # donut/PEAR charts for the identical period. Confirmed against the
-        # source Excel that TCN's own P&L breakdown isn't forced to equal the
-        # Daily Energy Allocation total either — see get_volatility().
+        def _transpose(by_day):
+            """{date_str: {segment: {'33kv':mwh,'11kv':mwh}}} ->
+            {segment: {'33kv': {date_str:mwh}, '11kv': {date_str:mwh}}}"""
+            out = {seg: {'33kv': {}, '11kv': {}} for seg in ('MDI', 'MDNI', 'Regional')}
+            for d_str, segs in by_day.items():
+                for seg, v in segs.items():
+                    out[seg]['33kv'][d_str] = v['33kv']
+                    out[seg]['11kv'][d_str] = v['11kv']
+            # External field name for this endpoint has always been 'Regions'
+            out['Regions'] = out.pop('Regional')
+            return out
+
+        curr = _transpose(self._segment_voltage_daily_map(self.from_date, self.to_date))
+        prev = _transpose(self._segment_voltage_daily_map(prev_month_first, prev_month_last))
+
+        # Feeder counts per segment, for the monthly_targets summary below.
+        feeders_by_id, true_33kv_ids, all_11kv_ids, _ = self._segment_topology()
+        seg_voltage = {seg: {'33kv': [], '11kv': []} for seg in ('MDI', 'MDNI', 'Regions')}
+        for fid in true_33kv_ids:
+            seg = 'Regions' if self._segment_label(fid) == 'Regional' else self._segment_label(fid)
+            seg_voltage[seg]['33kv'].append(fid)
+        for fid in all_11kv_ids:
+            seg = 'Regions' if self._segment_label(fid) == 'Regional' else self._segment_label(fid)
+            seg_voltage[seg]['11kv'].append(fid)
 
         # Index previous-month data by day number (1-31) for easy lookup
         def _by_day_number(voltage_daily: dict) -> dict[int, float]:
@@ -1768,10 +1743,6 @@ class TMOService:
         day       = min(self.to_date, date.today() - timedelta(days=1))
         mtd_start = day.replace(day=1)
 
-        feeder_qs  = self._base_feeder_qs()
-        feeder_ids = set(feeder_qs.values_list('id', flat=True))
-        md_ids     = (self.mdi_ids | self.mdni_ids) & feeder_ids
-
         config = TMONetworkConfig.objects.filter(year=day.year, month=day.month).first()
         # Default 60/40 confirmed 2026-08-08 against the source Excel's own
         # target-mix cells (Indicator 2 - Seg disp!E38:E39) — the previous
@@ -1779,34 +1750,29 @@ class TMOService:
         target_md_pct  = float(config.target_md_share_pct)  if config else 60.0
         target_nmd_pct = round(100.0 - target_md_pct, 2)
 
-        def _e(ids, fd, td):
-            if not ids:
-                return 0.0
-            return calculate_energy_delivered(self._energy_ids(list(ids)), fd, td)['total_mwh']
-
-        def _raw_total(fd, td):
-            return calculate_energy_delivered(self._energy_ids(list(feeder_ids)), fd, td)['total_mwh']
+        def _md_nmd(fd, td):
+            totals = self._segment_totals(fd, td)
+            md  = totals.get('MDI', 0.0) + totals.get('MDNI', 0.0)
+            nmd = totals.get('Regional', 0.0)
+            return md, nmd
 
         def _day_md_pct(d):
             """A single day's MD share, used both for 'yesterday' and to
             average into the MTD figure below."""
-            t = _raw_total(d, d)
-            if not t:
-                return None
-            md = _e(md_ids, d, d)
-            return _pct(md, t)
+            md, nmd = _md_nmd(d, d)
+            t = md + nmd
+            return _pct(md, t) if t else None
 
-        # Segment energy used directly, not scaled to the bulk 33KV total —
-        # same correction as get_volatility(), confirmed against the source
-        # Excel's own PEAR sheet: MD = MDI + MDNI energy, NMD = Regions
-        # energy, share = each ÷ (MD + NMD), with no scaling step.
-        day_total = _raw_total(day, day)
-        day_md    = _e(md_ids, day, day)
-        day_nmd   = max(day_total - day_md, 0.0)
+        # Segment energy comes from the shared NET-33KV + all-11KV logic (see
+        # _segment_totals() above), used directly — not scaled to the bulk
+        # 33KV total. Confirmed 2026-08-08 against the source Excel's own
+        # PEAR sheet: MD = MDI + MDNI energy, NMD = Regions energy, share =
+        # each ÷ (MD + NMD), with no scaling step.
+        day_md, day_nmd = _md_nmd(day, day)
+        day_total = day_md + day_nmd
 
-        mtd_total = _raw_total(mtd_start, day)
-        mtd_md    = _e(md_ids, mtd_start, day)
-        mtd_nmd   = max(mtd_total - mtd_md, 0.0)
+        mtd_md, mtd_nmd = _md_nmd(mtd_start, day)
+        mtd_total = mtd_md + mtd_nmd
 
         # MTD share is the AVERAGE of each day's own MD%, not MTD-MD-energy ÷
         # MTD-total-energy — confirmed against the source Excel's literal
@@ -1966,6 +1932,92 @@ class TMOService:
             'methodology': METHODOLOGY['compliance_summary'],
         }
 
+    # ── Shared segment/voltage helpers ────────────────────────────────────────
+    # The validated NET-33KV + all-11KV logic (see get_energy_by_voltage()'s
+    # docstring for the full derivation), promoted to shared methods 2026-08-08
+    # so every segment-total endpoint uses the SAME real numbers. Before this,
+    # get_volatility()/get_pear()/get_energy_by_segment()/get_daily_energy_by_
+    # segment() each built their own feeder population via _energy_ids()
+    # (strip any 33KV feeder with an active downstream 11KV relationship) —
+    # confirmed 2026-08-08 this population undercounts badly: for Aug 1-7 it
+    # summed to 27.77 GWh total regardless of segment, vs the validated
+    # get_daily_energy() anchor of 33.88 GWh — an 18% gap, far too large to be
+    # "some feeders unclassified" (TCN's own Excel gap for that reason is
+    # ~1.4%). The real cause: _energy_ids() drops most 33KV bulk parents
+    # outright (they almost all have SOME downstream 11KV relationship) and
+    # never adds their energy back, instead of doing genuine per-parent NET
+    # subtraction. This shared logic reconciles to within ~2.8% of the
+    # validated anchor — the remaining gap is the same disclosed topology
+    # uncertainty documented in get_energy_by_voltage()'s NET-flooring comment,
+    # not a population hole.
+    def _segment_topology(self):
+        """(true_33kv_ids, all_11kv_ids, children_by_parent), cached per
+        instance — the feeder population and subtraction map shared by every
+        segment/voltage total in this service."""
+        if self._segment_topology_cache is None:
+            feeders_by_id = {f.id: f for f in self._base_feeder_qs()}
+            bulk_ids = self._bulk_feeder_ids()
+            # CONFIRMED_SUBTRACTED_CHILD_SLUGS (Rangaza, Gezawa, Dr Jamil
+            # Gwamna, Gaya) are tagged voltage_level='33kv' in Raven but
+            # TCN's own workbook sources their value from the 11KV Load Flow
+            # sheet, not a 33KV day-tab meter reading — confirmed 2026-08-08
+            # against the Combined sheet directly.
+            true_33kv_ids = {
+                fid for fid in bulk_ids
+                if feeders_by_id.get(fid)
+                and feeders_by_id[fid].voltage_level == '33kv'
+                and feeders_by_id[fid].slug not in CONFIRMED_SUBTRACTED_CHILD_SLUGS
+            }
+            all_11kv_ids = {
+                fid for fid, f in feeders_by_id.items()
+                if f.voltage_level == '11kv' or f.slug in CONFIRMED_SUBTRACTED_CHILD_SLUGS
+            }
+            children_by_parent = defaultdict(list)
+            for supplier_id, supplied_id in (
+                FeederSupplyRelationship.objects
+                .filter(supplier_feeder_id__in=true_33kv_ids, status='active', supplied_feeder_id__in=all_11kv_ids)
+                .values_list('supplier_feeder_id', 'supplied_feeder_id')
+            ):
+                if feeders_by_id[supplied_id].slug in CHILD_NEVER_SUBTRACTED_SLUGS:
+                    continue
+                children_by_parent[supplier_id].append(supplied_id)
+            self._segment_topology_cache = (feeders_by_id, true_33kv_ids, all_11kv_ids, children_by_parent)
+        return self._segment_topology_cache
+
+    def _segment_voltage_daily_map(self, from_date, to_date):
+        """{date_str: {segment: {'33kv': mwh, '11kv': mwh}}} — NET 33KV
+        (gross minus verified-subtracted children, floored at 0) plus every
+        11KV feeder at full value, attributed by segment."""
+        feeders_by_id, true_33kv_ids, all_11kv_ids, children_by_parent = self._segment_topology()
+        all_ids = true_33kv_ids | all_11kv_ids
+        per_feeder = _per_feeder_daily_map(all_ids, from_date, to_date)
+        by_day = defaultdict(lambda: defaultdict(lambda: {'33kv': 0.0, '11kv': 0.0}))
+
+        for fid in true_33kv_ids:
+            seg = self._segment_label(fid)
+            feeder_slug = feeders_by_id[fid].slug
+            children = [] if feeder_slug in PARENT_NEVER_SUBTRACTS_SLUGS else children_by_parent.get(fid, [])
+            for d_str, gross in per_feeder.get(fid, {}).items():
+                children_sum = sum(per_feeder.get(cid, {}).get(d_str, 0.0) for cid in children)
+                by_day[d_str][seg]['33kv'] += max(gross - children_sum, 0.0)
+
+        for fid in all_11kv_ids:
+            seg = self._segment_label(fid)
+            for d_str, v in per_feeder.get(fid, {}).items():
+                by_day[d_str][seg]['11kv'] += v
+
+        return by_day
+
+    def _segment_totals(self, from_date, to_date):
+        """{segment: total_mwh} — voltage-agnostic sum (33KV NET + 11KV) over
+        a period. Used by get_volatility/get_pear/get_energy_by_segment."""
+        by_day = self._segment_voltage_daily_map(from_date, to_date)
+        totals = defaultdict(float)
+        for segs in by_day.values():
+            for seg, v in segs.items():
+                totals[seg] += v['33kv'] + v['11kv']
+        return dict(totals)
+
     # ── 14. Energy by Voltage (33KV vs 11KV per segment) ─────────────────────
 
     def get_energy_by_voltage(self):
@@ -1997,94 +2049,7 @@ class TMOService:
         # month-comparison total must not include it either.
         to_date = min(self.to_date, date.today() - timedelta(days=1))
 
-        feeders_by_id = {f.id: f for f in self._base_feeder_qs()}
-        bulk_ids = self._bulk_feeder_ids()
-        # CONFIRMED_SUBTRACTED_CHILD_SLUGS (Rangaza, Gezawa, Dr Jamil Gwamna,
-        # Gaya) are tagged voltage_level='33kv' in Raven but TCN's own
-        # workbook sources their value from the 11KV Load Flow sheet, not a
-        # 33KV day-tab meter reading — confirmed 2026-08-08 by matching them
-        # against the Combined sheet directly: without treating them as 11KV
-        # here, the MDI-11KV bucket was short by exactly their combined value
-        # (152.86 of a 316 MWh reference — the other 163.21 matched exactly).
-        # This is the literal case the source analysis warned about ("33KV DR
-        # JAMIL GWAMNA is actually being pulled through the 11KV calculation
-        # side of this Excel workbook") — voltage_level in Raven's own DB
-        # isn't reliable for THESE FOUR specifically, despite being reliable
-        # for every other feeder checked this session.
-        true_33kv_ids = {
-            fid for fid in bulk_ids
-            if feeders_by_id.get(fid)
-            and feeders_by_id[fid].voltage_level == '33kv'
-            and feeders_by_id[fid].slug not in CONFIRMED_SUBTRACTED_CHILD_SLUGS
-        }
-        all_11kv_ids = {
-            fid for fid, f in feeders_by_id.items()
-            if f.voltage_level == '11kv' or f.slug in CONFIRMED_SUBTRACTED_CHILD_SLUGS
-        }
-        all_ids = true_33kv_ids | all_11kv_ids
-
-        # Each true 33KV parent's own active downstream 11KV children, per
-        # Raven's FeederSupplyRelationship topology — subtracted from the
-        # parent's gross reading since every child is also counted on its
-        # own below. NET is floored at 0: topology alone doesn't prove a
-        # specific child's energy is genuinely captured in THAT parent's own
-        # meter reading (confirmed 2026-08-08 this overstates subtraction for
-        # some parents — Kazaure, NNPC, ATM, Gano, Briscoe all go deeply
-        # negative under blanket subtraction), so a small number of parents
-        # will show 0 on the 33KV side rather than a nonsensical negative
-        # one. This makes the 33KV/11KV split for those specific parents an
-        # approximation, not exact — accepted because the alternative (only
-        # subtracting a handful of individually-verified parents) hid almost
-        # all 11KV energy from the chart entirely, which is a worse and more
-        # misleading result than a small, explainable total variance. This
-        # chart is not required to reconcile exactly with get_daily_energy()'s
-        # total — confirmed against the source Excel that TCN's own
-        # dashboard doesn't force that either (see get_volatility()).
-        # Parents individually verified (2026-08-08, by comparing against
-        # this same day's own row in TCN's ground-truth workbook) to subtract
-        # NONE of their topology-listed children at all — their own raw
-        # reading already equals TCN's reported figure with nothing removed.
-        # Same underlying pattern as DAN'AGUNDI 1, confirmed exact match at
-        # zero subtraction: Gano (37.30=37.30), Flour Mills (123=123),
-        # Hon. Abubakar (26.84=26.84, verified against Bichi Town earlier).
-        PARENT_NEVER_SUBTRACTS_SLUGS = {'KN-DAN-DAN', 'KN-WUD2-GAN', 'KN-DAK-FLO', 'KS-KAN-HON'}
-        # Children individually verified to never be subtracted from ANY
-        # parent, regardless of what FeederSupplyRelationship's topology
-        # claims — TCN's own formula skips them. Excluding Dundu and Asian
-        # Plastic gives an EXACT match for NNPC (50.30=50.30); excluding Nuhu
-        # Sunusi gives an EXACT match for Dutse (48.55=48.55).
-        CHILD_NEVER_SUBTRACTED_SLUGS = {'KN-JOG-DUN', 'KN-DUT-NUH', 'asian-plastic'}
-
-        children_by_parent = defaultdict(list)
-        for supplier_id, supplied_id in (
-            FeederSupplyRelationship.objects
-            .filter(supplier_feeder_id__in=true_33kv_ids, status='active', supplied_feeder_id__in=all_11kv_ids)
-            .values_list('supplier_feeder_id', 'supplied_feeder_id')
-        ):
-            if feeders_by_id[supplied_id].slug in CHILD_NEVER_SUBTRACTED_SLUGS:
-                continue
-            children_by_parent[supplier_id].append(supplied_id)
-
-        def _net_by_segment_voltage(fd, td):
-            per_feeder = _per_feeder_daily_map(all_ids, fd, td)
-            by_day = defaultdict(lambda: defaultdict(lambda: {'33kv': 0.0, '11kv': 0.0}))
-
-            for fid in true_33kv_ids:
-                seg = self._segment_label(fid)
-                feeder_slug = feeders_by_id[fid].slug
-                children = [] if feeder_slug in PARENT_NEVER_SUBTRACTS_SLUGS else children_by_parent.get(fid, [])
-                for d_str, gross in per_feeder.get(fid, {}).items():
-                    children_sum = sum(per_feeder.get(cid, {}).get(d_str, 0.0) for cid in children)
-                    by_day[d_str][seg]['33kv'] += max(gross - children_sum, 0.0)
-
-            for fid in all_11kv_ids:
-                seg = self._segment_label(fid)
-                for d_str, v in per_feeder.get(fid, {}).items():
-                    by_day[d_str][seg]['11kv'] += v
-
-            return by_day
-
-        by_day = _net_by_segment_voltage(self.from_date, to_date)
+        by_day = self._segment_voltage_daily_map(self.from_date, to_date)
 
         days = []
         for d_str in sorted(by_day):
@@ -2118,7 +2083,7 @@ class TMOService:
         prev_end   = date_type(prev_y, prev_m, calendar.monthrange(prev_y, prev_m)[1])
 
         def _period_totals(fd, td):
-            by_day_period = _net_by_segment_voltage(fd, td)
+            by_day_period = self._segment_voltage_daily_map(fd, td)
             totals = defaultdict(lambda: {'33kv': 0.0, '11kv': 0.0})
             for d_str, segs in by_day_period.items():
                 for seg, v in segs.items():
