@@ -957,24 +957,25 @@ class TMOService:
                 ).aggregate(t=Sum('target_mwh'))['t'] or 0
             )
 
-        # Retail-level (11KV/customer) energy per segment. MDI/MDNI classification
-        # is only meaningful at this level — a bulk 33KV feeder often serves a mixed
-        # customer base and can't be reliably tagged as a single segment (e.g. a
-        # whole-district feeder inheriting "MDNI" from one downstream customer).
-        # Used ONLY to derive accurate segment SHARE percentages, not absolute totals.
+        # Each segment's own classified energy, used directly — NOT scaled to
+        # the bulk 33KV network total. Changed 2026-08-08 to match get_
+        # volatility()/get_pear(): confirmed against the source Excel that
+        # TCN's own P&L breakdown doesn't force MDI+MDNI+Regions to equal the
+        # Daily Energy Allocation total either (some feeders are unclassified
+        # or excluded from the network total's own scope). Previously this
+        # scaled every segment's share onto bulk_total, which made this
+        # endpoint's numbers (and GCR's, which reuses actual_mwh from here)
+        # silently diverge from the donut/PEAR charts for the exact same
+        # period — confirmed 2026-08-08: MDNI showed 2.71 GWh here vs 2.22
+        # GWh on the donut for the same MTD window, a real ~22% mismatch a
+        # user could see just by comparing two charts on the same dashboard.
         raw_actual = {name: _energy(ids) for name, ids in buckets.items()}
         raw_total  = sum(raw_actual.values())
-
-        # Bulk network total — shares the same population AND classification as
-        # get_daily_energy()/_bulk_total_mwh(), so this always reconciles with
-        # the Daily Energy Allocation slide instead of silently diverging.
-        bulk_total = self._bulk_total_mwh(self.from_date, to_date)
 
         segments = []
         totals   = {'actual': 0.0, 'target': 0.0}
         for name, ids in buckets.items():
-            share  = (raw_actual[name] / raw_total) if raw_total else 0.0
-            actual = bulk_total * share
+            actual = raw_actual[name]
             target = _target(ids)
             ach    = _pct(actual, target)
             totals['actual'] += actual
@@ -1605,28 +1606,13 @@ class TMOService:
                 '11kv': _breakdown(ids_11, prev_month_first, prev_month_last),
             }
 
-        # Scale retail-level per-day totals onto the bulk 33KV network total (same
-        # population/method as get_daily_energy()), same rationale as
-        # get_energy_by_segment()/get_energy_by_voltage(): the retail-level MDI/MDNI/
-        # Regions split is only meaningful at that level, but the network's true
-        # magnitude includes technical/distribution losses that only show up in the
-        # bulk figure. Without this, this endpoint's MTD total silently diverges from
-        # every other segment total on the dashboard.
-        def _bulk_total_mwh(fd, td):
-            return self._bulk_total_mwh(fd, td)
-
-        def _scale_period(period: dict, fd, td):
-            raw_total = sum(v for seg in period.values() for volt in seg.values() for v in volt.values())
-            if not raw_total:
-                return period
-            factor = _bulk_total_mwh(fd, td) / raw_total
-            return {
-                seg: {volt: {d: mwh * factor for d, mwh in by_date.items()} for volt, by_date in v.items()}
-                for seg, v in period.items()
-            }
-
-        curr = _scale_period(curr, self.from_date, self.to_date)
-        prev = _scale_period(prev, prev_month_first, prev_month_last)
+        # No scaling: each segment's own classified energy is used directly.
+        # Changed 2026-08-08 — this used to scale onto the bulk 33KV network
+        # total (same as get_energy_by_segment() did until the same fix),
+        # which made this endpoint's MTD numbers silently diverge from the
+        # donut/PEAR charts for the identical period. Confirmed against the
+        # source Excel that TCN's own P&L breakdown isn't forced to equal the
+        # Daily Energy Allocation total either — see get_volatility().
 
         # Index previous-month data by day number (1-31) for easy lookup
         def _by_day_number(voltage_daily: dict) -> dict[int, float]:
