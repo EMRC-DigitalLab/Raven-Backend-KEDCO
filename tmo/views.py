@@ -2,6 +2,8 @@
 from datetime import date, timedelta
 
 from django.core.exceptions import ObjectDoesNotExist
+from django.db.models import Q
+from django.utils import timezone
 
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -1144,6 +1146,606 @@ class TMOSupplyHoursTargetView(APIView):
             updated.append({'segment': obj.segment, 'target_hours': float(obj.target_hours)})
 
         return Response({'year': year, 'month': month, 'updated': updated})
+
+
+def _resolve_feeder(value):
+    """Accepts a feeder's id (UUID str) or slug, returns the Feeder or None."""
+    from common.models import Feeder
+    if not value:
+        return None
+    feeder = None
+    try:
+        import uuid as _uuid
+        _uuid.UUID(str(value))
+        feeder = Feeder.objects.filter(id=value).first()
+    except (ValueError, AttributeError):
+        pass
+    return feeder or Feeder.objects.filter(slug=value).first()
+
+
+def _true_33kv_feeder_ids():
+    """The true 33kV bulk-parent population from the shared segment engine
+    (TMOService._segment_topology) — the only feeders eligible to stand in
+    as faulted_feeder/coupled_to_feeder on a coupling event, since those are
+    the only feeders the engine ever subtracts children from. Date-independent
+    (topology doesn't vary by period), so today's date is just a placeholder."""
+    today = date.today()
+    _, true_33kv_ids, _, _ = TMOService(today, today)._segment_topology()
+    return true_33kv_ids
+
+
+def _validate_33kv_parent(feeder, field_name, true_33kv_ids):
+    if feeder.id not in true_33kv_ids:
+        return Response({
+            'error': f'{field_name} must be a 33kV bulk parent feeder — "{feeder.name}" is not.'
+        }, status=400)
+    return None
+
+
+def _serialize_coupling_event(event):
+    def _f(feeder):
+        return {'id': str(feeder.id), 'name': feeder.name, 'slug': feeder.slug} if feeder else None
+
+    return {
+        'id':                str(event.id),
+        'faulted_feeder':    _f(event.faulted_feeder),
+        'coupled_to_feeder': _f(event.coupled_to_feeder),
+        'scope':             event.scope,
+        'selected_feeders':  [_f(f) for f in event.selected_feeders.all()] if event.scope == 'selected' else [],
+        'start_date':        str(event.start_date),
+        'end_date':          str(event.end_date) if event.end_date else None,
+        'is_open':           event.end_date is None,
+        'notes':             event.notes,
+        'created_by':        getattr(event.created_by, 'username', None),
+        'created_at':        event.created_at.isoformat(),
+        'closed_by':         getattr(event.closed_by, 'username', None),
+        'closed_at':         event.closed_at.isoformat() if event.closed_at else None,
+        'updated_at':        event.updated_at.isoformat(),
+    }
+
+
+class TMOFeederCouplingView(APIView):
+    """
+    GET  /api/tmo/settings/feeder-coupling/
+         ?status=active|closed|all (default: all)
+         ?date=YYYY-MM-DD              — only events covering that date
+         List logged feeder coupling events (temporary reroutes during a fault).
+
+    POST /api/tmo/settings/feeder-coupling/
+         Log a new coupling event (admin/manager only). TCN reports these
+         after the fact, so dates are always manually entered and fully
+         backdatable — never assumed to be "today" unless omitted.
+         Both faulted_feeder and coupled_to_feeder must be true 33kV bulk
+         parent feeders (the same population the segment engine subtracts
+         children from) — an 11kV feeder or an unrelated 33kV-tagged record
+         is rejected with 400.
+         body: {
+           "faulted_feeder":    "<feeder id or slug>",   # the feeder on fault
+           "coupled_to_feeder": "<feeder id or slug>",   # who's carrying its load now
+           "scope":             "all" | "selected",       # default "all"
+           "selected_feeders":  ["<id or slug>", ...],     # required if scope="selected"
+           "start_date":        "2026-08-01",              # default: today
+           "end_date":          "2026-08-03",              # omit/null for an open/ongoing coupling
+           "notes":             "..."
+         }
+    """
+    permission_classes = [HasTMOAccess]
+
+    def get_permissions(self):
+        if self.request.method == 'POST':
+            return [HasTMOAdminAccess()]
+        return [HasTMOAccess()]
+
+    def get(self, request):
+        from common.models import FeederCouplingEvent
+
+        status_filter = request.query_params.get('status', 'all')
+        date_str = request.query_params.get('date')
+
+        qs = FeederCouplingEvent.objects.select_related(
+            'faulted_feeder', 'coupled_to_feeder', 'created_by', 'closed_by'
+        ).prefetch_related('selected_feeders')
+
+        if status_filter == 'active':
+            qs = qs.filter(end_date__isnull=True)
+        elif status_filter == 'closed':
+            qs = qs.filter(end_date__isnull=False)
+        elif status_filter != 'all':
+            return Response({'error': 'status must be one of: active, closed, all'}, status=400)
+
+        if date_str:
+            try:
+                check_date = date.fromisoformat(date_str)
+            except ValueError:
+                return Response({'error': 'date must be YYYY-MM-DD'}, status=400)
+            qs = qs.filter(start_date__lte=check_date).filter(
+                Q(end_date__isnull=True) | Q(end_date__gte=check_date)
+            )
+
+        events = [_serialize_coupling_event(e) for e in qs]
+        return Response({'count': len(events), 'events': events})
+
+    def post(self, request):
+        from common.models import FeederCouplingEvent
+
+        body = request.data
+        faulted = _resolve_feeder(body.get('faulted_feeder'))
+        coupled_to = _resolve_feeder(body.get('coupled_to_feeder'))
+        if not faulted:
+            return Response({'error': 'faulted_feeder not found'}, status=400)
+        if not coupled_to:
+            return Response({'error': 'coupled_to_feeder not found'}, status=400)
+        if faulted.id == coupled_to.id:
+            return Response({'error': 'faulted_feeder and coupled_to_feeder must be different'}, status=400)
+
+        true_33kv_ids = _true_33kv_feeder_ids()
+        err = _validate_33kv_parent(faulted, 'faulted_feeder', true_33kv_ids)
+        if err:
+            return err
+        err = _validate_33kv_parent(coupled_to, 'coupled_to_feeder', true_33kv_ids)
+        if err:
+            return err
+
+        scope = body.get('scope', 'all')
+        if scope not in ('all', 'selected'):
+            return Response({'error': 'scope must be "all" or "selected"'}, status=400)
+
+        selected_feeders = []
+        if scope == 'selected':
+            values = body.get('selected_feeders') or []
+            if not values:
+                return Response({'error': 'selected_feeders is required when scope="selected"'}, status=400)
+            for v in values:
+                f = _resolve_feeder(v)
+                if not f:
+                    return Response({'error': f'selected_feeders: feeder not found: {v}'}, status=400)
+                selected_feeders.append(f)
+
+        start_date_str = body.get('start_date')
+        try:
+            start_date = date.fromisoformat(start_date_str) if start_date_str else date.today()
+        except ValueError:
+            return Response({'error': 'start_date must be YYYY-MM-DD'}, status=400)
+
+        end_date_str = body.get('end_date')
+        end_date = None
+        if end_date_str:
+            try:
+                end_date = date.fromisoformat(end_date_str)
+            except ValueError:
+                return Response({'error': 'end_date must be YYYY-MM-DD'}, status=400)
+            if end_date < start_date:
+                return Response({'error': 'end_date cannot be before start_date'}, status=400)
+
+        event = FeederCouplingEvent.objects.create(
+            faulted_feeder=faulted,
+            coupled_to_feeder=coupled_to,
+            scope=scope,
+            start_date=start_date,
+            end_date=end_date,
+            notes=body.get('notes', ''),
+            created_by=request.user if request.user.is_authenticated else None,
+        )
+        if scope == 'selected':
+            event.selected_feeders.set(selected_feeders)
+
+        return Response(_serialize_coupling_event(event), status=201)
+
+
+class TMOFeederCouplingDetailView(APIView):
+    """
+    PATCH  /api/tmo/settings/feeder-coupling/<uuid:event_id>/
+           Edit an event, or close it by setting end_date (admin/manager only).
+           Any of: scope, selected_feeders, start_date, end_date, notes.
+           Setting end_date on a previously-open event also stamps closed_by/closed_at.
+
+    DELETE /api/tmo/settings/feeder-coupling/<uuid:event_id>/
+           Remove a mistakenly-logged event entirely (admin/manager only).
+    """
+    permission_classes = [HasTMOAdminAccess]
+
+    def _get_event(self, event_id):
+        from common.models import FeederCouplingEvent
+        return FeederCouplingEvent.objects.select_related(
+            'faulted_feeder', 'coupled_to_feeder', 'created_by', 'closed_by'
+        ).prefetch_related('selected_feeders').filter(id=event_id).first()
+
+    def patch(self, request, event_id):
+        event = self._get_event(event_id)
+        if not event:
+            return Response({'error': 'Coupling event not found'}, status=404)
+
+        body = request.data
+        was_open = event.end_date is None
+
+        true_33kv_ids = None
+
+        if 'faulted_feeder' in body:
+            f = _resolve_feeder(body['faulted_feeder'])
+            if not f:
+                return Response({'error': 'faulted_feeder not found'}, status=400)
+            true_33kv_ids = _true_33kv_feeder_ids()
+            err = _validate_33kv_parent(f, 'faulted_feeder', true_33kv_ids)
+            if err:
+                return err
+            event.faulted_feeder = f
+
+        if 'coupled_to_feeder' in body:
+            f = _resolve_feeder(body['coupled_to_feeder'])
+            if not f:
+                return Response({'error': 'coupled_to_feeder not found'}, status=400)
+            true_33kv_ids = true_33kv_ids or _true_33kv_feeder_ids()
+            err = _validate_33kv_parent(f, 'coupled_to_feeder', true_33kv_ids)
+            if err:
+                return err
+            event.coupled_to_feeder = f
+
+        if event.faulted_feeder_id == event.coupled_to_feeder_id:
+            return Response({'error': 'faulted_feeder and coupled_to_feeder must be different'}, status=400)
+
+        if 'scope' in body:
+            if body['scope'] not in ('all', 'selected'):
+                return Response({'error': 'scope must be "all" or "selected"'}, status=400)
+            event.scope = body['scope']
+
+        if 'selected_feeders' in body:
+            resolved = []
+            for v in body['selected_feeders'] or []:
+                f = _resolve_feeder(v)
+                if not f:
+                    return Response({'error': f'selected_feeders: feeder not found: {v}'}, status=400)
+                resolved.append(f)
+            event.selected_feeders.set(resolved)
+
+        if 'start_date' in body:
+            try:
+                event.start_date = date.fromisoformat(body['start_date'])
+            except ValueError:
+                return Response({'error': 'start_date must be YYYY-MM-DD'}, status=400)
+
+        if 'end_date' in body:
+            if body['end_date']:
+                try:
+                    event.end_date = date.fromisoformat(body['end_date'])
+                except ValueError:
+                    return Response({'error': 'end_date must be YYYY-MM-DD'}, status=400)
+                if event.end_date < event.start_date:
+                    return Response({'error': 'end_date cannot be before start_date'}, status=400)
+            else:
+                event.end_date = None
+
+        if 'notes' in body:
+            event.notes = body['notes']
+
+        if was_open and event.end_date is not None:
+            event.closed_by = request.user if request.user.is_authenticated else None
+            event.closed_at = timezone.now()
+        elif event.end_date is None:
+            event.closed_by = None
+            event.closed_at = None
+
+        event.save()
+        return Response(_serialize_coupling_event(event))
+
+    def delete(self, request, event_id):
+        event = self._get_event(event_id)
+        if not event:
+            return Response({'error': 'Coupling event not found'}, status=404)
+        event.delete()
+        return Response(status=204)
+
+
+class TMOOutlierView(APIView):
+    """
+    GET  /api/tmo/settings/outliers/
+         Computed list of feeder-days whose raw reading falls far outside
+         that SAME feeder's own historical normal range, over the requested
+         period (?date=/?month=/?from_date=&to_date=, same as the rest of
+         the dashboard — defaults to yesterday if nothing is given). Each
+         candidate shows whether it's already been filed and its resolution
+         if so. See tmo.services._outlier_candidates for the detection method.
+
+    POST /api/tmo/settings/outliers/
+         File (or refile) a decision against a specific flagged feeder-day.
+         Any TMO user with dashboard access can file — this only records a
+         review decision, it never changes a calculation.
+         body: {
+           "feeder":     "<feeder id or slug>",
+           "date":       "2026-08-04",
+           "resolution": "confirmed_data_issue" | "genuine_spike" | "false_positive",
+           "notes":      "..."
+         }
+    """
+    permission_classes = [HasTMOAccess]
+
+    def get(self, request):
+        from .models import TMOFeederOutlierFlag
+        from .services import _outlier_candidates
+
+        service = _make_service(request)
+        feeders_by_id = {f.id: f for f in service._base_feeder_qs()}
+        feeder_ids = list(feeders_by_id.keys())
+
+        candidates = _outlier_candidates(feeder_ids, service.from_date, service.to_date)
+
+        flags = {
+            (f.feeder_id, f.date): f
+            for f in TMOFeederOutlierFlag.objects.filter(
+                feeder_id__in=feeder_ids, date__gte=service.from_date, date__lte=service.to_date
+            ).select_related('filed_by')
+        }
+
+        rows = []
+        for cand in candidates:
+            feeder = feeders_by_id.get(cand['feeder_id'])
+            if not feeder:
+                continue
+            flag = flags.get((cand['feeder_id'], cand['date']))
+            rows.append({
+                'feeder_id':           str(feeder.id),
+                'feeder_name':         feeder.name,
+                'feeder_slug':         feeder.slug,
+                'date':                str(cand['date']),
+                'observed_mwh':        cand['observed_mwh'],
+                'baseline_median_mwh': cand['baseline_median_mwh'],
+                'baseline_mad_mwh':    cand['baseline_mad_mwh'],
+                'modified_z_score':    cand['modified_z_score'],
+                'baseline_points':     cand['baseline_points'],
+                'severity':            'severe' if abs(cand['modified_z_score']) >= 7 else 'moderate',
+                'is_filed':            flag is not None,
+                'resolution':          flag.resolution if flag else None,
+                'notes':               flag.notes if flag else '',
+                'filed_by':            getattr(flag.filed_by, 'username', None) if flag else None,
+                'filed_at':            flag.filed_at.isoformat() if flag else None,
+            })
+
+        rows.sort(key=lambda r: abs(r['modified_z_score']), reverse=True)
+        return Response({
+            'period':        {'from': str(service.from_date), 'to': str(service.to_date)},
+            'count':         len(rows),
+            'filed_count':   sum(1 for r in rows if r['is_filed']),
+            'outliers':      rows,
+        })
+
+    def post(self, request):
+        from .models import TMOFeederOutlierFlag
+        from .services import OUTLIER_BASELINE_DAYS, _median
+
+        body = request.data
+        feeder = _resolve_feeder(body.get('feeder'))
+        if not feeder:
+            return Response({'error': 'feeder not found'}, status=400)
+
+        date_str = body.get('date')
+        if not date_str:
+            return Response({'error': 'date is required'}, status=400)
+        try:
+            flag_date = date.fromisoformat(date_str)
+        except ValueError:
+            return Response({'error': 'date must be YYYY-MM-DD'}, status=400)
+
+        resolution = body.get('resolution')
+        valid_resolutions = dict(TMOFeederOutlierFlag.RESOLUTION_CHOICES)
+        if resolution not in valid_resolutions:
+            return Response({'error': f'resolution must be one of: {", ".join(valid_resolutions)}'}, status=400)
+
+        from technical.models import EnergyDelivered
+
+        reading = EnergyDelivered.objects.filter(feeder=feeder, date=flag_date).first()
+        observed_mwh = float(reading.energy_mwh) if reading else 0.0
+
+        baseline_start = flag_date - timedelta(days=OUTLIER_BASELINE_DAYS)
+        baseline_values = [
+            float(v) for v in EnergyDelivered.objects.filter(
+                feeder=feeder, date__gte=baseline_start, date__lt=flag_date
+            ).values_list('energy_mwh', flat=True)
+        ]
+        baseline_median = _median(baseline_values) if baseline_values else 0.0
+
+        flag, _created = TMOFeederOutlierFlag.objects.update_or_create(
+            feeder=feeder, date=flag_date,
+            defaults={
+                'observed_mwh':      observed_mwh,
+                'feeder_median_mwh': baseline_median,
+                'resolution':        resolution,
+                'notes':             body.get('notes', ''),
+                'filed_by':          request.user if request.user.is_authenticated else None,
+            },
+        )
+        return Response({
+            'id':                flag.id,
+            'feeder':            {'id': str(feeder.id), 'name': feeder.name, 'slug': feeder.slug},
+            'date':              str(flag.date),
+            'observed_mwh':      float(flag.observed_mwh),
+            'feeder_median_mwh': float(flag.feeder_median_mwh),
+            'resolution':        flag.resolution,
+            'notes':             flag.notes,
+            'filed_by':          getattr(flag.filed_by, 'username', None),
+            'filed_at':          flag.filed_at.isoformat(),
+            'updated_at':        flag.updated_at.isoformat(),
+        }, status=201)
+
+
+class TMOOutlierDetailView(APIView):
+    """
+    DELETE /api/tmo/settings/outliers/<int:flag_id>/
+           Remove a filed decision (un-file it) — it goes back to being an
+           unreviewed candidate the next time the list is loaded.
+    """
+    permission_classes = [HasTMOAccess]
+
+    def delete(self, request, flag_id):
+        from .models import TMOFeederOutlierFlag
+        flag = TMOFeederOutlierFlag.objects.filter(id=flag_id).first()
+        if not flag:
+            return Response({'error': 'Outlier flag not found'}, status=404)
+        flag.delete()
+        return Response(status=204)
+
+
+class TMONegativeNetView(APIView):
+    """
+    GET  /api/tmo/settings/negative-net/
+         Computed list of 33kV bulk parent-days where gross minus children
+         sum goes negative before the floor-at-zero clamp in the segment
+         engine hides it — an early warning of a broken children list, an
+         unlogged coupling event, or a one-off data error. Same period
+         params as the rest of the dashboard (?date=/?month=/?from_date=&to_date=,
+         defaults to yesterday). Reuses the exact coupling-aware resolution
+         the engine itself uses (see TMOService.get_negative_net_candidates),
+         so a day already explained by a logged FeederCouplingEvent stops
+         appearing here automatically.
+
+    POST /api/tmo/settings/negative-net/
+         File (or refile) a decision against a specific flagged parent-day.
+         Any TMO user with dashboard access can file.
+         body: {
+           "feeder":     "<feeder id or slug>",   # must be a true 33kV bulk parent
+           "date":       "2026-08-04",
+           "resolution": "needs_coupling_event" | "needs_topology_fix" | "confirmed_data_issue" | "unresolved",
+           "notes":      "..."
+         }
+    """
+    permission_classes = [HasTMOAccess]
+
+    def get(self, request):
+        from .models import TMONegativeNetFlag
+
+        service = _make_service(request)
+        feeders_by_id, true_33kv_ids, all_11kv_ids, children_by_parent = service._segment_topology()
+        candidates = service.get_negative_net_candidates()
+
+        flags = {
+            (f.feeder_id, str(f.date)): f
+            for f in TMONegativeNetFlag.objects.filter(
+                feeder_id__in=true_33kv_ids, date__gte=service.from_date, date__lte=service.to_date
+            ).select_related('filed_by')
+        }
+
+        rows = []
+        for cand in candidates:
+            feeder = feeders_by_id.get(cand['feeder_id'])
+            if not feeder:
+                continue
+            flag = flags.get((cand['feeder_id'], cand['date']))
+
+            # Every row here is, by construction, NOT already explained by a
+            # logged FeederCouplingEvent (get_negative_net_candidates reuses
+            # the same coupling-adjusted children as the live engine, so an
+            # explained day never reaches this list in the first place) --
+            # so a coupling reroute is always a live possibility here, unless
+            # TMO has already filed a different explanation for this exact day.
+            suggest_coupling = flag is None or flag.resolution == 'needs_coupling_event'
+            suggested_coupling_event = {
+                'faulted_feeder': feeder.slug,
+                'start_date':     cand['date'],
+                'note': (
+                    f"{feeder.name}'s children add up to more than its own gross reading on "
+                    f"{cand['date']} ({cand['children_sum_mwh']} MWh of children vs {cand['gross_mwh']} MWh "
+                    f"gross). If TCN's report confirms this was a fault reroute, log it via "
+                    f"POST /api/tmo/settings/feeder-coupling/ with faulted_feeder={feeder.slug}, "
+                    f"start_date={cand['date']}, and whichever feeder it was actually coupled to that day."
+                ),
+            } if suggest_coupling else None
+
+            rows.append({
+                'feeder_id':                str(feeder.id),
+                'feeder_name':              feeder.name,
+                'feeder_slug':              feeder.slug,
+                'date':                     cand['date'],
+                'gross_mwh':                cand['gross_mwh'],
+                'children_sum_mwh':         cand['children_sum_mwh'],
+                'net_mwh':                  cand['net_mwh'],
+                'is_filed':                 flag is not None,
+                'resolution':               flag.resolution if flag else None,
+                'notes':                    flag.notes if flag else '',
+                'filed_by':                 getattr(flag.filed_by, 'username', None) if flag else None,
+                'filed_at':                 flag.filed_at.isoformat() if flag else None,
+                'suggested_coupling_event': suggested_coupling_event,
+            })
+
+        rows.sort(key=lambda r: r['net_mwh'])  # most negative first
+        return Response({
+            'period':      {'from': str(service.from_date), 'to': str(service.to_date)},
+            'count':       len(rows),
+            'filed_count': sum(1 for r in rows if r['is_filed']),
+            'negative_net': rows,
+        })
+
+    def post(self, request):
+        from .models import TMONegativeNetFlag
+
+        body = request.data
+        feeder = _resolve_feeder(body.get('feeder'))
+        if not feeder:
+            return Response({'error': 'feeder not found'}, status=400)
+
+        true_33kv_ids = _true_33kv_feeder_ids()
+        err = _validate_33kv_parent(feeder, 'feeder', true_33kv_ids)
+        if err:
+            return err
+
+        date_str = body.get('date')
+        if not date_str:
+            return Response({'error': 'date is required'}, status=400)
+        try:
+            flag_date = date.fromisoformat(date_str)
+        except ValueError:
+            return Response({'error': 'date must be YYYY-MM-DD'}, status=400)
+
+        resolution = body.get('resolution')
+        valid_resolutions = dict(TMONegativeNetFlag.RESOLUTION_CHOICES)
+        if resolution not in valid_resolutions:
+            return Response({'error': f'resolution must be one of: {", ".join(valid_resolutions)}'}, status=400)
+
+        service = TMOService(flag_date, flag_date)
+        candidates = service.get_negative_net_candidates()
+        match = next((c for c in candidates if c['feeder_id'] == feeder.id and c['date'] == str(flag_date)), None)
+        gross = match['gross_mwh'] if match else 0.0
+        children_sum = match['children_sum_mwh'] if match else 0.0
+        net = match['net_mwh'] if match else 0.0
+
+        flag, _created = TMONegativeNetFlag.objects.update_or_create(
+            feeder=feeder, date=flag_date,
+            defaults={
+                'gross_mwh':        gross,
+                'children_sum_mwh': children_sum,
+                'net_mwh':          net,
+                'resolution':       resolution,
+                'notes':            body.get('notes', ''),
+                'filed_by':         request.user if request.user.is_authenticated else None,
+            },
+        )
+        return Response({
+            'id':                flag.id,
+            'feeder':            {'id': str(feeder.id), 'name': feeder.name, 'slug': feeder.slug},
+            'date':              str(flag.date),
+            'gross_mwh':         float(flag.gross_mwh),
+            'children_sum_mwh':  float(flag.children_sum_mwh),
+            'net_mwh':           float(flag.net_mwh),
+            'resolution':        flag.resolution,
+            'notes':             flag.notes,
+            'filed_by':          getattr(flag.filed_by, 'username', None),
+            'filed_at':          flag.filed_at.isoformat(),
+            'updated_at':        flag.updated_at.isoformat(),
+        }, status=201)
+
+
+class TMONegativeNetDetailView(APIView):
+    """
+    DELETE /api/tmo/settings/negative-net/<int:flag_id>/
+           Remove a filed decision (un-file it) — it goes back to being an
+           unreviewed candidate the next time the list is loaded.
+    """
+    permission_classes = [HasTMOAccess]
+
+    def delete(self, request, flag_id):
+        from .models import TMONegativeNetFlag
+        flag = TMONegativeNetFlag.objects.filter(id=flag_id).first()
+        if not flag:
+            return Response({'error': 'Negative-net flag not found'}, status=404)
+        flag.delete()
+        return Response(status=204)
 
 
 class GoogleSheetFeedView(APIView):

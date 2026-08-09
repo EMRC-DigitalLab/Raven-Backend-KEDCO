@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import TMODailyAllocation, TMOIncident, TMOMonthlySegmentTarget, TMONetworkConfig, TMOSupplyHoursTarget
+from .models import TMODailyAllocation, TMOFeederOutlierFlag, TMOIncident, TMOMonthlySegmentTarget, TMONegativeNetFlag, TMONetworkConfig, TMOSupplyHoursTarget
 
 
 @admin.register(TMOMonthlySegmentTarget)
@@ -38,3 +38,33 @@ class TMOSupplyHoursTargetAdmin(admin.ModelAdmin):
     list_display  = ('segment', 'year', 'month', 'target_hours', 'updated_at')
     list_filter   = ('segment', 'year')
     ordering      = ('-year', '-month', 'segment')
+
+
+@admin.register(TMOFeederOutlierFlag)
+class TMOFeederOutlierFlagAdmin(admin.ModelAdmin):
+    list_display   = ('feeder', 'date', 'observed_mwh', 'feeder_median_mwh', 'resolution', 'filed_by')
+    list_filter    = ('resolution',)
+    search_fields  = ('feeder__name', 'notes')
+    ordering       = ('-date', '-filed_at')
+    date_hierarchy = 'date'
+    readonly_fields = ('filed_by', 'filed_at', 'updated_at')
+
+    def save_model(self, request, obj, form, change):
+        if not change and not obj.filed_by:
+            obj.filed_by = request.user
+        super().save_model(request, obj, form, change)
+
+
+@admin.register(TMONegativeNetFlag)
+class TMONegativeNetFlagAdmin(admin.ModelAdmin):
+    list_display   = ('feeder', 'date', 'gross_mwh', 'children_sum_mwh', 'net_mwh', 'resolution', 'filed_by')
+    list_filter    = ('resolution',)
+    search_fields  = ('feeder__name', 'notes')
+    ordering       = ('-date', '-filed_at')
+    date_hierarchy = 'date'
+    readonly_fields = ('filed_by', 'filed_at', 'updated_at')
+
+    def save_model(self, request, obj, form, change):
+        if not change and not obj.filed_by:
+            obj.filed_by = request.user
+        super().save_model(request, obj, form, change)

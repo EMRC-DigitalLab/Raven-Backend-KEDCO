@@ -8,6 +8,7 @@ from .models import (
     BusinessDistrict,
     DistributionTransformer,
     Feeder,
+    FeederCouplingEvent,
     FeederSupplyRelationship,
     FeederTransformerMapping,
     InjectionSubstation,
@@ -254,3 +255,33 @@ class FeederSupplyRelationshipAdmin(admin.ModelAdmin):
     list_filter = ('supply_type', 'status', 'supplier_feeder__voltage_level')
     search_fields = ('supplier_feeder__name', 'supplied_feeder__name')
     raw_id_fields = ('supplier_feeder', 'supplied_feeder')
+
+
+@admin.register(FeederCouplingEvent)
+class FeederCouplingEventAdmin(admin.ModelAdmin):
+    list_display = ('faulted_feeder', 'coupled_to_feeder', 'scope', 'start_date', 'end_date', 'is_open', 'created_by')
+    list_filter = ('scope', 'created_by')
+    search_fields = ('faulted_feeder__name', 'coupled_to_feeder__name', 'notes')
+    raw_id_fields = ('faulted_feeder', 'coupled_to_feeder', 'selected_feeders')
+    readonly_fields = ('created_by', 'created_at', 'closed_by', 'closed_at', 'updated_at')
+    date_hierarchy = 'start_date'
+    ordering = ('-start_date', '-created_at')
+
+    def is_open(self, obj):
+        return obj.end_date is None
+    is_open.boolean = True
+    is_open.short_description = 'Ongoing'
+
+    def save_model(self, request, obj, form, change):
+        was_open = True
+        if change:
+            was_open = FeederCouplingEvent.objects.filter(pk=obj.pk).values_list('end_date', flat=True).first() is None
+        if not change and not obj.created_by:
+            obj.created_by = request.user
+        if was_open and obj.end_date is not None and not obj.closed_by:
+            obj.closed_by = request.user
+            obj.closed_at = timezone.now()
+        elif obj.end_date is None:
+            obj.closed_by = None
+            obj.closed_at = None
+        super().save_model(request, obj, form, change)
