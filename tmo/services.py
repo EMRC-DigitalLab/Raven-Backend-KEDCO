@@ -11,7 +11,7 @@ from commercial.models import (
     TMOFeederTarget,
 )
 from commercial.models import CommercialCustomer
-from common.models import Band, Feeder, FeederSupplyRelationship
+from common.models import Band, Feeder, FeederCouplingEvent, FeederSupplyRelationship
 from technical.models import DailyHoursOfSupply, EnergyDelivered, FeederInterruption, HourlyLoad
 from technical.utils.energy_utils import (
     DAILY_BALLOON_LIMIT,
@@ -113,6 +113,10 @@ CONFIRMED_SUBTRACTED_CHILD_SLUGS = [
 # removed. Same pattern as DAN'AGUNDI 1: Gano (37.30=37.30), Flour Mills
 # (123=123), Hon. Abubakar (26.84=26.84, verified against Bichi Town).
 PARENT_NEVER_SUBTRACTS_SLUGS = {'KN-DAN-DAN', 'KN-WUD2-GAN', 'KN-DAK-FLO', 'KS-KAN-HON'}
+
+# Ignore negative-net dips smaller than this — floating-point/rounding-scale
+# noise, not a real broken-children-list signal worth surfacing to TMO.
+NEGATIVE_NET_MIN_ABS_MWH = 0.5
 
 # Children individually verified to never be subtracted from ANY parent,
 # regardless of what FeederSupplyRelationship's topology claims. Excluding
@@ -370,6 +374,101 @@ def _per_feeder_daily_map(feeder_ids, from_date, to_date):
         ):
             result[row['feeder_id']][str(row['date'])] = float(row['avg_load'] or 0) * int(row['supply_hours'] or 0)
     return dict(result)
+
+
+OUTLIER_BASELINE_DAYS = 60
+OUTLIER_MIN_BASELINE_POINTS = 10
+OUTLIER_Z_THRESHOLD = 3.5
+OUTLIER_MIN_ABS_DEVIATION_MWH = 1.0
+OUTLIER_FLAT_BASELINE_Z = 99.0  # stand-in "z-score" used when MAD == 0, so callers never see infinity
+
+
+def _median(values):
+    s = sorted(values)
+    n = len(s)
+    mid = n // 2
+    if n % 2:
+        return s[mid]
+    return (s[mid - 1] + s[mid]) / 2.0
+
+
+def _outlier_candidates(feeder_ids, from_date, to_date, baseline_days=OUTLIER_BASELINE_DAYS):
+    """
+    Per-feeder relative outlier check: flags feeder-days in [from_date, to_date]
+    whose RAW EnergyDelivered reading falls far outside that SAME feeder's own
+    historical normal range. Unlike the fixed DAILY_BALLOON_LIMIT=500 safety
+    net (a single global absolute threshold), this catches smaller-magnitude
+    anomalies scaled to each feeder's own normal size — e.g. a feeder whose
+    typical range is 1-2 MWh suddenly reading 82.
+
+    Baseline = that feeder's own raw daily readings over `baseline_days`
+    immediately BEFORE from_date — never including any day being evaluated,
+    so a bad day can't hide inside its own baseline. Uses median + MAD
+    (median absolute deviation) rather than mean/stddev, since a single
+    already-known-corrupted historical day (several found this session)
+    would otherwise blow out a mean-based baseline and mask future real
+    outliers; median/MAD is far less sensitive to a handful of bad points.
+
+    Reads RAW values directly, deliberately bypassing the meter/balloon
+    classification _per_feeder_daily_map applies — that classification
+    already replaces the biggest anomalies with an estimate before this
+    check would ever see them, which would defeat the purpose here.
+
+    Returns a list of dicts: feeder_id, date, observed_mwh,
+    baseline_median_mwh, baseline_mad_mwh, modified_z_score, baseline_points.
+    """
+    if not feeder_ids:
+        return []
+
+    baseline_start = from_date - timedelta(days=baseline_days)
+    baseline_end = from_date - timedelta(days=1)
+
+    baseline_values = defaultdict(list)
+    for row in EnergyDelivered.objects.filter(
+        feeder_id__in=feeder_ids, date__gte=baseline_start, date__lte=baseline_end
+    ).values('feeder_id', 'energy_mwh'):
+        baseline_values[row['feeder_id']].append(float(row['energy_mwh']))
+
+    review_rows = defaultdict(dict)
+    for row in EnergyDelivered.objects.filter(
+        feeder_id__in=feeder_ids, date__gte=from_date, date__lte=to_date
+    ).values('feeder_id', 'date', 'energy_mwh'):
+        review_rows[row['feeder_id']][row['date']] = float(row['energy_mwh'])
+
+    candidates = []
+    for fid, by_date in review_rows.items():
+        baseline = baseline_values.get(fid, [])
+        if len(baseline) < OUTLIER_MIN_BASELINE_POINTS:
+            continue
+        median = _median(baseline)
+        mad = _median([abs(v - median) for v in baseline])
+
+        for d, value in by_date.items():
+            deviation = value - median
+            if mad > 0:
+                mod_z = 0.6745 * deviation / mad
+            elif median > 0 and abs(deviation) >= OUTLIER_MIN_ABS_DEVIATION_MWH:
+                # flat but non-zero baseline (e.g. a steady 24.0/day for 60 days)
+                # -- any real change from an established norm is worth surfacing
+                mod_z = OUTLIER_FLAT_BASELINE_Z if deviation > 0 else -OUTLIER_FLAT_BASELINE_Z
+            else:
+                # median == 0: the feeder was dormant/unreported for its whole
+                # baseline window, so there's no real "normal" to compare
+                # against yet -- a feeder simply coming online isn't an outlier.
+                mod_z = 0.0
+
+            if abs(mod_z) >= OUTLIER_Z_THRESHOLD and abs(deviation) >= OUTLIER_MIN_ABS_DEVIATION_MWH:
+                candidates.append({
+                    'feeder_id': fid,
+                    'date': d,
+                    'observed_mwh': round(value, 2),
+                    'baseline_median_mwh': round(median, 2),
+                    'baseline_mad_mwh': round(mad, 2),
+                    'modified_z_score': round(mod_z, 2),
+                    'baseline_points': len(baseline),
+                })
+
+    return candidates
 
 
 def _energy_feeder_ids(feeder_ids):
@@ -1984,20 +2083,59 @@ class TMOService:
             self._segment_topology_cache = (feeders_by_id, true_33kv_ids, all_11kv_ids, children_by_parent)
         return self._segment_topology_cache
 
+    def _coupling_adjustments(self, from_date, to_date):
+        """{date_str: {feeder_id: (add_ids, remove_ids)}} — per-day children-
+        list adjustments from any FeederCouplingEvent active during the
+        period. On a day a coupling is active: the faulted feeder has the
+        coupled feeder(s) REMOVED from its own subtraction list (they
+        weren't really feeding from it that day), and the feeder it was
+        coupled to has those same feeder(s) ADDED to its subtraction list
+        (its gross reading now includes their load, so it must net them out
+        instead — otherwise they'd double-count). Empty dict, and therefore
+        a no-op, whenever no coupling events overlap the range."""
+        events = list(
+            FeederCouplingEvent.objects
+            .filter(start_date__lte=to_date)
+            .filter(Q(end_date__isnull=True) | Q(end_date__gte=from_date))
+            .prefetch_related('selected_feeders')
+        )
+        if not events:
+            return {}
+
+        adjustments = defaultdict(lambda: defaultdict(lambda: (set(), set())))
+        d = from_date
+        while d <= to_date:
+            d_str = str(d)
+            for event in events:
+                if not event.is_active_on(d):
+                    continue
+                affected = event.affected_feeder_ids()
+                if not affected:
+                    continue
+                adjustments[d_str][event.faulted_feeder_id][1].update(affected)
+                adjustments[d_str][event.coupled_to_feeder_id][0].update(affected)
+            d += timedelta(days=1)
+        return adjustments
+
     def _segment_voltage_daily_map(self, from_date, to_date):
         """{date_str: {segment: {'33kv': mwh, '11kv': mwh}}} — NET 33KV
         (gross minus verified-subtracted children, floored at 0) plus every
-        11KV feeder at full value, attributed by segment."""
+        11KV feeder at full value, attributed by segment. Children lists are
+        adjusted per day for any active feeder coupling — see
+        _coupling_adjustments()."""
         feeders_by_id, true_33kv_ids, all_11kv_ids, children_by_parent = self._segment_topology()
         all_ids = true_33kv_ids | all_11kv_ids
         per_feeder = _per_feeder_daily_map(all_ids, from_date, to_date)
+        coupling = self._coupling_adjustments(from_date, to_date)
         by_day = defaultdict(lambda: defaultdict(lambda: {'33kv': 0.0, '11kv': 0.0}))
 
         for fid in true_33kv_ids:
             seg = self._segment_label(fid)
             feeder_slug = feeders_by_id[fid].slug
-            children = [] if feeder_slug in PARENT_NEVER_SUBTRACTS_SLUGS else children_by_parent.get(fid, [])
+            base_children = set() if feeder_slug in PARENT_NEVER_SUBTRACTS_SLUGS else set(children_by_parent.get(fid, []))
             for d_str, gross in per_feeder.get(fid, {}).items():
+                add_ids, remove_ids = coupling.get(d_str, {}).get(fid, (None, None))
+                children = (base_children | add_ids) - remove_ids if add_ids is not None else base_children
                 children_sum = sum(per_feeder.get(cid, {}).get(d_str, 0.0) for cid in children)
                 by_day[d_str][seg]['33kv'] += max(gross - children_sum, 0.0)
 
@@ -2007,6 +2145,51 @@ class TMOService:
                 by_day[d_str][seg]['11kv'] += v
 
         return by_day
+
+    def get_negative_net_candidates(self):
+        """
+        Scans every true 33kV bulk parent over [self.from_date, self.to_date]
+        for days where gross minus its (coupling-adjusted) children sum goes
+        negative BEFORE the max(gross - children_sum, 0) floor in
+        _segment_voltage_daily_map hides it — an early warning that
+        something's wrong with that parent's children list (a permanent
+        topology mistake, a one-off corrupted reading, or an unaccounted-for
+        coupling event), surfaced automatically instead of only being found
+        by someone manually reconciling against TCN's own numbers.
+
+        Deliberately reuses the exact same topology + coupling-adjusted
+        children resolution as _segment_voltage_daily_map (not a separate
+        computation), so a day already explained by a logged
+        FeederCouplingEvent stops appearing here on its own — this list is
+        meant to shrink toward genuinely-unresolved cases as coupling gets
+        logged, not stay static.
+
+        Returns a list of dicts: feeder_id, date (str), gross_mwh,
+        children_sum_mwh, net_mwh (always negative for anything returned).
+        """
+        feeders_by_id, true_33kv_ids, all_11kv_ids, children_by_parent = self._segment_topology()
+        all_ids = true_33kv_ids | all_11kv_ids
+        per_feeder = _per_feeder_daily_map(all_ids, self.from_date, self.to_date)
+        coupling = self._coupling_adjustments(self.from_date, self.to_date)
+
+        candidates = []
+        for fid in true_33kv_ids:
+            feeder_slug = feeders_by_id[fid].slug
+            base_children = set() if feeder_slug in PARENT_NEVER_SUBTRACTS_SLUGS else set(children_by_parent.get(fid, []))
+            for d_str, gross in per_feeder.get(fid, {}).items():
+                add_ids, remove_ids = coupling.get(d_str, {}).get(fid, (None, None))
+                children = (base_children | add_ids) - remove_ids if add_ids is not None else base_children
+                children_sum = sum(per_feeder.get(cid, {}).get(d_str, 0.0) for cid in children)
+                net = gross - children_sum
+                if net < -NEGATIVE_NET_MIN_ABS_MWH:
+                    candidates.append({
+                        'feeder_id':        fid,
+                        'date':             d_str,
+                        'gross_mwh':        round(gross, 2),
+                        'children_sum_mwh': round(children_sum, 2),
+                        'net_mwh':          round(net, 2),
+                    })
+        return candidates
 
     def _segment_totals(self, from_date, to_date):
         """{segment: total_mwh} — voltage-agnostic sum (33KV NET + 11KV) over

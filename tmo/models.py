@@ -1,4 +1,5 @@
 # tmo/models.py
+from django.conf import settings
 from django.db import models
 
 
@@ -296,6 +297,117 @@ class GoogleSheetFeed(models.Model):
         import re
         m = re.search(r'/spreadsheets/d/([a-zA-Z0-9-_]+)', url)
         return m.group(1) if m else None
+
+
+class TMOFeederOutlierFlag(models.Model):
+    """
+    A TMO/admin decision recorded against a specific feeder-day reading that
+    the automatic per-feeder outlier check (tmo.services._outlier_candidates)
+    flagged as statistically unusual — far outside that feeder's own
+    historical normal range. Detection is always computed live from
+    EnergyDelivered; this table only remembers what a human decided about a
+    specific flagged day, so the same reading doesn't need re-investigating
+    every time the review list is loaded.
+
+    Filing doesn't feed back into any calculation — it's a review/triage
+    record, not a correction. A "confirmed_data_issue" doesn't fix the
+    underlying EnergyDelivered row; someone still has to do that separately
+    if it needs fixing.
+    """
+    RESOLUTION_CHOICES = [
+        ('confirmed_data_issue', 'Confirmed data issue'),
+        ('genuine_spike',        'Genuine spike'),
+        ('false_positive',       'False positive'),
+    ]
+
+    feeder = models.ForeignKey(
+        'common.Feeder', on_delete=models.CASCADE, related_name='outlier_flags'
+    )
+    date = models.DateField(db_index=True, help_text="The specific day being filed against")
+
+    observed_mwh = models.DecimalField(
+        max_digits=12, decimal_places=4,
+        help_text="The feeder's raw EnergyDelivered reading on this day, captured at filing time"
+    )
+    feeder_median_mwh = models.DecimalField(
+        max_digits=12, decimal_places=4,
+        help_text="This feeder's own historical baseline median at filing time, for reference"
+    )
+
+    resolution = models.CharField(max_length=25, choices=RESOLUTION_CHOICES)
+    notes = models.TextField(blank=True, default='')
+
+    filed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='filed_outlier_flags',
+    )
+    filed_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['feeder', 'date'], name='unique_outlier_flag_per_feeder_day')
+        ]
+        ordering = ['-date', '-filed_at']
+
+    def __str__(self):
+        return f"{self.feeder.name} {self.date} — {self.get_resolution_display()}"
+
+
+class TMONegativeNetFlag(models.Model):
+    """
+    A TMO/admin decision recorded against a specific 33kV bulk parent-day
+    where gross minus its children sum went negative before the
+    floor-at-zero clamp in the segment engine hides it (see
+    TMOService.get_negative_net_candidates). Detection is always computed
+    live; this table only remembers what a human decided about a specific
+    flagged day, so a known/explained case (e.g. a coupling day not yet
+    logged, or a confirmed one-off data error) doesn't need re-investigating
+    every time the review list is loaded.
+
+    The resolution choices mirror the actual categories found while manually
+    reconciling all 72 bulk parents against TCN's ground truth this session:
+    some cases were unlogged feeder coupling, some were genuine permanent
+    topology mistakes, some were one-off corrupted source readings, and a
+    couple (ATM, NNPC) never resolved to any of those and stayed open.
+    """
+    RESOLUTION_CHOICES = [
+        ('needs_coupling_event', 'Needs a coupling event logged'),
+        ('needs_topology_fix',   'Needs a permanent topology fix'),
+        ('confirmed_data_issue', 'Confirmed data issue'),
+        ('unresolved',           'Unresolved — still investigating'),
+    ]
+
+    feeder = models.ForeignKey(
+        'common.Feeder', on_delete=models.CASCADE, related_name='negative_net_flags'
+    )
+    date = models.DateField(db_index=True, help_text="The specific day being filed against")
+
+    gross_mwh = models.DecimalField(max_digits=12, decimal_places=4)
+    children_sum_mwh = models.DecimalField(max_digits=12, decimal_places=4)
+    net_mwh = models.DecimalField(
+        max_digits=12, decimal_places=4,
+        help_text="gross_mwh - children_sum_mwh, captured at filing time (always negative)"
+    )
+
+    resolution = models.CharField(max_length=25, choices=RESOLUTION_CHOICES)
+    notes = models.TextField(blank=True, default='')
+
+    filed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='filed_negative_net_flags',
+    )
+    filed_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['feeder', 'date'], name='unique_negative_net_flag_per_feeder_day')
+        ]
+        ordering = ['-date', '-filed_at']
+
+    def __str__(self):
+        return f"{self.feeder.name} {self.date} — {self.get_resolution_display()}"
 
 
 class SheetAlertEmail(models.Model):
