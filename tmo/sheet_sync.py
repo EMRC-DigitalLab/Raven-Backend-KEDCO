@@ -765,12 +765,18 @@ def sync_11kv_sheet(spreadsheet_id: str, year: int, month: int,
                 # gated by calculation_method at all.
                 ed_written = 0
                 if variance_rows:
+                    # 'estimated' included alongside the real-data methods —
+                    # it means a confirmed-bad raw reading was deliberately
+                    # hand-corrected after investigation, not that no real
+                    # value exists yet. Without it here, the next sync would
+                    # silently recompute and overwrite the same bad value
+                    # from the same uncorrected source sheet.
                     protected = set(
                         EnergyDelivered.objects
                         .filter(
                             date=reading_date,
                             feeder__in=variance_rows.keys(),
-                            calculation_method__in=['meter_difference', 'manual_entry'],
+                            calculation_method__in=['meter_difference', 'manual_entry', 'estimated'],
                         )
                         .values_list('feeder_id', flat=True)
                     )
@@ -1016,9 +1022,23 @@ def sync_33kv_energy_sheet(spreadsheet_id: str, year: int, month: int,
                 # METER READING") minus today's own opening reading — a within-day
                 # diff, self-contained on this single sheet row. See module comment
                 # above for why this replaced the old cross-day CMR diff.
+                #
+                # Never overwrites a row already marked calculation_method='estimated'
+                # — that means someone deliberately corrected a confirmed-bad raw
+                # reading (e.g. a corrupted meter value far outside the feeder's own
+                # history) after investigating it by hand. Without this check, the
+                # very next hourly run would silently recompute the same bad value
+                # from the same uncorrected source sheet and overwrite the fix —
+                # confirmed 2026-08-11 this would have happened to several feeders
+                # corrected this way (Dundu, Bompai, Tokarawa) within the hour.
+                protected_dates = set(
+                    EnergyDelivered.objects
+                    .filter(date=reading_date, feeder_id__in=[f.id for f, _, _ in to_write], calculation_method='estimated')
+                    .values_list('feeder_id', flat=True)
+                )
                 ed_rows = []
                 for feeder, opening, closing in to_write:
-                    if closing is None:
+                    if closing is None or feeder.id in protected_dates:
                         continue
                     diff = Decimal(str(round(closing, 4))) - opening
                     if diff < 0:

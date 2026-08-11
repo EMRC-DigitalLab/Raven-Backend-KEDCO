@@ -124,6 +124,27 @@ NEGATIVE_NET_MIN_ABS_MWH = 0.5
 # excluding Nuhu Sunusi gives an EXACT match for Dutse (48.55=48.55).
 CHILD_NEVER_SUBTRACTED_SLUGS = {'KN-JOG-DUN', 'KN-DUT-NUH', 'asian-plastic'}
 
+# Children confirmed to have NO real energy at all — TCN's own row for these
+# reads exactly 0 on every single day checked (2026-08-01 through 09), not
+# just an occasional gap. Different fact from CHILD_NEVER_SUBTRACTED_SLUGS
+# above: Dundu and Nuhu Sunusi genuinely deliver real energy and are only
+# exempted from being subtracted from a parent, but still correctly counted
+# at their own 11KV value. Asian Plastic has no real value to count in the
+# first place, so it's excluded from the 11KV addition entirely, not just
+# the subtraction step.
+CHILD_ZERO_ENERGY_SLUGS = {'asian-plastic'}
+
+# 33KV bulk parents TCN's own sheet tags 'Data unavailable'/'Unclassified'
+# in the Segment column — confirmed 2026-08-10 against the "11KV + 33KV
+# Combined" sheet. TCN excludes these from MDI/MDNI/Regions entirely (their
+# own contribution, not their children — the children remain individually
+# and correctly classified). Their children keep being subtracted from them
+# as normal (that part is independently verified correct); only the
+# parent's own NET value is kept out of every segment total here, matching
+# TCN's own classification gap instead of forcing it into a segment TCN
+# itself doesn't put it in.
+PARENT_UNCLASSIFIED_BY_TCN_SLUGS = {'KN-KUM-SHA'}  # Sharada Bata
+
 # Feeders that have NO real EnergyDelivered data of their own (never synced —
 # not "broken meter", genuinely nothing to sync) AND whose own row in TCN's
 # ground-truth workbook is blank/zero, confirmed by a full row-by-row audit
@@ -2069,7 +2090,8 @@ class TMOService:
             }
             all_11kv_ids = {
                 fid for fid, f in feeders_by_id.items()
-                if f.voltage_level == '11kv' or f.slug in CONFIRMED_SUBTRACTED_CHILD_SLUGS
+                if (f.voltage_level == '11kv' or f.slug in CONFIRMED_SUBTRACTED_CHILD_SLUGS)
+                and f.slug not in CHILD_ZERO_ENERGY_SLUGS
             }
             children_by_parent = defaultdict(list)
             for supplier_id, supplied_id in (
@@ -2122,7 +2144,22 @@ class TMOService:
         (gross minus verified-subtracted children, floored at 0) plus every
         11KV feeder at full value, attributed by segment. Children lists are
         adjusted per day for any active feeder coupling — see
-        _coupling_adjustments()."""
+        _coupling_adjustments().
+
+        CONFIRMED_SUBTRACTED_CHILD_SLUGS members (Rangaza, Gezawa, Dr Jamil
+        Gwamna, Gaya) are still correctly subtracted from their true 33KV
+        parent below — that part is unchanged and independently verified
+        against TCN's own numbers. But their OWN value is attributed to the
+        33KV bucket here, not 11KV, even though _segment_topology() classes
+        them into all_11kv_ids for subtraction purposes (their reading is
+        sourced from TCN's 11KV Load Flow sheet). Confirmed 2026-08-10
+        against TCN's own "11KV + 33KV Combined" sheet: their rows are
+        literally named "33KV RANGAZA" / "33KV DR JAMIL GWAMNA" etc, and
+        TCN's own voltage-level totals bucket them as 33KV. Putting them in
+        11KV here (as before) was the entire cause of MDI's 33KV/11KV split
+        being wrong by ~1.7 GWh (33KV too low, 11KV too high) while the
+        segment TOTAL was already correct — confirmed by simulation this
+        never changes any total, only which bucket a value lands in."""
         feeders_by_id, true_33kv_ids, all_11kv_ids, children_by_parent = self._segment_topology()
         all_ids = true_33kv_ids | all_11kv_ids
         per_feeder = _per_feeder_daily_map(all_ids, from_date, to_date)
@@ -2132,17 +2169,27 @@ class TMOService:
         for fid in true_33kv_ids:
             seg = self._segment_label(fid)
             feeder_slug = feeders_by_id[fid].slug
+            if feeder_slug in PARENT_UNCLASSIFIED_BY_TCN_SLUGS:
+                continue
             base_children = set() if feeder_slug in PARENT_NEVER_SUBTRACTS_SLUGS else set(children_by_parent.get(fid, []))
             for d_str, gross in per_feeder.get(fid, {}).items():
                 add_ids, remove_ids = coupling.get(d_str, {}).get(fid, (None, None))
                 children = (base_children | add_ids) - remove_ids if add_ids is not None else base_children
                 children_sum = sum(per_feeder.get(cid, {}).get(d_str, 0.0) for cid in children)
-                by_day[d_str][seg]['33kv'] += max(gross - children_sum, 0.0)
+                # No floor at zero here — confirmed 2026-08-11 against TCN's own
+                # "Energy Delivered (MWh)" column: TCN publishes the raw gross-minus-
+                # children result directly, negative or not (e.g. ATM's own row read
+                # -13.05, -30.99 MWh on several days this period). Flooring here made
+                # Raven's own per-parent net silently disagree with TCN's number on
+                # every day a parent's children outweighed its gross — a ~420 MWh
+                # chunk of the segment/voltage total gap traced directly to this.
+                by_day[d_str][seg]['33kv'] += gross - children_sum
 
         for fid in all_11kv_ids:
             seg = self._segment_label(fid)
+            bucket = '33kv' if feeders_by_id[fid].slug in CONFIRMED_SUBTRACTED_CHILD_SLUGS else '11kv'
             for d_str, v in per_feeder.get(fid, {}).items():
-                by_day[d_str][seg]['11kv'] += v
+                by_day[d_str][seg][bucket] += v
 
         return by_day
 
