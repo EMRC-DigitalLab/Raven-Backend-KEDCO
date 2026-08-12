@@ -266,7 +266,8 @@
       "Bash(python manage.py shell -c \"exec\\(open\\(r'C:\\\\Users\\\\TRIUMP~1\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-TriumphAdeniran-OneDrive---Market-and-Regulatory-Consultants-Ltd-Desktop-Raven-Code-Base-Raven-Backend-KEDCO\\\\eced7ae1-261a-4f46-b7f4-deaa213b715a\\\\scratchpad\\\\auto_resolve_parents.py'\\).read\\(\\)\\)\")",
       "Bash(python manage.py shell -c \"exec\\(open\\(r'C:\\\\Users\\\\TRIUMP~1\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-TriumphAdeniran-OneDrive---Market-and-Regulatory-Consultants-Ltd-Desktop-Raven-Code-Base-Raven-Backend-KEDCO\\\\eced7ae1-261a-4f46-b7f4-deaa213b715a\\\\scratchpad\\\\multiday_voltage_check.py'\\).read\\(\\)\\)\")",
       "Bash(powershell -Command \"[Environment]::GetFolderPath\\('Desktop'\\)\")",
-      "Bash(python manage.py shell -c \"exec\\(open\\(r'C:\\\\Users\\\\TRIUMP~1\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-TriumphAdeniran-OneDrive---Market-and-Regulatory-Consultants-Ltd-Desktop-Raven-Code-Base-Raven-Backend-KEDCO\\\\eced7ae1-261a-4f46-b7f4-deaa213b715a\\\\scratchpad\\\\verify_all_89_parents.py'\\).read\\(\\)\\)\")"
+      "Bash(python manage.py shell -c \"exec\\(open\\(r'C:\\\\Users\\\\TRIUMP~1\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-TriumphAdeniran-OneDrive---Market-and-Regulatory-Consultants-Ltd-Desktop-Raven-Code-Base-Raven-Backend-KEDCO\\\\eced7ae1-261a-4f46-b7f4-deaa213b715a\\\\scratchpad\\\\verify_all_89_parents.py'\\).read\\(\\)\\)\")",
+      "Bash(APP_ENV=production python manage.py shell -c ' *)"
     ],
     "additionalDirectories": [
       "c:\\c\\Users\\TriumphAdeniran\\OneDrive - Market and Regulatory Consultants Ltd\\Desktop\\Raven Code Base\\Raven-Backend-KEDCO",
