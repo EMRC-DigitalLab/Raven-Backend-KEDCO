@@ -327,6 +327,103 @@ TOOL_SCHEMAS = {
         },
     },
 
+    # ── TMO ───────────────────────────────────────────────────────────────────
+    'query_tmo_daily_allocation': {
+        'name': 'query_tmo_daily_allocation',
+        'description': (
+            'Query TMO Daily Energy Allocation: actual GWh delivered vs target per day for the '
+            'whole network, plus achievement % and status. This is the core TMO number everything '
+            'else is checked against.'
+        ),
+        'input_schema': {
+            'type': 'object',
+            'properties': {**_DATE_PROPS},
+            'required': ['start_date', 'end_date'],
+        },
+    },
+    'query_tmo_segment_breakdown': {
+        'name': 'query_tmo_segment_breakdown',
+        'description': (
+            'Query TMO energy delivered split by customer segment (MDI / MDNI / Regions) for a '
+            'period, with each segment\'s share of the total.'
+        ),
+        'input_schema': {
+            'type': 'object',
+            'properties': {**_DATE_PROPS},
+            'required': ['start_date', 'end_date'],
+        },
+    },
+    'query_tmo_pear': {
+        'name': 'query_tmo_pear',
+        'description': (
+            'Query TMO PEAR (Premium Energy Allocation Ratio): MD (MDI+MDNI) vs Non-MD share of '
+            'energy for yesterday and month-to-date, against the configured target mix (default 60/40).'
+        ),
+        'input_schema': {
+            'type': 'object',
+            'properties': {
+                'as_of_date': {'type': 'string', 'description': 'Date in YYYY-MM-DD format (optional, defaults to yesterday)'},
+            },
+        },
+    },
+    'query_tmo_voltage_breakdown': {
+        'name': 'query_tmo_voltage_breakdown',
+        'description': (
+            'Query TMO energy delivered split by voltage level (33kV vs 11kV) per segment, for a period.'
+        ),
+        'input_schema': {
+            'type': 'object',
+            'properties': {**_DATE_PROPS},
+            'required': ['start_date', 'end_date'],
+        },
+    },
+    'query_tmo_overview': {
+        'name': 'query_tmo_overview',
+        'description': (
+            'Query the TMO Technical Dashboard overview: total feeder count, target vs actual GWh '
+            'for the period, and % of feeders meeting their minimum supply-hours target.'
+        ),
+        'input_schema': {
+            'type': 'object',
+            'properties': {**_DATE_PROPS},
+            'required': ['start_date', 'end_date'],
+        },
+    },
+    'query_tmo_feeder_composition': {
+        'name': 'query_tmo_feeder_composition',
+        'description': (
+            'Explain exactly how a specific 33kV feeder\'s daily energy figure is built: its own '
+            'raw meter reading, every downstream child feeder subtracted from it with each '
+            'child\'s own value, why a child is or isn\'t subtracted, and the resulting net per '
+            'day. Use for "how was X made up", "which feeders make up X", "what\'s the '
+            'difference between X\'s raw reading and its reported total".'
+        ),
+        'input_schema': {
+            'type': 'object',
+            'properties': {
+                'feeder': {'type': 'string', 'description': 'Feeder name or slug (required)'},
+                **_DATE_PROPS,
+            },
+            'required': ['feeder', 'start_date', 'end_date'],
+        },
+    },
+    'query_tmo_bulk_composition': {
+        'name': 'query_tmo_bulk_composition',
+        'description': (
+            'List which feeders make up the TMO Daily Energy Allocation total for a period, '
+            'ranked by contribution with each one\'s share %. Use for "which feeders make up '
+            'this total", "what\'s driving the allocation number", "top contributors".'
+        ),
+        'input_schema': {
+            'type': 'object',
+            'properties': {
+                **_DATE_PROPS,
+                'limit': {'type': 'integer', 'description': 'Number of top feeders to return (default 20)'},
+            },
+            'required': ['start_date', 'end_date'],
+        },
+    },
+
     # ── COMMON (all users) ────────────────────────────────────────────────────
     'list_locations': {
         'name': 'list_locations',
@@ -384,6 +481,7 @@ _MODULE_TOOLS = {
     'hr':             ['query_hr', 'query_executive_kpis'],
     'energy_account': ['query_energy_account'],
     'grid_lens':      ['query_grid_lens'],
+    'tmo':            ['query_tmo_daily_allocation', 'query_tmo_segment_breakdown', 'query_tmo_pear', 'query_tmo_voltage_breakdown', 'query_tmo_overview', 'query_tmo_feeder_composition', 'query_tmo_bulk_composition'],
     'overview':       [],
     'regulatory':     [],
 }
@@ -393,7 +491,7 @@ _ALWAYS_ON = ['list_locations', 'web_search']
 # ── Function dispatch ─────────────────────────────────────────────────────────
 
 def _get_function(name: str):
-    from aria.tools import commercial, technical, financial, hr, energy_account, grid_lens, common_tools
+    from aria.tools import commercial, technical, financial, hr, energy_account, grid_lens, tmo, common_tools
     dispatch = {
         'query_commercial':             commercial.query_commercial,
         'query_top_commercial_feeders': commercial.query_top_commercial_feeders,
@@ -409,6 +507,13 @@ def _get_function(name: str):
         'query_executive_kpis':         hr.query_executive_kpis,
         'query_energy_account':         energy_account.query_energy_account,
         'query_grid_lens':              grid_lens.query_grid_lens,
+        'query_tmo_daily_allocation':   tmo.query_tmo_daily_allocation,
+        'query_tmo_segment_breakdown':  tmo.query_tmo_segment_breakdown,
+        'query_tmo_pear':               tmo.query_tmo_pear,
+        'query_tmo_voltage_breakdown':  tmo.query_tmo_voltage_breakdown,
+        'query_tmo_overview':           tmo.query_tmo_overview,
+        'query_tmo_feeder_composition': tmo.query_tmo_feeder_composition,
+        'query_tmo_bulk_composition':   tmo.query_tmo_bulk_composition,
         'list_locations':               common_tools.list_locations,
         'web_search':                   common_tools.web_search,
     }

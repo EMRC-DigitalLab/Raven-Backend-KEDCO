@@ -10,6 +10,7 @@ _MODULE_DESCRIPTIONS = {
     'regulatory':      'Regulatory — compliance submissions and regulatory reports',
     'energy_account':  'Energy Account — grid meter readings, monthly returns, Stream A/B reconciliation, NBET billing MWh',
     'grid_lens':       'GridLens — loss decomposition, transmission vs distribution losses, metering gap, feeder energy allocation',
+    'tmo':             'TMO — daily energy allocation vs target, PEAR (MD/Non-MD split), segment (MDI/MDNI/Regions) and voltage-level (33kV/11kV) energy breakdowns, reconciled against TCN\'s own reporting',
 }
 
 

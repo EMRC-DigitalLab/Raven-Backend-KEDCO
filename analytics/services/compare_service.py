@@ -98,7 +98,7 @@ def user_has_permission(user, codename: str) -> bool:
 def get_user_accessible_modules(user) -> set:
     """Return the set of module/section names this user has access to."""
     if user.role in ('super_admin', 'admin'):
-        return {'technical', 'commercial', 'financial', 'hr', 'overview', 'energy_account', 'grid_lens'}
+        return {'technical', 'commercial', 'financial', 'hr', 'overview', 'energy_account', 'grid_lens', 'tmo', 'regulatory'}
 
     now = timezone.now()
     accessible: set = set()
