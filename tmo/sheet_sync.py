@@ -503,6 +503,8 @@ HOUR_COLS_11KV  = list(range(5, 29))   # 24 hour columns
 # estimate over the 24 hour columns. Used as EnergyDelivered whenever a feeder
 # has no CumulativeMeterReading-based reading for the day (see write block).
 ENERGY_VARIANCE_COL_11KV = 34
+PREVIOUS_ENERGY_COL_11KV = 32
+PRESENT_ENERGY_COL_11KV  = 33
 
 # Rows to ignore — transformer instrument rows and summary totals
 SKIP_NAMES_11KV = frozenset({
@@ -654,6 +656,27 @@ def sync_11kv_sheet(spreadsheet_id: str, year: int, month: int,
 
             variance_val = row[ENERGY_VARIANCE_COL_11KV] if ENERGY_VARIANCE_COL_11KV < len(row) else ''
             variance_mwh = _safe_float(variance_val)
+
+            # Fallback for rows where the sheet's own VARIANCE cell is blank
+            # (formula never filled in for that feeder) even though PREVIOUS/
+            # PRESENT ENERGY are populated — e.g. Haske Solar, whose variance
+            # column has been empty every day despite real readings sitting
+            # right next to it. Different feeders' meters report cumulative
+            # energy on different scales (most feeders: 1 unit = 1 MWh; some,
+            # like Haske's solar meter: 1 unit = 1 kWh), so try the raw diff
+            # first and only fall back to a /1000 scale if the raw diff itself
+            # isn't a plausible daily MWh figure.
+            if variance_mwh is None:
+                prev_val = row[PREVIOUS_ENERGY_COL_11KV] if PREVIOUS_ENERGY_COL_11KV < len(row) else ''
+                pres_val = row[PRESENT_ENERGY_COL_11KV] if PRESENT_ENERGY_COL_11KV < len(row) else ''
+                prev_e, pres_e = _safe_float(prev_val), _safe_float(pres_val)
+                if prev_e is not None and pres_e is not None:
+                    raw_diff = pres_e - prev_e
+                    if 0 <= raw_diff <= DAILY_BALLOON_LIMIT:
+                        variance_mwh = raw_diff
+                    elif 0 <= raw_diff / 1000 <= DAILY_BALLOON_LIMIT:
+                        variance_mwh = raw_diff / 1000
+
             # Reject garbage sheet values before they ever reach the DB — a bad
             # PREVIOUS/PRESENT ENERGY entry in the source sheet (meter reset,
             # typo, blank treated as 0) can produce an absurd variance. Same
