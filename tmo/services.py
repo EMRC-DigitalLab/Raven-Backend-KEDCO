@@ -1441,6 +1441,26 @@ class TMOService:
 
     def get_feeders(self):
         feeder_qs  = self._base_feeder_qs()
+
+        # When filtered to voltage=33kv, this is the population the frontend's
+        # "Log coupling event" form builds its faulted_feeder/coupled_to_feeder
+        # pickers from (see TMO_Settings_Frontend_Spec.md §1.4). Coupling means
+        # "this feeder's downstream 11kV network was rerouted elsewhere" — only
+        # meaningful for a 33kV parent that actually HAS real 11kV children.
+        # Narrowed here (not in _base_feeder_qs, which other methods like
+        # get_overview/get_feeder_dispatch also rely on for the full, real
+        # 33kV population) so this dropdown-facing endpoint is the only one
+        # affected.
+        if self.filters.get('voltage') == '33kv':
+            # Use a filter-free service instance to build the topology check —
+            # self._segment_topology() reads self._base_feeder_qs(), which
+            # already carries this same voltage=33kv filter; calling it on
+            # self here would filter its own 11kV-children lookup down to
+            # nothing before it could find any children at all.
+            _, true_33kv_ids, _, children_by_parent = TMOService(self.from_date, self.to_date)._segment_topology()
+            eligible_ids = {fid for fid in true_33kv_ids if children_by_parent.get(fid)}
+            feeder_qs = feeder_qs.filter(id__in=eligible_ids)
+
         feeder_ids = list(feeder_qs.values_list('id', flat=True))
 
         energy_map = calculate_energy_delivered_per_feeder(self._energy_ids(feeder_ids), self.from_date, self.to_date)
