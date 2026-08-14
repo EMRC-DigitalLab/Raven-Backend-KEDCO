@@ -338,6 +338,14 @@ class TMOReportService:
     def section_tmo_gcr(self):
         return self._tmo().get_gcr()
 
+    def section_tmo_feeder_scoped_summary(self):
+        # Report scoped to a user-selected subset of feeders — no-op (returns
+        # nothing selected) if no feeders were picked when building the report.
+        if not self.feeder_ids:
+            return {'period': {'from': str(self.from_date), 'to': str(self.to_date)},
+                    'feeders': [], 'summary': {'feeder_count': 0}}
+        return self._tmo().get_feeder_scoped_summary(self.feeder_ids)
+
     def section_tmo_volatility(self):
         # get_volatility() uses to_date as the reference "yesterday" day.
         # If to_date is today, no energy data exists yet — use actual yesterday.
@@ -377,6 +385,7 @@ class TMOReportService:
             'tmo_pnl_deficit':              self.section_tmo_pnl_deficit,
             'tmo_gcr':                      self.section_tmo_gcr,
             'tmo_volatility':               self.section_tmo_volatility,
+            'tmo_feeder_scoped_summary':    self.section_tmo_feeder_scoped_summary,
             # legacy
             'tmo_feeder_dispatch':          self.section_tmo_feeder_dispatch,
             'tmo_collection_performance':   self.section_tmo_collection_performance,

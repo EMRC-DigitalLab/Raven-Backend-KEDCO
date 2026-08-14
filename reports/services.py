@@ -427,6 +427,13 @@ SECTION_DEFINITIONS = {
         'supports_chart': False,
         'config_options': {},
     },
+    'tmo_feeder_scoped_summary': {
+        'display_name': 'Selected Feeders Summary',
+        'description': 'Target/actual/achievement and downstream composition for a user-picked subset of feeders — pick any feeders via the report\'s feeder filter, this section reports on just those',
+        'category': 'tmo',
+        'supports_chart': False,
+        'config_options': {},
+    },
     # ── DSO Compliance sections ───────────────────────────────────────────────
     'dso_compliance_overview': {
         'display_name': 'DSO Compliance Overview',
@@ -1598,6 +1605,7 @@ class ReportDataService:
         'tmo_daily_allocation', 'tmo_feeder_compliance_table', 'tmo_compliance_by_segment',
         'tmo_minigrids_daily', 'tmo_pear', 'tmo_energy_pnl_donut', 'tmo_energy_by_voltage',
         'tmo_incidents', 'tmo_pnl_deficit', 'tmo_gcr', 'tmo_volatility',
+        'tmo_feeder_scoped_summary',
         # kept in dispatcher for any existing saved templates — no longer shown in picker
         'tmo_feeder_dispatch', 'tmo_collection_performance', 'tmo_billing_efficiency',
     }

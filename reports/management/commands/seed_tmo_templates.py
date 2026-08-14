@@ -40,6 +40,18 @@ COMMERCIAL_TMO_SECTIONS = [
     ('gaps_improvements',          'Gaps & Improvement Areas',          {}),
 ]
 
+# Glance-only: KPI tiles, summary tables, no big charts or feeder-level detail
+# tables — GCR (financial) ordered first per explicit instruction, everything
+# else below it. This is a starting point, not a fixed layout — any user can
+# clone it and add/remove/reorder sections, or build their own from scratch.
+MANAGEMENT_TMO_SECTIONS = [
+    ('tmo_overview',              'Overview',            {}),
+    ('tmo_gcr',                   'GCR — Target vs Billing Value', {}),
+    ('tmo_energy_pnl_donut',      'Segment Mix',         {'mode': 'compact'}),
+    ('tmo_compliance_by_segment', 'Feeder Compliance',   {'mode': 'compact'}),
+    ('tmo_pear',                  'PEAR',                {'mode': 'compact'}),
+]
+
 TEMPLATES = [
     {
         'name':        'Technical TMO Report',
@@ -52,6 +64,17 @@ TEMPLATES = [
         'category':    'commercial',
         'description': 'Standard Commercial Review Meeting report — billing efficiency, collection performance, and revenue.',
         'sections':    COMMERCIAL_TMO_SECTIONS,
+    },
+    {
+        'name':        'TMO Management Report',
+        'category':    'technical',
+        'description': (
+            'At-a-glance summary for management — KPI tiles and summary tables only, '
+            'no detailed charts or feeder lists. GCR (financial) shown first. Fully '
+            'customizable: clone this and add/remove/reorder sections, or scope it to '
+            'specific feeders via the report\'s feeder filter.'
+        ),
+        'sections':    MANAGEMENT_TMO_SECTIONS,
     },
 ]
 

@@ -2912,3 +2912,63 @@ class TMOService:
                 'overall_status':          _compliance(ov_ach),
             },
         }
+
+    def get_feeder_scoped_summary(self, feeder_ids):
+        """
+        Per-feeder summary for an arbitrary, user-selected subset of feeders —
+        the data behind report sections scoped to specific feeders (e.g. "build
+        me a report for just these 5 feeders"). Deliberately built by calling
+        get_feeder_detail() once per feeder rather than narrowing the shared
+        bulk/topology population to this subset: _bulk_feeder_ids()/
+        _segment_topology() need to see the FULL network to net a 33kV
+        parent's children correctly, so filtering that population down to an
+        arbitrary subset first would silently corrupt any NET-of-children
+        figure (same class of bug fixed earlier for the coupling-event
+        dropdown, where narrowing the population broke topology lookups). By
+        reusing get_feeder_detail() per feeder, every number here is computed
+        against the correct, full network exactly as everywhere else in the
+        dashboard, then only the requested feeders' own rows are surfaced.
+        """
+        feeders_by_id, true_33kv_ids, _, children_by_parent = self._segment_topology()
+
+        rows = []
+        for fid in feeder_ids:
+            f = feeders_by_id.get(fid)
+            if f is None:
+                continue
+            detail = self.get_feeder_detail(f.slug)
+            row = {
+                'feeder':  detail['feeder'],
+                'summary': detail['summary'],
+                'days':    detail['days'],
+            }
+            if fid in true_33kv_ids and children_by_parent.get(fid):
+                children = [
+                    {'name': feeders_by_id[cid].name, 'slug': feeders_by_id[cid].slug}
+                    for cid in children_by_parent[fid] if cid in feeders_by_id
+                ]
+                row['children'] = children
+                row['has_downstream_network'] = True
+            else:
+                row['children'] = []
+                row['has_downstream_network'] = False
+            rows.append(row)
+
+        total_target = sum(r['summary']['total_target_mwh'] for r in rows)
+        total_actual = sum(r['summary']['total_actual_mwh'] for r in rows)
+        ov_ach = _pct(total_actual, total_target)
+
+        return {
+            'period':  {'from': str(self.from_date), 'to': str(self.to_date)},
+            'feeders': rows,
+            'summary': {
+                'feeder_count':            len(rows),
+                'total_target_mwh':        round(total_target, 2),
+                'total_actual_mwh':        round(total_actual, 2),
+                'total_target_gwh':        round(total_target / 1000, 4),
+                'total_actual_gwh':        round(total_actual / 1000, 4),
+                'variance_mwh':            round(total_actual - total_target, 2),
+                'overall_achievement_pct': round(ov_ach, 1),
+                'overall_status':          _compliance(ov_ach),
+            },
+        }
