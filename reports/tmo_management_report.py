@@ -1627,7 +1627,22 @@ def render_pnl_review(data: dict, ai: dict, context: dict, pg: int) -> str:
         <div class="subsection-title">PEAR — MD vs NMD Energy Mix {date_tag}</div>
         {pear_html}
 
-        <div class="two-col">
+        <div class="subsection-title" style="margin-top:12px;">GCR — Energy &amp; Revenue Gap by Segment (MTD) {date_tag}</div>
+        <table class="mgmt-table">
+            <thead><tr>
+                <th>Segment</th>
+                <th style="text-align:right">Target (GWh)</th>
+                <th style="text-align:right">Consumed (GWh)</th>
+                <th style="text-align:right">Gap (GWh)</th>
+                <th style="text-align:right">Expected Billing</th>
+                <th style="text-align:right">MTD Billing</th>
+                <th style="text-align:right">Billing Gap</th>
+                <th style="text-align:right">Achievement</th>
+            </tr></thead>
+            <tbody>{gcr_rows or "<tr><td colspan='8'>No data</td></tr>"}</tbody>
+        </table>
+
+        <div class="two-col" style="margin-top:12px;">
             <div class="two-col-half">
                 <div class="subsection-title">Segment Mix — Yesterday {date_tag}</div>
                 {(f'''<table class="mgmt-table">
@@ -1657,22 +1672,7 @@ def render_pnl_review(data: dict, ai: dict, context: dict, pg: int) -> str:
                     <tbody>{vol_rows or "<tr><td colspan='5'>No data</td></tr>"}</tbody>
                 </table>
             </div>
-        </div>
-
-        <div class="subsection-title" style="margin-top:12px;">GCR — Energy &amp; Revenue Gap by Segment (MTD) {date_tag}</div>
-        <table class="mgmt-table">
-            <thead><tr>
-                <th>Segment</th>
-                <th style="text-align:right">Target (GWh)</th>
-                <th style="text-align:right">Consumed (GWh)</th>
-                <th style="text-align:right">Gap (GWh)</th>
-                <th style="text-align:right">Expected Billing</th>
-                <th style="text-align:right">MTD Billing</th>
-                <th style="text-align:right">Billing Gap</th>
-                <th style="text-align:right">Achievement</th>
-            </tr></thead>
-            <tbody>{gcr_rows or "<tr><td colspan='8'>No data</td></tr>"}</tbody>
-        </table>"""
+        </div>"""
     return _page(content, context, pg)
 
 

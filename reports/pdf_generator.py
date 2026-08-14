@@ -4748,8 +4748,11 @@ _BUCKET_COLORS = {
     'critical':     '#ef4444',
 }
 _BUCKET_LABELS = {
-    'exceeding': 'Exceeding', 'on_target': 'On Target', 'below_target': 'Below Target',
-    'poor': 'Poor', 'critical': 'Critical',
+    'exceeding':    'Exceeding(>105%)',
+    'on_target':    'On Target(95%-105%)',
+    'below_target': 'Below Target(85%-94%)',
+    'poor':         'Poor(75%-84%)',
+    'critical':     'Critical(<75%)',
 }
 
 
