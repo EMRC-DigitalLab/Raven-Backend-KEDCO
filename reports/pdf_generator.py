@@ -85,10 +85,26 @@ SECTION_DISPLAY_NAMES = {
     'segment_voltage_energy':       'Energy by Segment & Voltage',
     'energy_md_nmd_mix':            'MD vs NMD Energy Mix',
     'segment_compliance_trend':     'Segment Compliance Trend',
-    # TMO
+    # TMO (legacy)
     'tmo_feeder_dispatch':        'Feeder Dispatch Targets vs Actuals',
     'tmo_collection_performance': 'Collection Performance by Segment',
     'tmo_billing_efficiency':     'Billing Efficiency (BE/FBE)',
+    # TMO (current, granular / flexible report)
+    'tmo_overview':               'TMO Overview',
+    'tmo_daily_network_energy':   'Daily Energy Forecast vs Actual',
+    'tmo_daily_energy_consumed':  'Daily Energy Consumed',
+    'tmo_daily_allocation':       'Daily Real-Time Allocation',
+    'tmo_feeder_compliance_table': 'Feeder Compliance Criticality',
+    'tmo_compliance_by_segment':  'Compliance by Segment',
+    'tmo_minigrids_daily':        'Daily Feeder / Minigrid Energy',
+    'tmo_pear':                   'PEAR — Premium Energy Allocation Ratio',
+    'tmo_energy_pnl_donut':       'Energy by P&L Segment',
+    'tmo_energy_by_voltage':      'Daily Energy by Segment & Voltage',
+    'tmo_incidents':              'Techno-Commercial Incidents',
+    'tmo_pnl_deficit':            'P&L Target Realization Deficit',
+    'tmo_gcr':                    'GCR — P&L Target vs Billing Value',
+    'tmo_volatility':             'P&L Mix Volatility Index',
+    'tmo_feeder_scoped_summary':  'Selected Feeders Summary',
 }
 
 
@@ -4583,6 +4599,298 @@ def render_tmo_billing_efficiency(data, context, page_number):
     return page1 + tbl_html, 1 + tbl_pages
 
 
+# ── Shared TMO helpers ──────────────────────────────────────────────────────
+
+def _fmt_naira_short(value):
+    """₦ figure abbreviated to B/M for readability in KPI tiles and tables."""
+    value = value or 0
+    if abs(value) >= 1_000_000_000:
+        return f'₦{value / 1_000_000_000:,.2f}B'
+    if abs(value) >= 1_000_000:
+        return f'₦{value / 1_000_000:,.2f}M'
+    return f'₦{value:,.0f}'
+
+
+def _tmo_section_title(title, eyebrow=''):
+    return (
+        f'<div style="margin-bottom:8px;">'
+        + (f'<div style="color:#94a3b8;font-size:8px;font-weight:700;letter-spacing:2px;'
+           f'text-transform:uppercase;margin-bottom:2px;">{eyebrow}</div>' if eyebrow else '')
+        + f'<div style="color:#0D47A1;font-size:15px;font-weight:800;">{title}</div>'
+        f'</div>'
+    )
+
+
+# ── 4. TMO Overview ──────────────────────────────────────────────────────────
+
+def render_tmo_overview(data, context, page_number):
+    """Overview KPI tiles — Energy Achievement / MTD Actual / Monthly Target / Feeder Compliance."""
+    ach       = data.get('mtd_achievement_pct', 0.0)
+    actual    = data.get('total_actual_gwh', 0.0)
+    target    = data.get('monthly_target_gwh', 0.0)
+    status    = data.get('mtd_status', 'critical')
+    supply    = data.get('supply', {})
+    comp_pct  = supply.get('compliance_pct', 0.0)
+    compliant = supply.get('compliant_feeders', 0)
+    total_f   = supply.get('total_feeders', 0)
+
+    kpi_row = (
+        f'<div style="display:flex;">'
+        + _tmo_kpi('Energy Achievement', f'{ach:.1f}%', color=_ach_color(ach))
+        + _tmo_kpi('MTD Actual', f'{actual:,.2f} GWh')
+        + _tmo_kpi('Monthly Target', f'{target:,.2f} GWh')
+        + _tmo_kpi('Feeder Compliance', f'{comp_pct:.1f}%', color=_ach_color(comp_pct),
+                   accent=_ach_color(comp_pct))
+        + '</div>'
+        + f'<div style="font-size:9px;color:#888;margin-top:4px;">{compliant} / {total_f} feeders meeting their scheduled hours target</div>'
+    )
+    body = _tmo_banner('TMO Overview', 'TMO Technical Dashboard', ach, status) + kpi_row
+    return _tmo_page(context, page_number, body), 1
+
+
+# ── 5. GCR — Target vs Billing Value (standalone, financial) ───────────────
+
+def render_tmo_gcr(data, context, page_number):
+    """GCR table — target/consumed/gap in GWh plus billing value in ₦, per segment. Always a summary
+    table (no detail/paginated view needed — 4 rows total), so compact and full modes are identical."""
+    rows = data.get('rows') or data.get('segments') or []
+    total_row = next((r for r in rows if r.get('segment') == 'Total'), None)
+    ach = total_row.get('mtd_achievement_pct', 0.0) if total_row else 0.0
+
+    hdr = (
+        '<colgroup><col style="width:13%"><col style="width:10%"><col style="width:10%">'
+        '<col style="width:9%"><col style="width:8%"><col style="width:14%"><col style="width:14%">'
+        '<col style="width:14%"><col style="width:8%"></colgroup>'
+        '<thead><tr>'
+        '<th>Segment</th>'
+        '<th style="text-align:right">Target (GWh)</th>'
+        '<th style="text-align:right">Consumed (GWh)</th>'
+        '<th style="text-align:right">Gap (GWh)</th>'
+        '<th style="text-align:right">Gap %</th>'
+        '<th style="text-align:right">Expected Billing</th>'
+        '<th style="text-align:right">MTD Billing</th>'
+        '<th style="text-align:right">Billing Gap</th>'
+        '<th style="text-align:right">Achv %</th>'
+        '</tr></thead>'
+    )
+    trs = []
+    for r in rows:
+        is_total = r.get('segment') == 'Total'
+        ac = _ach_color(r.get('mtd_achievement_pct', 0))
+        weight = 'font-weight:800;background:#f0f4f8;' if is_total else ''
+        trs.append(
+            f"<tr style='{weight}'><td>{r.get('segment','—')}</td>"
+            f"<td style='text-align:right'>{r.get('target_gwh',0):,.2f}</td>"
+            f"<td style='text-align:right'>{r.get('consumed_gwh',0):,.2f}</td>"
+            f"<td style='text-align:right;color:#ef4444'>{r.get('gap_gwh',0):,.2f}</td>"
+            f"<td style='text-align:right;color:#ef4444;font-weight:700'>{r.get('gap_pct',0):.1f}%</td>"
+            f"<td style='text-align:right'>{_fmt_naira_short(r.get('expected_bill_value',0))}</td>"
+            f"<td style='text-align:right'>{_fmt_naira_short(r.get('mtd_bill_value',0))}</td>"
+            f"<td style='text-align:right;color:#ef4444'>{_fmt_naira_short(r.get('gap_bill_value',0))}</td>"
+            f"<td style='text-align:right;font-weight:700;color:{ac}'>{r.get('mtd_achievement_pct',0):.1f}%</td></tr>"
+        )
+    table_html = f'<table class="report-table">{hdr}<tbody>{"".join(trs)}</tbody></table>'
+
+    body = (
+        _tmo_banner('GCR — Target vs Billing Value', 'P&L & Billing Review', ach, _tmo_compliance(ach))
+        + _tmo_section_title('Target / Consumed / Gap by Segment, with Billing Value (₦)')
+        + table_html
+    )
+    return _tmo_page(context, page_number, body), 1
+
+
+# ── 6. Energy by P&L Segment (Segment Mix) ──────────────────────────────────
+
+def render_tmo_energy_pnl_donut(data, context, page_number):
+    """Segment Mix — yesterday's split always shown; MTD comparison added in full mode."""
+    compact = data.get('_mode') == 'compact'
+    yest = data.get('yesterday', {})
+    mtd  = data.get('mtd', {})
+
+    def _seg_table(period_data, label):
+        segs = period_data.get('segments', [])
+        rows_html = ''.join(
+            f"<tr><td>{s.get('segment')}</td>"
+            f"<td style='text-align:right'>{s.get('energy_gwh',0):,.2f} GWh</td>"
+            f"<td style='text-align:right;font-weight:700;color:#1565C0'>{s.get('pct',0):.1f}%</td></tr>"
+            for s in segs
+        )
+        return (
+            f'<div style="flex:1;margin-right:10px;">'
+            + _tmo_section_title(f'Segment Mix — {label}')
+            + f'<table class="report-table"><thead><tr><th>Segment</th>'
+              f'<th style="text-align:right">Energy</th><th style="text-align:right">Share %</th></tr></thead>'
+              f'<tbody>{rows_html}'
+              f'<tr style="font-weight:800;background:#f0f4f8">'
+              f'<td>Total</td><td style="text-align:right">{period_data.get("total_gwh",0):,.2f} GWh</td><td></td></tr>'
+              f'</tbody></table></div>'
+        )
+
+    ach = next((s['pct'] for s in yest.get('segments', []) if s.get('segment') == 'MDI'), 0.0)
+    tables = _seg_table(yest, 'Yesterday')
+    if not compact:
+        tables = f'<div style="display:flex;">{tables}{_seg_table(mtd, "MTD")}</div>'
+
+    body = (
+        _tmo_banner('Energy by P&L Segment', 'MDI / MDNI / Regions Mix', ach, 'on_target')
+        + tables
+    )
+    return _tmo_page(context, page_number, body), 1
+
+
+# ── 7. Compliance by Segment ─────────────────────────────────────────────────
+
+_BUCKET_COLORS = {
+    'exceeding':    '#15803d',
+    'on_target':    '#84cc16',
+    'below_target': '#f59e0b',
+    'poor':         '#fca5a5',
+    'critical':     '#ef4444',
+}
+_BUCKET_LABELS = {
+    'exceeding': 'Exceeding', 'on_target': 'On Target', 'below_target': 'Below Target',
+    'poor': 'Poor', 'critical': 'Critical',
+}
+
+
+def render_tmo_compliance_by_segment(data, context, page_number):
+    """Compliance bar chart per segment. Compact mode: just the overall %, no bars/table."""
+    compact  = data.get('_mode') == 'compact'
+    segments = data.get('segments', [])
+
+    total_feeders = sum(s.get('total_feeders', 0) for s in segments)
+    total_ok = sum(
+        s.get('buckets', {}).get('exceeding', {}).get('count', 0)
+        + s.get('buckets', {}).get('on_target', {}).get('count', 0)
+        for s in segments
+    )
+    overall_pct = round(total_ok / total_feeders * 100, 1) if total_feeders else 0.0
+
+    kpi_row = (
+        f'<div style="display:flex;margin-bottom:8px;">'
+        + _tmo_kpi('Overall Compliance', f'{overall_pct:.1f}%', color=_ach_color(overall_pct))
+        + _tmo_kpi('Feeders On/Exceeding Target', f'{total_ok} / {total_feeders}')
+        + '</div>'
+    )
+
+    bars = ''
+    if not compact:
+        for s in segments:
+            buckets = s.get('buckets', {})
+            seg_total = s.get('total_feeders', 0) or 1
+            segs_html = ''
+            for k, c in _BUCKET_COLORS.items():
+                pct = buckets.get(k, {}).get('pct', 0)
+                label = f'{pct:.0f}%' if pct >= 6 else ''
+                segs_html += (
+                    f'<div style="width:{pct}%;background:{c};height:100%;'
+                    f'display:flex;align-items:center;justify-content:center;color:#fff;'
+                    f'font-size:8px;font-weight:700;">{label}</div>'
+                )
+            bars += (
+                f'<div style="margin-bottom:8px;">'
+                f'<div style="font-size:9px;font-weight:700;color:#444;margin-bottom:2px;">{s.get("segment")} '
+                f'<span style="color:#999;font-weight:400;">({seg_total} feeders)</span></div>'
+                f'<div style="display:flex;height:20px;border-radius:4px;overflow:hidden;">{segs_html}</div>'
+                f'</div>'
+            )
+        legend = ''.join(
+            f'<span style="display:inline-flex;align-items:center;margin-right:12px;font-size:8px;color:#666;">'
+            f'<span style="width:9px;height:9px;background:{c};border-radius:2px;display:inline-block;margin-right:4px;"></span>'
+            f'{_BUCKET_LABELS[k]}</span>'
+            for k, c in _BUCKET_COLORS.items()
+        )
+        bars += f'<div style="margin-top:6px;">{legend}</div>'
+
+    body = (
+        _tmo_banner('Compliance by Segment', 'Feeder Compliance Performance', overall_pct, _tmo_compliance(overall_pct))
+        + kpi_row + bars
+    )
+    return _tmo_page(context, page_number, body), 1
+
+
+# ── 8. PEAR ───────────────────────────────────────────────────────────────────
+
+def render_tmo_pear(data, context, page_number):
+    """MD vs Non-MD mix — yesterday + target always shown; MTD detail added in full mode."""
+    compact = data.get('_mode') == 'compact'
+    target  = data.get('target_mix', {})
+    yest    = data.get('yesterday', {})
+    mtd     = data.get('mtd', {})
+    md_pct  = yest.get('md_share_pct', 0.0)
+    target_md = target.get('md_pct', 0.0)
+    on_target = abs(md_pct - target_md) <= 5
+
+    kpi_row = (
+        f'<div style="display:flex;">'
+        + _tmo_kpi('MD Share — Yesterday', f'{md_pct:.1f}%', color=_ach_color(100 if on_target else 60))
+        + _tmo_kpi('Target Mix (MD/Non-MD)', f'{target_md:.0f}/{target.get("nmd_pct",0):.0f}')
+        + _tmo_kpi('Non-MD Share — Yesterday', f'{yest.get("nmd_share_pct",0):.1f}%')
+        + ('' if compact else _tmo_kpi('MD Share — MTD', f'{mtd.get("md_share_pct",0):.1f}%'))
+        + '</div>'
+    )
+    body = (
+        _tmo_banner('PEAR — Premium Energy Allocation Ratio', 'MD vs Non-MD Mix',
+                     100 if on_target else 60, 'on_target' if on_target else 'below_target')
+        + kpi_row
+    )
+    return _tmo_page(context, page_number, body), 1
+
+
+# ── 9. Selected Feeders Summary (feeder-scoped reports) ─────────────────────
+
+def render_tmo_feeder_scoped_summary(data, context, page_number):
+    """Table of the user-picked feeder subset — only rendered when feeders were actually selected."""
+    feeders = data.get('feeders', [])
+    summary = data.get('summary', {})
+    if not feeders:
+        body = (
+            _tmo_section_title('Selected Feeders Summary')
+            + '<div style="color:#999;font-size:10px;">No feeders selected for this report.</div>'
+        )
+        return _tmo_page(context, page_number, body), 1
+
+    ach = summary.get('overall_achievement_pct', 0.0)
+    kpi_row = (
+        f'<div style="display:flex;">'
+        + _tmo_kpi('Feeders Selected', str(summary.get('feeder_count', 0)))
+        + _tmo_kpi('Total Target', f'{summary.get("total_target_gwh",0):,.2f} GWh')
+        + _tmo_kpi('Total Actual', f'{summary.get("total_actual_gwh",0):,.2f} GWh')
+        + _tmo_kpi('Achievement', f'{ach:.1f}%', color=_ach_color(ach))
+        + '</div>'
+    )
+
+    hdr = (
+        '<colgroup><col style="width:26%"><col style="width:13%"><col style="width:13%">'
+        '<col style="width:13%"><col style="width:13%"><col style="width:22%"></colgroup>'
+        '<thead><tr><th>Feeder</th>'
+        '<th style="text-align:right">Target (MWh)</th>'
+        '<th style="text-align:right">Actual (MWh)</th>'
+        '<th style="text-align:right">Achv %</th>'
+        '<th>Status</th><th>Downstream Feeders</th></tr></thead>'
+    )
+    trs = []
+    for r in feeders:
+        s = r.get('summary', {})
+        ac = _ach_color(s.get('overall_achievement_pct', 0))
+        children = ', '.join(c['name'] for c in r.get('children', [])) or '—'
+        trs.append(
+            f"<tr><td>{r['feeder']['name']}</td>"
+            f"<td style='text-align:right'>{s.get('total_target_mwh',0):,.2f}</td>"
+            f"<td style='text-align:right'>{s.get('total_actual_mwh',0):,.2f}</td>"
+            f"<td style='text-align:right;font-weight:700;color:{ac}'>{s.get('overall_achievement_pct',0):.1f}%</td>"
+            f"<td>{_status_badge(s.get('overall_status',''))}</td>"
+            f"<td style='font-size:8px;color:#666'>{children}</td></tr>"
+        )
+    table_html = f'<table class="report-table">{hdr}<tbody>{"".join(trs)}</tbody></table>'
+
+    body = (
+        _tmo_banner('Selected Feeders Summary', 'Custom Feeder Scope', ach, _tmo_compliance(ach))
+        + kpi_row + table_html
+    )
+    return _tmo_page(context, page_number, body), 1
+
+
 # =============================================================================
 # MAIN PDF GENERATOR CLASS
 # =============================================================================
@@ -4638,10 +4946,18 @@ class PDFGenerator:
         'segment_voltage_energy':       render_segment_voltage_energy,
         'energy_md_nmd_mix':            render_energy_md_nmd_mix,
         'segment_compliance_trend':     render_segment_compliance_trend,
-        # TMO
+        # TMO (legacy)
         'tmo_feeder_dispatch':        render_tmo_feeder_dispatch,
         'tmo_collection_performance': render_tmo_collection_performance,
         'tmo_billing_efficiency':     render_tmo_billing_efficiency,
+        # TMO (current, granular / flexible report)
+        'tmo_overview':               render_tmo_overview,
+        'tmo_gcr':                    render_tmo_gcr,
+        'tmo_pnl_deficit':            render_tmo_gcr,
+        'tmo_energy_pnl_donut':       render_tmo_energy_pnl_donut,
+        'tmo_compliance_by_segment':  render_tmo_compliance_by_segment,
+        'tmo_pear':                   render_tmo_pear,
+        'tmo_feeder_scoped_summary':  render_tmo_feeder_scoped_summary,
     }
 
     def __init__(self, report_config, data_service):
@@ -4839,6 +5155,10 @@ class PDFGenerator:
             if isinstance(data, dict):
                 if chart_type:
                     data['_chart_type'] = chart_type
+                # 'compact' = glance-only rendering (KPIs/summary, no big
+                # tables or charts) — used by the Management report view.
+                # Renderers that don't support it just ignore the key.
+                data['_mode'] = config.get('mode', 'full')
 
             # Record this section's actual starting page for the TOC
             display_name = SECTION_DISPLAY_NAMES.get(section_type, section_type.replace('_', ' ').title())

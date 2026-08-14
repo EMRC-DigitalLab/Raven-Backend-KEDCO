@@ -146,10 +146,27 @@ class ReportSection(UUIDModel):
         ('period_comparison', 'Period Comparison'),
         ('customer_comparison', 'Customer Comparison'),
 
-        # TMO sections
+        # TMO sections (legacy — kept for existing saved templates)
         ('tmo_feeder_dispatch',        'TMO Feeder Dispatch Targets vs Actuals'),
         ('tmo_collection_performance', 'TMO Collection Performance by Segment'),
         ('tmo_billing_efficiency',     'TMO Billing Efficiency (BE/FBE)'),
+
+        # TMO sections (current, granular — flexible/customizable TMO report)
+        ('tmo_overview',               'TMO Overview'),
+        ('tmo_daily_network_energy',   'Daily Energy Forecast vs Actual'),
+        ('tmo_daily_energy_consumed',  'Daily Energy Consumed'),
+        ('tmo_daily_allocation',       'Daily Real-Time Allocation'),
+        ('tmo_feeder_compliance_table', 'Feeder Compliance Criticality'),
+        ('tmo_compliance_by_segment',  'Compliance by Segment'),
+        ('tmo_minigrids_daily',        'Daily Feeder / Minigrid Energy'),
+        ('tmo_pear',                   'PEAR — Premium Energy Allocation Ratio'),
+        ('tmo_energy_pnl_donut',       'Energy by P&L Segment'),
+        ('tmo_energy_by_voltage',      'Daily Energy by Segment & Voltage'),
+        ('tmo_incidents',              'Techno-Commercial Incidents'),
+        ('tmo_pnl_deficit',            'P&L Target Realization Deficit'),
+        ('tmo_gcr',                    'GCR — P&L Target vs Billing Value'),
+        ('tmo_volatility',             'P&L Mix Volatility Index'),
+        ('tmo_feeder_scoped_summary',  'Selected Feeders Summary'),
     ]
 
     template = models.ForeignKey(
