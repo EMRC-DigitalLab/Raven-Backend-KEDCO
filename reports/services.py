@@ -1582,11 +1582,26 @@ class ReportDataService:
 
     def _get_tmo_service(self):
         if not hasattr(self, '_tmo_service_instance'):
+            import uuid
             from reports.tmo_service import TMOReportService
+            # The EXPLICIT feeder picks from filters.feeders, not
+            # self.feeder_ids — that's the general narrowed population
+            # (every onboarded feeder when no filter was given at all),
+            # which would make tmo_feeder_scoped_summary silently loop
+            # over the entire network (~210s, one query set per feeder)
+            # instead of doing nothing when no feeders were picked.
+            # filters.feeders arrives as strings (raw JSON) — cast to UUID
+            # since that's what the Feeder queryset's .id lookups expect.
+            explicit_feeders = []
+            for f in (self.filters.get('feeders') or []):
+                try:
+                    explicit_feeders.append(f if isinstance(f, uuid.UUID) else uuid.UUID(str(f)))
+                except (ValueError, AttributeError):
+                    continue
             self._tmo_service_instance = TMOReportService({
                 'from_date':  self.from_date,
                 'to_date':    self.to_date,
-                'feeder_ids': self.feeder_ids,
+                'feeder_ids': explicit_feeders,
             })
         return self._tmo_service_instance
 

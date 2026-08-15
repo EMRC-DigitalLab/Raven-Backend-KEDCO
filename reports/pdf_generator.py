@@ -4747,6 +4747,63 @@ def render_tmo_gcr(data, context, page_number):
     return _tmo_page(context, page_number, body), 1
 
 
+def render_tmo_pnl_deficit(data, context, page_number):
+    """P&L Target Realization Deficit — stacked bar per segment (Consumed + Gap = Target).
+    Visually distinct from tmo_gcr on purpose: that one is the financial billing-value table,
+    this one is the energy-only realization picture, so having both in the same report never
+    shows the same content twice."""
+    rows = [r for r in (data.get('rows') or data.get('segments') or []) if r.get('segment') != 'Total']
+    total_row = next((r for r in (data.get('rows') or data.get('segments') or []) if r.get('segment') == 'Total'), None)
+    ach = total_row.get('mtd_achievement_pct', 0.0) if total_row else 0.0
+
+    max_target = max((r.get('target_gwh', 0) for r in rows), default=1) or 1
+    LW, BW, RH, RG = 90, 380, 22, 14
+    VW = LW + BW + 90
+    VH = 20 + len(rows) * (RH + RG) + 30
+
+    svg_rows = ''
+    for i, r in enumerate(rows):
+        y = 14 + i * (RH + RG)
+        target   = r.get('target_gwh', 0) or 0
+        consumed = r.get('consumed_gwh', 0) or 0
+        gap      = r.get('gap_gwh', 0) or 0
+        c_w = round(BW * consumed / max_target) if max_target else 0
+        g_w = round(BW * gap / max_target) if max_target else 0
+        svg_rows += (
+            f'<text x="{LW-6}" y="{y+RH/2+4}" text-anchor="end" font-size="10" font-weight="700"'
+            f' fill="#334155" font-family="Arial,sans-serif">{r.get("segment","—")}</text>'
+            f'<rect x="{LW}" y="{y}" width="{c_w}" height="{RH}" fill="#15803d" rx="3"/>'
+            f'<rect x="{LW+c_w}" y="{y}" width="{g_w}" height="{RH}" fill="#ef4444" rx="3"/>'
+            f'<line x1="{LW+round(BW*target/max_target)}" y1="{y-3}" x2="{LW+round(BW*target/max_target)}" y2="{y+RH+3}"'
+            f' stroke="#0D47A1" stroke-width="2" stroke-dasharray="2,2"/>'
+            f'<text x="{LW+c_w+g_w+6}" y="{y+RH/2+4}" font-size="9" fill="#666"'
+            f' font-family="Arial,sans-serif">{target:,.1f} GWh target</text>'
+        )
+    legend_y = VH - 14
+    legend = (
+        f'<rect x="{LW}" y="{legend_y}" width="12" height="9" fill="#15803d" rx="2"/>'
+        f'<text x="{LW+16}" y="{legend_y+9}" font-size="8" fill="#666" font-family="Arial,sans-serif">Consumed</text>'
+        f'<rect x="{LW+80}" y="{legend_y}" width="12" height="9" fill="#ef4444" rx="2"/>'
+        f'<text x="{LW+96}" y="{legend_y+9}" font-size="8" fill="#666" font-family="Arial,sans-serif">Gap</text>'
+        f'<line x1="{LW+140}" y1="{legend_y+4}" x2="{LW+156}" y2="{legend_y+4}" stroke="#0D47A1"'
+        f' stroke-width="2" stroke-dasharray="2,2"/>'
+        f'<text x="{LW+160}" y="{legend_y+9}" font-size="8" fill="#666" font-family="Arial,sans-serif">Target</text>'
+    )
+    chart_svg = (
+        f'<svg width="100%" viewBox="0 0 {VW} {VH}" xmlns="http://www.w3.org/2000/svg"'
+        f' style="display:block;max-width:100%;">'
+        f'<rect width="{VW}" height="{VH}" fill="#f8fafc" rx="8"/>'
+        f'{svg_rows}{legend}</svg>'
+    )
+    body = (
+        _tmo_banner('P&L Target Realization Deficit', 'Energy Consumed vs Gap vs Target', ach, _tmo_compliance(ach))
+        + _tmo_section_title('Consumed + Gap stacked to Target, per segment (GWh)')
+        + chart_svg
+        + _tmo_insight_card(data.get('ai_insights'))
+    )
+    return _tmo_page(context, page_number, body), 1
+
+
 # ── 6. Energy by P&L Segment (Segment Mix) ──────────────────────────────────
 
 def render_tmo_energy_pnl_donut(data, context, page_number):
@@ -4894,13 +4951,25 @@ def render_tmo_pear(data, context, page_number):
 # ── 9. Selected Feeders Summary (feeder-scoped reports) ─────────────────────
 
 def render_tmo_feeder_scoped_summary(data, context, page_number):
-    """Table of the user-picked feeder subset — only rendered when feeders were actually selected."""
+    """
+    Feeder-scoped summary — only means anything once the user has actually
+    picked feeders for this report; with none picked, it renders as a bare
+    note rather than a garbage table of the entire network (that was a real
+    bug: an unfiltered request silently treated all 214 feeders as
+    "selected"). In compact/management mode, skips the row-by-row detail
+    table entirely and shows only the KPI row plus an ARIA insight summary
+    instead — a management view wants a synthesis, not a raw feeder list.
+    """
+    compact = data.get('_mode') == 'compact'
     feeders = data.get('feeders', [])
     summary = data.get('summary', {})
+
     if not feeders:
         body = (
             _tmo_section_title('Selected Feeders Summary')
-            + '<div style="color:#999;font-size:10px;">No feeders selected for this report.</div>'
+            + '<div style="color:#999;font-size:10px;">'
+              'No feeders selected for this report — add feeders to the report scope to see this section.'
+              '</div>'
         )
         return _tmo_page(context, page_number, body), 1
 
@@ -4914,34 +4983,43 @@ def render_tmo_feeder_scoped_summary(data, context, page_number):
         + '</div>'
     )
 
-    hdr = (
-        '<colgroup><col style="width:26%"><col style="width:13%"><col style="width:13%">'
-        '<col style="width:13%"><col style="width:13%"><col style="width:22%"></colgroup>'
-        '<thead><tr><th>Feeder</th>'
-        '<th style="text-align:right">Target (MWh)</th>'
-        '<th style="text-align:right">Actual (MWh)</th>'
-        '<th style="text-align:right">Achv %</th>'
-        '<th>Status</th><th>Downstream Feeders</th></tr></thead>'
-    )
-    trs = []
-    for r in feeders:
-        s = r.get('summary', {})
-        ac = _ach_color(s.get('overall_achievement_pct', 0))
-        children = ', '.join(c['name'] for c in r.get('children', [])) or '—'
-        trs.append(
-            f"<tr><td>{r['feeder']['name']}</td>"
-            f"<td style='text-align:right'>{s.get('total_target_mwh',0):,.2f}</td>"
-            f"<td style='text-align:right'>{s.get('total_actual_mwh',0):,.2f}</td>"
-            f"<td style='text-align:right;font-weight:700;color:{ac}'>{s.get('overall_achievement_pct',0):.1f}%</td>"
-            f"<td>{_status_badge(s.get('overall_status',''))}</td>"
-            f"<td style='font-size:8px;color:#666'>{children}</td></tr>"
+    if compact:
+        insight = data.get('ai_insights')
+        detail = (
+            _tmo_insight_card(insight) if insight else
+            '<div style="color:#999;font-size:9px;margin-top:8px;">'
+            'Enable AI insights on this report to see a summary here instead of the full feeder table.'
+            '</div>'
         )
-    table_html = f'<table class="report-table">{hdr}<tbody>{"".join(trs)}</tbody></table>'
+    else:
+        hdr = (
+            '<colgroup><col style="width:26%"><col style="width:13%"><col style="width:13%">'
+            '<col style="width:13%"><col style="width:13%"><col style="width:22%"></colgroup>'
+            '<thead><tr><th>Feeder</th>'
+            '<th style="text-align:right">Target (MWh)</th>'
+            '<th style="text-align:right">Actual (MWh)</th>'
+            '<th style="text-align:right">Achv %</th>'
+            '<th>Status</th><th>Downstream Feeders</th></tr></thead>'
+        )
+        trs = []
+        for r in feeders:
+            s = r.get('summary', {})
+            ac = _ach_color(s.get('overall_achievement_pct', 0))
+            children = ', '.join(c['name'] for c in r.get('children', [])) or '—'
+            trs.append(
+                f"<tr><td>{r['feeder']['name']}</td>"
+                f"<td style='text-align:right'>{s.get('total_target_mwh',0):,.2f}</td>"
+                f"<td style='text-align:right'>{s.get('total_actual_mwh',0):,.2f}</td>"
+                f"<td style='text-align:right;font-weight:700;color:{ac}'>{s.get('overall_achievement_pct',0):.1f}%</td>"
+                f"<td>{_status_badge(s.get('overall_status',''))}</td>"
+                f"<td style='font-size:8px;color:#666'>{children}</td></tr>"
+            )
+        table_html = f'<table class="report-table">{hdr}<tbody>{"".join(trs)}</tbody></table>'
+        detail = table_html + _tmo_insight_card(data.get('ai_insights'))
 
     body = (
         _tmo_banner('Selected Feeders Summary', 'Custom Feeder Scope', ach, _tmo_compliance(ach))
-        + kpi_row + table_html
-        + _tmo_insight_card(data.get('ai_insights'))
+        + kpi_row + detail
     )
     return _tmo_page(context, page_number, body), 1
 
@@ -5008,7 +5086,7 @@ class PDFGenerator:
         # TMO (current, granular / flexible report)
         'tmo_overview':               render_tmo_overview,
         'tmo_gcr':                    render_tmo_gcr,
-        'tmo_pnl_deficit':            render_tmo_gcr,
+        'tmo_pnl_deficit':            render_tmo_pnl_deficit,
         'tmo_energy_pnl_donut':       render_tmo_energy_pnl_donut,
         'tmo_compliance_by_segment':  render_tmo_compliance_by_segment,
         'tmo_pear':                   render_tmo_pear,
@@ -5110,14 +5188,11 @@ class PDFGenerator:
         Rules (in order):
           single day          → "31 October 2025"
           full calendar month → "October 2025"
-          7 days (1 week)     → "Week 12, 2025"
-          multi-week range    → "Week 12 – Week 15, 2025"
           any other range     → "01 Jan 2025 – 31 Mar 2025"
         """
         import calendar as _cal
         from_date = self.data_service.from_date
         to_date   = self.data_service.to_date
-        days      = (to_date - from_date).days + 1
 
         # Single day
         if from_date == to_date:
@@ -5131,14 +5206,6 @@ class PDFGenerator:
                 and to_date.day == last_day):
             return from_date.strftime('%B %Y')
 
-        # Week(s)
-        if days <= 49:  # up to 7 weeks — show week numbers
-            w_start = from_date.isocalendar()[1]
-            w_end   = to_date.isocalendar()[1]
-            year    = from_date.year
-            if w_start == w_end:
-                return f"Week {w_start}, {year}"
-            return f"Week {w_start} \u2013 Week {w_end}, {year}"
 
         # Long range
         return f"{from_date.strftime('%d %b %Y')} \u2013 {to_date.strftime('%d %b %Y')}"
@@ -5184,8 +5251,15 @@ class PDFGenerator:
         """
         sections = list(self.report_config.get('sections', []))
 
-        # Auto-inject TOC as the second section (after cover page) if not already present
+        # Auto-inject the cover page first if the caller forgot to request one
+        # — a report should never open straight into "Contents" with no title
+        # page ahead of it.
         section_types = [s.get('section_type') for s in sections]
+        if 'cover_page' not in section_types:
+            sections.insert(0, {'section_type': 'cover_page', 'config': {}})
+            section_types.insert(0, 'cover_page')
+
+        # Auto-inject TOC as the second section (after cover page) if not already present
         if 'table_of_contents' not in section_types:
             insert_at = 1 if 'cover_page' in section_types else 0
             sections.insert(insert_at, {'section_type': 'table_of_contents', 'config': {}})
