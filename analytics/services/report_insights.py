@@ -87,6 +87,19 @@ _SECTION_LABELS: dict[str, str] = {
     'entity_comparison':        'Entity Comparison',
     'period_comparison':        'Period Comparison',
     'customer_comparison':      'Customer Consumption Comparison',
+    'tmo_overview':              'TMO Overview',
+    'tmo_gcr':                   'GCR — Target vs Billing Value',
+    'tmo_pnl_deficit':           'P&L Target Realization Deficit',
+    'tmo_energy_pnl_donut':      'Energy by P&L Segment',
+    'tmo_compliance_by_segment': 'Feeder Compliance by Segment',
+    'tmo_pear':                  'PEAR — MD vs Non-MD Mix',
+    'tmo_feeder_scoped_summary': 'Selected Feeders Summary',
+    'tmo_daily_network_energy':  'Daily Energy Forecast vs Actual',
+    'tmo_daily_allocation':      'Daily Real-Time Allocation',
+    'tmo_feeder_compliance_table': 'Feeder Compliance Criticality',
+    'tmo_energy_by_voltage':     'Energy by Segment & Voltage',
+    'tmo_incidents':             'Techno-Commercial Incidents',
+    'tmo_volatility':            'P&L Mix Volatility',
 }
 
 
