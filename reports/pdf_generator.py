@@ -4951,13 +4951,25 @@ def render_tmo_pear(data, context, page_number):
 # ── 9. Selected Feeders Summary (feeder-scoped reports) ─────────────────────
 
 def render_tmo_feeder_scoped_summary(data, context, page_number):
-    """Table of the user-picked feeder subset — only rendered when feeders were actually selected."""
+    """
+    Feeder-scoped summary — only means anything once the user has actually
+    picked feeders for this report; with none picked, it renders as a bare
+    note rather than a garbage table of the entire network (that was a real
+    bug: an unfiltered request silently treated all 214 feeders as
+    "selected"). In compact/management mode, skips the row-by-row detail
+    table entirely and shows only the KPI row plus an ARIA insight summary
+    instead — a management view wants a synthesis, not a raw feeder list.
+    """
+    compact = data.get('_mode') == 'compact'
     feeders = data.get('feeders', [])
     summary = data.get('summary', {})
+
     if not feeders:
         body = (
             _tmo_section_title('Selected Feeders Summary')
-            + '<div style="color:#999;font-size:10px;">No feeders selected for this report.</div>'
+            + '<div style="color:#999;font-size:10px;">'
+              'No feeders selected for this report — add feeders to the report scope to see this section.'
+              '</div>'
         )
         return _tmo_page(context, page_number, body), 1
 
@@ -4971,34 +4983,43 @@ def render_tmo_feeder_scoped_summary(data, context, page_number):
         + '</div>'
     )
 
-    hdr = (
-        '<colgroup><col style="width:26%"><col style="width:13%"><col style="width:13%">'
-        '<col style="width:13%"><col style="width:13%"><col style="width:22%"></colgroup>'
-        '<thead><tr><th>Feeder</th>'
-        '<th style="text-align:right">Target (MWh)</th>'
-        '<th style="text-align:right">Actual (MWh)</th>'
-        '<th style="text-align:right">Achv %</th>'
-        '<th>Status</th><th>Downstream Feeders</th></tr></thead>'
-    )
-    trs = []
-    for r in feeders:
-        s = r.get('summary', {})
-        ac = _ach_color(s.get('overall_achievement_pct', 0))
-        children = ', '.join(c['name'] for c in r.get('children', [])) or '—'
-        trs.append(
-            f"<tr><td>{r['feeder']['name']}</td>"
-            f"<td style='text-align:right'>{s.get('total_target_mwh',0):,.2f}</td>"
-            f"<td style='text-align:right'>{s.get('total_actual_mwh',0):,.2f}</td>"
-            f"<td style='text-align:right;font-weight:700;color:{ac}'>{s.get('overall_achievement_pct',0):.1f}%</td>"
-            f"<td>{_status_badge(s.get('overall_status',''))}</td>"
-            f"<td style='font-size:8px;color:#666'>{children}</td></tr>"
+    if compact:
+        insight = data.get('ai_insights')
+        detail = (
+            _tmo_insight_card(insight) if insight else
+            '<div style="color:#999;font-size:9px;margin-top:8px;">'
+            'Enable AI insights on this report to see a summary here instead of the full feeder table.'
+            '</div>'
         )
-    table_html = f'<table class="report-table">{hdr}<tbody>{"".join(trs)}</tbody></table>'
+    else:
+        hdr = (
+            '<colgroup><col style="width:26%"><col style="width:13%"><col style="width:13%">'
+            '<col style="width:13%"><col style="width:13%"><col style="width:22%"></colgroup>'
+            '<thead><tr><th>Feeder</th>'
+            '<th style="text-align:right">Target (MWh)</th>'
+            '<th style="text-align:right">Actual (MWh)</th>'
+            '<th style="text-align:right">Achv %</th>'
+            '<th>Status</th><th>Downstream Feeders</th></tr></thead>'
+        )
+        trs = []
+        for r in feeders:
+            s = r.get('summary', {})
+            ac = _ach_color(s.get('overall_achievement_pct', 0))
+            children = ', '.join(c['name'] for c in r.get('children', [])) or '—'
+            trs.append(
+                f"<tr><td>{r['feeder']['name']}</td>"
+                f"<td style='text-align:right'>{s.get('total_target_mwh',0):,.2f}</td>"
+                f"<td style='text-align:right'>{s.get('total_actual_mwh',0):,.2f}</td>"
+                f"<td style='text-align:right;font-weight:700;color:{ac}'>{s.get('overall_achievement_pct',0):.1f}%</td>"
+                f"<td>{_status_badge(s.get('overall_status',''))}</td>"
+                f"<td style='font-size:8px;color:#666'>{children}</td></tr>"
+            )
+        table_html = f'<table class="report-table">{hdr}<tbody>{"".join(trs)}</tbody></table>'
+        detail = table_html + _tmo_insight_card(data.get('ai_insights'))
 
     body = (
         _tmo_banner('Selected Feeders Summary', 'Custom Feeder Scope', ach, _tmo_compliance(ach))
-        + kpi_row + table_html
-        + _tmo_insight_card(data.get('ai_insights'))
+        + kpi_row + detail
     )
     return _tmo_page(context, page_number, body), 1
 
