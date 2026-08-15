@@ -4611,6 +4611,52 @@ def _fmt_naira_short(value):
     return f'₦{value:,.0f}'
 
 
+def _tmo_insight_card(insights):
+    """Inline ARIA insight card — same branding as the standalone ARIA Insights
+    page (render_commercial_comparison_insights), compacted to fit inside a
+    section body. Returns '' if no insight is available, so callers can
+    always append it unconditionally."""
+    if not insights or 'error' in insights:
+        return ''
+
+    headline = insights.get('headline', '')
+    summary  = insights.get('summary', '')
+    obs      = insights.get('key_observations', []) or []
+    recs     = insights.get('recommendations', []) or []
+
+    def _bullets(items, color):
+        return ''.join(
+            f'<div style="display:flex;gap:6px;margin-bottom:4px;align-items:flex-start;">'
+            f'<span style="min-width:5px;height:5px;margin-top:5px;border-radius:50%;'
+            f'background:{color};display:inline-block;flex-shrink:0;"></span>'
+            f'<span style="font-size:9px;color:#1e293b;line-height:1.45;">{t}</span></div>'
+            for t in items
+        )
+
+    return f"""
+    <div style="background:#f8fafc;border:1px solid #e2e8f0;border-left:3px solid #002050;
+                border-radius:8px;padding:10px 14px;margin-top:10px;">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+            <span style="background:#002050;color:#fff;font-size:9px;font-weight:800;
+                        letter-spacing:1px;border-radius:5px;padding:2px 8px;">ARIA</span>
+            <span style="font-size:10px;font-weight:700;color:#002050;">{headline}</span>
+        </div>
+        <div style="font-size:9.5px;color:#475569;line-height:1.5;margin-bottom:8px;">{summary}</div>
+        <div style="display:flex;gap:18px;">
+            <div style="flex:1;">
+                <div style="font-size:7.5px;font-weight:700;text-transform:uppercase;
+                            letter-spacing:0.5px;color:#94a3b8;margin-bottom:4px;">Key Observations</div>
+                {_bullets(obs, '#002050')}
+            </div>
+            <div style="flex:1;">
+                <div style="font-size:7.5px;font-weight:700;text-transform:uppercase;
+                            letter-spacing:0.5px;color:#94a3b8;margin-bottom:4px;">Recommendations</div>
+                {_bullets(recs, '#1a6b3c')}
+            </div>
+        </div>
+    </div>"""
+
+
 def _tmo_section_title(title, eyebrow=''):
     return (
         f'<div style="margin-bottom:8px;">'
@@ -4645,6 +4691,7 @@ def render_tmo_overview(data, context, page_number):
         + f'<div style="font-size:9px;color:#888;margin-top:4px;">{compliant} / {total_f} feeders meeting their scheduled hours target</div>'
     )
     body = _tmo_banner('TMO Overview', 'TMO Technical Dashboard', ach, status) + kpi_row
+    body += _tmo_insight_card(data.get('ai_insights'))
     return _tmo_page(context, page_number, body), 1
 
 
@@ -4695,6 +4742,7 @@ def render_tmo_gcr(data, context, page_number):
         _tmo_banner('GCR — Target vs Billing Value', 'P&L & Billing Review', ach, _tmo_compliance(ach))
         + _tmo_section_title('Target / Consumed / Gap by Segment, with Billing Value (₦)')
         + table_html
+        + _tmo_insight_card(data.get('ai_insights'))
     )
     return _tmo_page(context, page_number, body), 1
 
@@ -4734,6 +4782,7 @@ def render_tmo_energy_pnl_donut(data, context, page_number):
     body = (
         _tmo_banner('Energy by P&L Segment', 'MDI / MDNI / Regions Mix', ach, 'on_target')
         + tables
+        + _tmo_insight_card(data.get('ai_insights'))
     )
     return _tmo_page(context, page_number, body), 1
 
@@ -4748,8 +4797,11 @@ _BUCKET_COLORS = {
     'critical':     '#ef4444',
 }
 _BUCKET_LABELS = {
-    'exceeding': 'Exceeding', 'on_target': 'On Target', 'below_target': 'Below Target',
-    'poor': 'Poor', 'critical': 'Critical',
+    'exceeding':    'Exceeding(>105%)',
+    'on_target':    'On Target(95%-105%)',
+    'below_target': 'Below Target(85%-94%)',
+    'poor':         'Poor(75%-84%)',
+    'critical':     'Critical(<75%)',
 }
 
 
@@ -4805,6 +4857,7 @@ def render_tmo_compliance_by_segment(data, context, page_number):
     body = (
         _tmo_banner('Compliance by Segment', 'Feeder Compliance Performance', overall_pct, _tmo_compliance(overall_pct))
         + kpi_row + bars
+        + _tmo_insight_card(data.get('ai_insights'))
     )
     return _tmo_page(context, page_number, body), 1
 
@@ -4833,6 +4886,7 @@ def render_tmo_pear(data, context, page_number):
         _tmo_banner('PEAR — Premium Energy Allocation Ratio', 'MD vs Non-MD Mix',
                      100 if on_target else 60, 'on_target' if on_target else 'below_target')
         + kpi_row
+        + _tmo_insight_card(data.get('ai_insights'))
     )
     return _tmo_page(context, page_number, body), 1
 
@@ -4887,6 +4941,7 @@ def render_tmo_feeder_scoped_summary(data, context, page_number):
     body = (
         _tmo_banner('Selected Feeders Summary', 'Custom Feeder Scope', ach, _tmo_compliance(ach))
         + kpi_row + table_html
+        + _tmo_insight_card(data.get('ai_insights'))
     )
     return _tmo_page(context, page_number, body), 1
 
@@ -4979,6 +5034,11 @@ class PDFGenerator:
         self.report_config = report_config
         self.data_service = data_service
         self.orientation = report_config.get('orientation', 'landscape')
+        # AI insight cards embedded in the rendered PDF/HTML itself — separate
+        # from generate_report_data's include_ai_insights, which only attaches
+        # insights to the JSON response for client-side rendering and never
+        # reaches an actual generated PDF or HTML preview.
+        self.include_ai_insights = bool(report_config.get('include_ai_insights', False))
 
         # Theme — extract with defaults so missing keys never cause KeyErrors
         raw_theme = report_config.get('theme') or {}
@@ -5022,6 +5082,27 @@ class PDFGenerator:
             'text_color':    self.theme['text_color'],
             'orientation':   self.orientation,
         }
+
+    def _get_section_ai_insight(self, section_type, data):
+        """
+        ARIA insight for one section, embedded directly in the generated PDF/
+        HTML — a report failing to get an insight (API error, no key configured,
+        etc.) must never block the report itself, so any failure here just
+        means that section renders without a card, nothing more.
+        """
+        try:
+            from analytics.services.report_insights import get_report_insights
+            period_label = self.context.get('report_date', '')
+            result = get_report_insights(
+                sections_data=[{'section_type': section_type, 'data': data}],
+                period_label=period_label,
+                company_name=self.context.get('company_name', ''),
+                include_summary=False,
+            )
+            return (result or {}).get('sections', {}).get(section_type)
+        except Exception as exc:
+            logger.warning('AI insight failed for section %s: %s', section_type, exc)
+            return None
 
     def _format_report_date(self):
         """Format the report period label for the cover page.
@@ -5159,6 +5240,9 @@ class PDFGenerator:
                 # tables or charts) — used by the Management report view.
                 # Renderers that don't support it just ignore the key.
                 data['_mode'] = config.get('mode', 'full')
+
+                if self.include_ai_insights and 'error' not in data:
+                    data['ai_insights'] = self._get_section_ai_insight(section_type, data)
 
             # Record this section's actual starting page for the TOC
             display_name = SECTION_DISPLAY_NAMES.get(section_type, section_type.replace('_', ' ').title())

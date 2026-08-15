@@ -376,8 +376,9 @@ def generate_report_pdf(request):
             'company_name': request.data.get('company_name', 'KANO ELECTRICITY DISTRIBUTION COMPANY'),
             'sections': data.get('sections', []),
             'theme': data.get('theme', {}),
+            'include_ai_insights': request.data.get('include_ai_insights', False),
         }
-        
+
         # Generate PDF
         pdf_generator = PDFGenerator(report_config, data_service)
         pdf_buffer = pdf_generator.generate_pdf()
@@ -618,8 +619,9 @@ def generate_report_html_preview(request):
             'company_name': request.data.get('company_name', 'KANO ELECTRICITY DISTRIBUTION COMPANY'),
             'sections': request.data.get('sections', []),
             'theme': request.data.get('theme', {}),
+            'include_ai_insights': request.data.get('include_ai_insights', False),
         }
-        
+
         pdf_generator = PDFGenerator(report_config, data_service)
         html_content = pdf_generator.generate_html()
         
