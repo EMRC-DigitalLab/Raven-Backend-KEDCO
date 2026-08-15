@@ -4185,10 +4185,12 @@ def _tmo_banner(title, eyebrow, ach_pct, status):
 
 
 def _tmo_kpi(label, value, color='#1565C0', bg='#f0f4f8', accent=None):
-    border = f';border-left:3px solid {accent}' if accent else ''
+    # accent param kept (not removed) so any old call sites passing it don't
+    # break, but the colored left-border it used to draw is gone everywhere —
+    # no card in the TMO report should carry that line.
     return (
         f'<div style="flex:1;background:{bg};border-radius:8px;padding:8px 10px;'
-        f'margin-right:8px;text-align:center{border};">'
+        f'margin-right:8px;text-align:center;">'
         f'<div style="font-size:7px;font-weight:700;text-transform:uppercase;color:#999;margin-bottom:2px;">{label}</div>'
         f'<div style="font-size:16px;font-weight:800;color:{color};line-height:1.1;">{value}</div>'
         f'</div>'
@@ -4623,6 +4625,7 @@ def _tmo_insight_card(insights):
     summary  = insights.get('summary', '')
     obs      = insights.get('key_observations', []) or []
     recs     = insights.get('recommendations', []) or []
+    steps    = insights.get('next_steps', []) or []
 
     def _bullets(items, color):
         return ''.join(
@@ -4633,8 +4636,18 @@ def _tmo_insight_card(insights):
             for t in items
         )
 
+    next_steps_block = ''
+    if steps:
+        next_steps_block = f"""
+        <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:6px;
+                    padding:8px 12px;margin-top:8px;">
+            <div style="font-size:7.5px;font-weight:700;text-transform:uppercase;
+                        letter-spacing:0.5px;color:#b45309;margin-bottom:4px;">Next Steps</div>
+            {_bullets(steps, '#b45309')}
+        </div>"""
+
     return f"""
-    <div style="background:#f8fafc;border:1px solid #e2e8f0;border-left:3px solid #002050;
+    <div style="background:#f8fafc;border:1px solid #e2e8f0;
                 border-radius:8px;padding:10px 14px;margin-top:10px;">
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
             <span style="background:#002050;color:#fff;font-size:9px;font-weight:800;
@@ -4654,6 +4667,7 @@ def _tmo_insight_card(insights):
                 {_bullets(recs, '#1a6b3c')}
             </div>
         </div>
+        {next_steps_block}
     </div>"""
 
 
@@ -4685,8 +4699,7 @@ def render_tmo_overview(data, context, page_number):
         + _tmo_kpi('Energy Achievement', f'{ach:.1f}%', color=_ach_color(ach))
         + _tmo_kpi('MTD Actual', f'{actual:,.2f} GWh')
         + _tmo_kpi('Monthly Target', f'{target:,.2f} GWh')
-        + _tmo_kpi('Feeder Compliance', f'{comp_pct:.1f}%', color=_ach_color(comp_pct),
-                   accent=_ach_color(comp_pct))
+        + _tmo_kpi('Feeder Compliance', f'{comp_pct:.1f}%', color=_ach_color(comp_pct))
         + '</div>'
         + f'<div style="font-size:9px;color:#888;margin-top:4px;">{compliant} / {total_f} feeders meeting their scheduled hours target</div>'
     )
@@ -4812,7 +4825,11 @@ def render_tmo_energy_pnl_donut(data, context, page_number):
     yest = data.get('yesterday', {})
     mtd  = data.get('mtd', {})
 
-    def _seg_table(period_data, label):
+    def _seg_table(period_data, label, grow):
+        # flex:1 only makes sense side-by-side (full mode's two-table row) —
+        # applied standalone (compact mode) it expands to fill the whole
+        # page height inside .page-content's column flex, shoving everything
+        # after it (the ARIA card) down to the bottom with a big empty gap.
         segs = period_data.get('segments', [])
         rows_html = ''.join(
             f"<tr><td>{s.get('segment')}</td>"
@@ -4820,8 +4837,9 @@ def render_tmo_energy_pnl_donut(data, context, page_number):
             f"<td style='text-align:right;font-weight:700;color:#1565C0'>{s.get('pct',0):.1f}%</td></tr>"
             for s in segs
         )
+        flex_style = 'flex:1;margin-right:10px;' if grow else ''
         return (
-            f'<div style="flex:1;margin-right:10px;">'
+            f'<div style="{flex_style}">'
             + _tmo_section_title(f'Segment Mix — {label}')
             + f'<table class="report-table"><thead><tr><th>Segment</th>'
               f'<th style="text-align:right">Energy</th><th style="text-align:right">Share %</th></tr></thead>'
@@ -4832,9 +4850,10 @@ def render_tmo_energy_pnl_donut(data, context, page_number):
         )
 
     ach = next((s['pct'] for s in yest.get('segments', []) if s.get('segment') == 'MDI'), 0.0)
-    tables = _seg_table(yest, 'Yesterday')
-    if not compact:
-        tables = f'<div style="display:flex;">{tables}{_seg_table(mtd, "MTD")}</div>'
+    if compact:
+        tables = _seg_table(yest, 'Yesterday', grow=False)
+    else:
+        tables = f'<div style="display:flex;">{_seg_table(yest, "Yesterday", grow=True)}{_seg_table(mtd, "MTD", grow=True)}</div>'
 
     body = (
         _tmo_banner('Energy by P&L Segment', 'MDI / MDNI / Regions Mix', ach, 'on_target')
