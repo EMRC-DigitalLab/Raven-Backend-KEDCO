@@ -214,13 +214,19 @@ Return ONLY valid JSON — no markdown, no prose outside the object:
   "recommendations": [
     "<actionable recommendation for KEDCO field/management team>",
     "<recommendation 2>"
+  ],
+  "next_steps": [
+    "<immediate, concrete action to take this week — who/what, not strategy>",
+    "<next step 2>"
   ]
 }}
 
 Rules:
 - Reference actual figures. Do not write generic platitudes.
 - key_observations: exactly 3, each grounded in the data above.
-- recommendations: exactly 2, practical for a Nigerian DISCO.
+- recommendations: exactly 2, practical for a Nigerian DISCO — the strategic "what to fix."
+- next_steps: exactly 2, immediate/tactical "do this now" actions — distinct from
+  recommendations, not a rephrasing of them.
 - Keep headline under 20 words.
 """
 
