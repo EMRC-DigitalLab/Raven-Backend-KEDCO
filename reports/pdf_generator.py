@@ -5151,9 +5151,22 @@ def render_tmo_supply_hours(data, context, page_number):
             f"<td style='text-align:right'>{f.get('avg_daily_hours',0):.2f}</td>"
             f"<td style='text-align:right;font-weight:700;color:{gap_col}'>{gap:+.1f}</td></tr>"
         )
+    # Row cap is tuned to the physical page height, not a fixed number —
+    # portrait (297mm tall) has ~40% more vertical room than landscape
+    # (210mm tall), so keeping the landscape-tuned cap in portrait mode
+    # left real, visible empty space below a table that stopped filling
+    # early. landscape=True/False must also match the report's own
+    # orientation (PORTRAIT_STYLES forces every .page/.page-landscape div
+    # to true portrait dimensions when the report is portrait — passing
+    # the wrong flag here doesn't break layout, but keeps _paginate_table's
+    # own row-height assumptions internally consistent with what the page
+    # actually is).
+    is_portrait = context.get('orientation') == 'portrait'
+    default_max_rows = 30 if is_portrait else 16
+    max_rows = data.get('_max_rows') or default_max_rows
     tbl_html, tbl_pages = _paginate_table(
         rows, hdr, 'Feeder Hours Supplied vs Target — Detail', context, page_number + 1,
-        max_rows=16, landscape=True,
+        max_rows=max_rows, landscape=not is_portrait,
     )
     return page1 + tbl_html, 1 + tbl_pages
 
@@ -5459,8 +5472,19 @@ class PDFGenerator:
                 # tables or charts) — used by the Management report view.
                 # Renderers that don't support it just ignore the key.
                 data['_mode'] = config.get('mode', 'full')
+                # Optional per-section override for how many table rows fit
+                # per page — renderers that paginate a table fall back to
+                # their own orientation-based default when this is absent.
+                if config.get('max_rows'):
+                    data['_max_rows'] = config['max_rows']
 
-                if self.include_ai_insights and 'error' not in data:
+                # Per-section opt-in, not a report-wide switch — a report with
+                # 5 sections and include_ai_insights=true used to put an ARIA
+                # card on all 5; now each section only gets one if its OWN
+                # config explicitly asks for it (config: {"ai_insight": true}).
+                # include_ai_insights stays as the report-level master switch:
+                # off means no section gets one regardless of its own config.
+                if self.include_ai_insights and config.get('ai_insight') and 'error' not in data:
                     data['ai_insights'] = self._get_section_ai_insight(section_type, data)
 
             # Record this section's actual starting page for the TOC
