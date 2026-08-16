@@ -825,15 +825,33 @@ tbody td {
 }
 
 /* ── Table of Contents ────────────────────────────────────────────────────── */
+.toc-eyebrow {
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: rgba(0, 32, 80, 0.45);
+    margin-top: -8px;
+    margin-bottom: 24px;
+}
+
 .toc-container {
     margin-bottom: 30px;
+    border-radius: 10px;
+    overflow: hidden;
+    border: 1px solid rgba(0, 32, 80, 0.1);
 }
 
 .toc-row {
     display: flex;
-    align-items: baseline;
-    padding: 11px 0;
-    border-bottom: 1px solid rgba(0, 0, 0, 0.1);
+    align-items: center;
+    gap: 16px;
+    padding: 13px 16px;
+    border-bottom: 1px solid rgba(0, 32, 80, 0.08);
+}
+
+.toc-row:nth-child(even) {
+    background: rgba(0, 32, 80, 0.03);
 }
 
 .toc-row:last-child {
@@ -841,31 +859,40 @@ tbody td {
 }
 
 .toc-number {
-    font-size: 13px;
-    font-weight: 600;
-    color: #002050;
-    flex: 0 0 30px;
+    flex: 0 0 26px;
+    height: 26px;
+    border-radius: 50%;
+    background: #002050;
+    color: #fff;
+    font-size: 11px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
 
 .toc-title {
-    font-size: 15px;
-    font-weight: 500;
+    font-size: 14px;
+    font-weight: 600;
+    color: #002050;
     flex: 1;
 }
 
 .toc-dots {
-    flex: 0 1 120px;
-    border-bottom: 1px dotted rgba(0, 0, 0, 0.3);
-    margin: 0 12px;
-    margin-bottom: 4px;
+    display: none;
 }
 
 .toc-page {
-    font-size: 18px;
+    font-size: 12px;
     font-weight: 700;
     color: #002050;
-    flex: 0 0 36px;
-    text-align: right;
+    background: rgba(0, 32, 80, 0.08);
+    border-radius: 5px;
+    flex: 0 0 34px;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
 """
 
@@ -1085,6 +1112,7 @@ def render_table_of_contents(entries, context, page_number):
             </div>
 
             <h1 class="page-title">Contents{suffix}</h1>
+            <div class="toc-eyebrow">{len(entries)} section{'s' if len(entries) != 1 else ''} in this report</div>
 
             <div class="toc-container">
                 {rows_html}
@@ -4073,7 +4101,6 @@ tbody tr:nth-child(even) {{ background-color: {primary_stripe}; }}
 .metric-value,
 .reliability-kpi-value,
 .reliability-value,
-.toc-number,
 .toc-page,
 .page-number,
 .section-card-title,
