@@ -770,6 +770,8 @@ class TMOService:
             qs = qs.filter(voltage_level=f['voltage'])
         if f.get('feeder'):
             qs = qs.filter(slug=f['feeder'])
+        if f.get('feeders'):
+            qs = qs.filter(id__in=f['feeders'])
         if f.get('segment'):
             seg = f['segment'].upper()
             if seg == 'MDI':
@@ -1220,6 +1222,7 @@ class TMOService:
                 'voltage_level':      feeder.voltage_level if feeder else '',
                 'segment':            self._segment_label(fid),
                 'dm_status':          _dm_status(fid, feeder),
+                'district':           feeder.business_district.name if feeder and feeder.business_district else '',
                 'band':               feeder.band.name if feeder and feeder.band else '',
                 'band_minimum_hours': min_h,
                 'avg_daily_hours':    round(avg_h, 2),

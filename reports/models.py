@@ -167,6 +167,7 @@ class ReportSection(UUIDModel):
         ('tmo_gcr',                    'GCR — P&L Target vs Billing Value'),
         ('tmo_volatility',             'P&L Mix Volatility Index'),
         ('tmo_feeder_scoped_summary',  'Selected Feeders Summary'),
+        ('tmo_supply_hours',           'Feeder Hours Supplied vs Target'),
     ]
 
     template = models.ForeignKey(

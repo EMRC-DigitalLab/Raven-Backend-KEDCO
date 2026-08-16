@@ -434,6 +434,19 @@ SECTION_DEFINITIONS = {
         'supports_chart': False,
         'config_options': {},
     },
+    'tmo_supply_hours': {
+        'display_name': 'Feeder Hours Supplied vs Target',
+        'description': (
+            'Per-feeder hours-of-supply table for a given day (defaults to yesterday) — '
+            'Feeder / Segment / District / Band / Target hours / Actual hours / Gap, same shape '
+            'as TCN\'s own daily feeder report. Target hours use the real per-feeder priority '
+            'chain (per-feeder upload, then segment target, then band minimum). Filterable by '
+            'segment, voltage level, and specific feeders via the report\'s own filters.'
+        ),
+        'category': 'tmo',
+        'supports_chart': False,
+        'config_options': {},
+    },
     # ── DSO Compliance sections ───────────────────────────────────────────────
     'dso_compliance_overview': {
         'display_name': 'DSO Compliance Overview',
@@ -1599,9 +1612,15 @@ class ReportDataService:
                 except (ValueError, AttributeError):
                     continue
             self._tmo_service_instance = TMOReportService({
-                'from_date':  self.from_date,
-                'to_date':    self.to_date,
-                'feeder_ids': explicit_feeders,
+                'from_date':     self.from_date,
+                'to_date':       self.to_date,
+                'feeder_ids':    explicit_feeders,
+                # Passed through as-is for sections (e.g. supply hours) that
+                # build their own filtered TMOService instance — segment
+                # here is TMO's own MDI/MDNI/Regions/Minigrid vocabulary,
+                # distinct from the generic engine's other filter keys.
+                'segment':       self.filters.get('segment'),
+                'voltage_level': self.filters.get('voltage_level'),
             })
         return self._tmo_service_instance
 
@@ -1620,7 +1639,7 @@ class ReportDataService:
         'tmo_daily_allocation', 'tmo_feeder_compliance_table', 'tmo_compliance_by_segment',
         'tmo_minigrids_daily', 'tmo_pear', 'tmo_energy_pnl_donut', 'tmo_energy_by_voltage',
         'tmo_incidents', 'tmo_pnl_deficit', 'tmo_gcr', 'tmo_volatility',
-        'tmo_feeder_scoped_summary',
+        'tmo_feeder_scoped_summary', 'tmo_supply_hours',
         # kept in dispatcher for any existing saved templates — no longer shown in picker
         'tmo_feeder_dispatch', 'tmo_collection_performance', 'tmo_billing_efficiency',
     }

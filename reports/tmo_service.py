@@ -204,23 +204,52 @@ class TMOReportService:
     Adapter between the report engine and the live TMO dashboard service.
 
     filters = {
-        'from_date':  'YYYY-MM-DD',
-        'to_date':    'YYYY-MM-DD',
-        'feeder_ids': [uuid, ...],   # used only by legacy sections
+        'from_date':     'YYYY-MM-DD',
+        'to_date':       'YYYY-MM-DD',
+        'feeder_ids':    [uuid, ...],   # used only by legacy sections
+        'segment':       'MDI' | 'MDNI' | 'MINIGRID' | 'REGIONS' | None,
+        'voltage_level': '11kv' | '33kv' | None,
     }
     """
 
     def __init__(self, filters):
-        self.from_date  = _parse_date(filters.get('from_date'))
-        self.to_date    = _parse_date(filters.get('to_date'))
-        self.feeder_ids = filters.get('feeder_ids') or []
-        self._svc       = None   # lazy-init
+        self.from_date     = _parse_date(filters.get('from_date'))
+        self.to_date       = _parse_date(filters.get('to_date'))
+        self.feeder_ids    = filters.get('feeder_ids') or []
+        self.segment       = filters.get('segment')
+        self.voltage_level = filters.get('voltage_level')
+        self._svc          = None   # lazy-init, unfiltered (network-wide aggregates)
+        self._filtered_svc = None   # lazy-init, respects segment/voltage/feeder filters
 
     def _tmo(self):
         if self._svc is None:
             from tmo.services import TMOService
             self._svc = TMOService(self.from_date, self.to_date, filters={})
         return self._svc
+
+    def _tmo_filtered(self):
+        """
+        A TMOService instance that actually applies segment/voltage/feeder
+        filters — deliberately separate from _tmo() above, which every
+        network-wide aggregate section (GCR, daily allocation, segment mix,
+        etc.) relies on staying unfiltered so 33kV-parent/11kV-child topology
+        lookups always see the whole network (narrowing that population
+        corrupts NET-of-children figures — the exact bug fixed earlier for
+        the coupling-event dropdown). Only used by sections that are
+        genuinely meant to be scoped to a filtered feeder list, like the
+        per-feeder supply-hours report.
+        """
+        if self._filtered_svc is None:
+            from tmo.services import TMOService
+            filters = {}
+            if self.segment:
+                filters['segment'] = self.segment
+            if self.voltage_level:
+                filters['voltage'] = self.voltage_level
+            if self.feeder_ids:
+                filters['feeders'] = self.feeder_ids
+            self._filtered_svc = TMOService(self.from_date, self.to_date, filters=filters)
+        return self._filtered_svc
 
     # ── Dashboard sections ────────────────────────────────────────────────────
 
@@ -356,6 +385,19 @@ class TMOReportService:
         svc = TMOService(ref_date.replace(day=1), ref_date, filters={})
         return svc.get_volatility()
 
+    def section_tmo_supply_hours(self):
+        """
+        Per-feeder hours-supplied-vs-target, same shape as TCN's own daily
+        feeder report — Feeder / Segment / District / Band / Target hrs /
+        Actual hrs / Gap. Defaults to a single day (yesterday) unless the
+        caller's from_date/to_date span a wider range. Respects segment,
+        voltage_level, and feeder filters via _tmo_filtered() — this is a
+        genuinely scoped report, not a network aggregate, so narrowing the
+        population here is correct (unlike GCR/daily-allocation/etc, which
+        must stay unfiltered — see _tmo_filtered()'s docstring).
+        """
+        return self._tmo_filtered().get_supply_compliance()
+
     # ── Legacy sections ───────────────────────────────────────────────────────
 
     def section_tmo_feeder_dispatch(self):
@@ -386,6 +428,7 @@ class TMOReportService:
             'tmo_gcr':                      self.section_tmo_gcr,
             'tmo_volatility':               self.section_tmo_volatility,
             'tmo_feeder_scoped_summary':    self.section_tmo_feeder_scoped_summary,
+            'tmo_supply_hours':             self.section_tmo_supply_hours,
             # legacy
             'tmo_feeder_dispatch':          self.section_tmo_feeder_dispatch,
             'tmo_collection_performance':   self.section_tmo_collection_performance,

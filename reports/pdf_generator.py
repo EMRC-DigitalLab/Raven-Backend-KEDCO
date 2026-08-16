@@ -105,6 +105,7 @@ SECTION_DISPLAY_NAMES = {
     'tmo_gcr':                    'GCR — P&L Target vs Billing Value',
     'tmo_volatility':             'P&L Mix Volatility Index',
     'tmo_feeder_scoped_summary':  'Selected Feeders Summary',
+    'tmo_supply_hours':           'Feeder Hours Supplied vs Target',
 }
 
 
@@ -5043,6 +5044,74 @@ def render_tmo_feeder_scoped_summary(data, context, page_number):
     return _tmo_page(context, page_number, body), 1
 
 
+# ── 10. Feeder Hours Supplied vs Target ─────────────────────────────────────
+
+def render_tmo_supply_hours(data, context, page_number):
+    """
+    Per-feeder hours-supplied-vs-target — same column set as TCN's own daily
+    feeder report (Feeder / Segment / District / Band / Target / Actual / Gap),
+    restyled clean instead of TCN's raw spreadsheet look. Overview page (KPIs
+    + optional ARIA summary) is always page 1; the full per-feeder table is
+    paginated across however many pages it needs — ARIA never repeats per row.
+    """
+    feeders = data.get('feeders', [])
+    summary = data.get('summary', {})
+    period  = data.get('period', {})
+
+    compliance_pct = summary.get('compliance_rate_pct', 0.0)
+    period_label = (
+        period.get('from') if period.get('from') == period.get('to')
+        else f"{period.get('from','')} to {period.get('to','')}"
+    )
+
+    kpi_row = (
+        f'<div style="display:flex;">'
+        + _tmo_kpi('Date', period_label or '—')
+        + _tmo_kpi('Total Feeders', str(summary.get('total_feeders', 0)))
+        + _tmo_kpi('Meeting Target', str(summary.get('compliant_feeders', 0)))
+        + _tmo_kpi('Compliance Rate', f'{compliance_pct:.1f}%', color=_ach_color(compliance_pct))
+        + '</div>'
+    )
+
+    overview_body = (
+        _tmo_banner('Feeder Hours Supplied vs Target', 'Daily Supply Compliance', compliance_pct, _tmo_compliance(compliance_pct))
+        + kpi_row
+        + _tmo_insight_card(data.get('ai_insights'))
+    )
+    page1 = _tmo_page(context, page_number, overview_body)
+
+    hdr = (
+        '<colgroup><col style="width:24%"><col style="width:13%"><col style="width:16%">'
+        '<col style="width:16%"><col style="width:8%"><col style="width:11%">'
+        '<col style="width:11%"><col style="width:11%"></colgroup>'
+        '<thead><tr>'
+        '<th>Feeder</th><th>Voltage</th><th>Segment</th><th>District</th><th>Band</th>'
+        '<th style="text-align:right">Target Hrs</th>'
+        '<th style="text-align:right">Actual Hrs</th>'
+        '<th style="text-align:right">Gap</th>'
+        '</tr></thead>'
+    )
+    rows = []
+    for f in feeders:
+        gap = f.get('gap_hours', 0)
+        gap_col = '#15803d' if gap >= 0 else '#ef4444'
+        rows.append(
+            f"<tr><td>{f.get('feeder_name','—')}</td>"
+            f"<td>{f.get('voltage_level','').upper()}</td>"
+            f"<td>{f.get('segment','—')}</td>"
+            f"<td>{f.get('district','—')}</td>"
+            f"<td>{f.get('band','—')}</td>"
+            f"<td style='text-align:right'>{f.get('band_minimum_hours',0):.2f}</td>"
+            f"<td style='text-align:right'>{f.get('avg_daily_hours',0):.2f}</td>"
+            f"<td style='text-align:right;font-weight:700;color:{gap_col}'>{gap:+.1f}</td></tr>"
+        )
+    tbl_html, tbl_pages = _paginate_table(
+        rows, hdr, 'Feeder Hours Supplied vs Target — Detail', context, page_number + 1,
+        max_rows=16, landscape=True,
+    )
+    return page1 + tbl_html, 1 + tbl_pages
+
+
 # =============================================================================
 # MAIN PDF GENERATOR CLASS
 # =============================================================================
@@ -5110,6 +5179,7 @@ class PDFGenerator:
         'tmo_compliance_by_segment':  render_tmo_compliance_by_segment,
         'tmo_pear':                   render_tmo_pear,
         'tmo_feeder_scoped_summary':  render_tmo_feeder_scoped_summary,
+        'tmo_supply_hours':           render_tmo_supply_hours,
     }
 
     def __init__(self, report_config, data_service):
