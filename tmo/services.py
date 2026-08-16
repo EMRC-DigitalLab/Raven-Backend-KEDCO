@@ -1145,18 +1145,43 @@ class TMOService:
         feeder_qs  = self._base_feeder_qs()
         feeder_ids = list(feeder_qs.values_list('id', flat=True))
 
-        supply_map = {
-            row['feeder_id']: row
-            for row in DailyHoursOfSupply.objects.filter(
-                feeder_id__in=feeder_ids,
-                date__gte=self.from_date,
-                date__lte=self.to_date,
-            ).values('feeder_id').annotate(
-                avg_hours=Avg('hours_supplied'),
-                total_hours=Sum('hours_supplied'),
-                days=Count('id'),
-            )
-        }
+        # Computed directly from HourlyLoad, not the DailyHoursOfSupply table —
+        # confirmed 2026-08-16 that DailyHoursOfSupply is never actually
+        # computed for DataNest-sourced (submission_type='dso') data anywhere
+        # in the sync pipeline (only two unscheduled, manual one-off commands
+        # ever write to it), so for any feeder whose hours come through
+        # DataNest it silently sits at a stale value — 60 of 128 checked 11kV
+        # feeders on one sample date showed a wrong 0 despite having real,
+        # positive-load hours in HourlyLoad. The raw hourly data itself is
+        # complete (confirmed 100% of feeders have full 24-hour coverage per
+        # day) — the gap was purely in the derived table, so computing hours
+        # supplied straight from the source removes the dependency entirely.
+        # Rule: any hour with load_mw > 0 counts as a supplied hour.
+        days_recorded_map = dict(
+            HourlyLoad.objects
+            .filter(feeder_id__in=feeder_ids, date__gte=self.from_date, date__lte=self.to_date)
+            .values('feeder_id')
+            .annotate(days=Count('date', distinct=True))
+            .values_list('feeder_id', 'days')
+        )
+        hours_supplied_map = dict(
+            HourlyLoad.objects
+            .filter(feeder_id__in=feeder_ids, date__gte=self.from_date, date__lte=self.to_date, load_mw__gt=0)
+            .values('feeder_id')
+            .annotate(total_hours=Count('id'))
+            .values_list('feeder_id', 'total_hours')
+        )
+        supply_map = {}
+        for fid in feeder_ids:
+            days = days_recorded_map.get(fid, 0)
+            if not days:
+                continue
+            total_h = hours_supplied_map.get(fid, 0)
+            supply_map[fid] = {
+                'avg_hours':   total_h / days,
+                'total_hours': total_h,
+                'days':        days,
+            }
 
         feeders = {f.id: f for f in feeder_qs}
 
