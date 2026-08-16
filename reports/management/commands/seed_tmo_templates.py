@@ -41,15 +41,16 @@ COMMERCIAL_TMO_SECTIONS = [
 ]
 
 # Glance-only: KPI tiles, summary tables, no big charts or feeder-level detail
-# tables — GCR (financial) ordered first per explicit instruction, everything
-# else below it. This is a starting point, not a fixed layout — any user can
-# clone it and add/remove/reorder sections, or build their own from scratch.
+# tables — GCR (financial) ordered LAST per explicit reviewer instruction
+# (2026-08-16), matching the presentation report's own section order. This is
+# a starting point, not a fixed layout — any user can clone it and
+# add/remove/reorder sections, or build their own from scratch.
 MANAGEMENT_TMO_SECTIONS = [
     ('tmo_overview',              'Overview',            {}),
-    ('tmo_gcr',                   'GCR — Target vs Billing Value', {}),
     ('tmo_energy_pnl_donut',      'Segment Mix',         {'mode': 'compact'}),
     ('tmo_compliance_by_segment', 'Feeder Compliance',   {'mode': 'compact'}),
     ('tmo_pear',                  'PEAR',                {'mode': 'compact'}),
+    ('tmo_gcr',                   'GCR — Target vs Billing Value', {}),
 ]
 
 TEMPLATES = [
