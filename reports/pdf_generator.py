@@ -149,6 +149,7 @@ body {
     height: 210mm;
     padding: 18px 35px;
     page-break-after: always;
+    break-after: page;
     display: flex;
     flex-direction: column;
     box-sizing: border-box;
@@ -157,6 +158,7 @@ body {
 
 .page:last-child {
     page-break-after: avoid;
+    break-after: avoid;
 }
 
 .page-landscape {
@@ -970,9 +972,26 @@ def _paginate_table(rows_data, header_html, page_title, context, start_page, max
 
     Returns (html_string, pages_used).  Caller must increment page_number by
     pages_used instead of 1 so subsequent section numbers stay accurate.
+
+    Chunked in BALANCED groups, not naive fixed-size slices — a naive slice
+    (e.g. 214 rows / max_rows=16) leaves the last page with only 6 of 16 rows,
+    a big empty gap before the footer. Spreading rows evenly across however
+    many pages are actually needed (still capped at max_rows per page) means
+    no page is more than one row emptier than any other.
     """
+    import math
     items = list(rows_data) if rows_data else []
-    chunks = [items[i:i + max_rows] for i in range(0, max(len(items), 1), max_rows)]
+    n = len(items)
+    if n == 0:
+        chunks = [[]]
+    else:
+        num_pages = math.ceil(n / max_rows)
+        base, remainder = divmod(n, num_pages)
+        chunks, idx = [], 0
+        for p in range(num_pages):
+            size = base + (1 if p < remainder else 0)
+            chunks.append(items[idx:idx + size])
+            idx += size
 
     page_class = 'page page-landscape' if landscape else 'page'
 
@@ -5261,12 +5280,22 @@ class PDFGenerator:
             scope_label = "KEDCO Wide Report"
 
         # Build context
+        import datetime as _dt
         self.context = {
             'company_name': report_config.get('company_name', 'KANO ELECTRICITY DISTRIBUTION COMPANY'),
             'report_title': report_config.get('report_title', 'Monthly Performance Report'),
             'report_subtitle': report_config.get('report_subtitle', ''),
             'report_scope': scope_label,
-            'report_date': self._format_report_date(),
+            # The date shown in the recurring per-page header (and the cover
+            # page's top strip) is always the day the report was actually
+            # generated/downloaded — not the data period being reported on.
+            # Those are two different dates and were being conflated before:
+            # a single-day supply-hours report for e.g. 15 Aug would show
+            # "15 August 2026" in the header even if actually generated on
+            # the 16th or 20th. period_label carries the real data period,
+            # for anywhere that specifically needs it (cover page subtitle).
+            'report_date':  _dt.date.today().strftime('%d %B %Y'),
+            'period_label': self._format_report_date(),
             'logo_url': self._get_static_url('reports/images/kedco_logo.png'),
             'logo_gray_url': self._get_static_url('reports/images/kedco_gray_logo.png'),
             'footer_logo_url': self._get_static_url('reports/images/footer_logo.png'),
@@ -5531,6 +5560,13 @@ class PDFGenerator:
                 landscape=(self.orientation == 'landscape'),
                 print_background=True,
                 margin={'top': '0', 'bottom': '0', 'left': '0', 'right': '0'},
+                # Without this, Chromium doesn't reliably honor CSS
+                # page-break-after on the flex-based .page divs — confirmed
+                # 2026-08-16: a 16-logical-page report was collapsing into
+                # only 8 physical PDF pages, silently merging (and likely
+                # clipping, via .page's overflow:hidden) two pages' worth of
+                # content onto one physical page.
+                prefer_css_page_size=True,
             )
             browser.close()
         return io.BytesIO(pdf_bytes)
