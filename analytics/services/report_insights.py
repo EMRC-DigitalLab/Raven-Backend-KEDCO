@@ -189,9 +189,41 @@ def _call_claude(prompt: str, model: str, max_tokens: int = 2048) -> dict:
 # PROMPT BUILDERS
 # =============================================================================
 
+# Keys that indicate a section's data actually contains billing/revenue
+# figures (naira amounts, collection/payment metrics) — not just energy (MWh/
+# GWh/MW). Checked recursively since section data is often nested per-segment.
+_BILLING_KEY_MARKERS = (
+    'bill', 'billing', 'revenue', 'naira', 'payment', 'collection',
+    'invoice', 'tariff', 'arrears', 'receivable',
+)
+
+
+def _has_billing_data(data) -> bool:
+    if isinstance(data, dict):
+        for k, v in data.items():
+            if any(marker in str(k).lower() for marker in _BILLING_KEY_MARKERS):
+                return True
+            if _has_billing_data(v):
+                return True
+    elif isinstance(data, list):
+        return any(_has_billing_data(item) for item in data)
+    return False
+
+
 def _build_section_prompt(section_type: str, data: dict, period_label: str) -> str:
     label = _SECTION_LABELS.get(section_type, section_type.replace('_', ' ').title())
     data_json = json.dumps(data, indent=2, default=str)
+
+    billing_rule = (
+        "- This section's data DOES include billing/revenue figures — you may reference "
+        "payment, collection, or revenue impact where the data supports it."
+        if _has_billing_data(data) else
+        "- This section's data is energy/dispatch only (MWh/GWh/MW, no billing or naira "
+        "figures) — do NOT mention billing, revenue loss, payment delays, or collection "
+        "in any field. An energy gap here means energy was not delivered/dispatched yet, "
+        "not that it was consumed and went unbilled — those are different problems with "
+        "different owners. Frame gaps strictly as supply/dispatch/compliance issues."
+    )
 
     return f"""Analyse the following KEDCO report section and return a JSON insights object.
 
@@ -225,6 +257,7 @@ Rules:
 - Reference actual figures. Do not write generic platitudes.
 - key_observations: exactly 3, each grounded in the data above.
 - recommendations: exactly 2, practical for a Nigerian DISCO — the strategic "what to fix."
+{billing_rule}
 - next_steps: exactly 2, immediate/tactical "do this now" actions — distinct from
   recommendations, not a rephrasing of them.
 - Keep headline under 20 words.
