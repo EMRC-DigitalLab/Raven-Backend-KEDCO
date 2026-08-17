@@ -18,6 +18,7 @@ import gspread
 import pandas as pd
 from django.conf import settings
 from django.db import transaction
+from django.db.models import Q
 from google.auth.transport.requests import Request as GoogleRequest
 from google.oauth2.credentials import Credentials
 
@@ -396,18 +397,35 @@ def sync_33kv_sheet(spreadsheet_id: str, year: int, month: int,
                 if hl_rows:
                     feeder_ids = list({r[0].id for r in hl_rows})
                     # Protect DSO submissions: only remove stale admin_override rows.
-                    # DSO data wins — never overwrite it with sheet data.
+                    # DSO data wins — never overwrite it with sheet data — UNLESS
+                    # DataNest's own value for that hour is exactly 0. A 0 there
+                    # is far more often a DataNest-side gap than a real reading
+                    # (confirmed 2026-08-17: several feeders had a full 24/24-hour
+                    # wall of DataNest zeros while the source sheet showed real,
+                    # multi-MW generation for those same hours) — trusting it
+                    # blindly was hiding real data. This re-checks every sync pass
+                    # (force=True), so once DataNest reports a genuine non-zero
+                    # value, it correctly takes back over immediately; until then,
+                    # the sheet's value keeps refreshing this slot instead of being
+                    # permanently blocked by a stale zero-claim.
                     existing_dso_keys = set(
                         HourlyLoad.objects.filter(
                             date=reading_date,
                             feeder_id__in=feeder_ids,
                             submission_type='dso',
+                            load_mw__gt=0,
                         ).values_list('feeder_id', 'hour')
                     )
+                    # Also clears out any stale zero-value dso rows for slots
+                    # we're about to fill from the sheet — HourlyLoad has a
+                    # unique (feeder, date, hour) constraint regardless of
+                    # submission_type, so the old dso=0 row must go before the
+                    # new admin_override row can be inserted for that slot.
                     HourlyLoad.objects.filter(
                         date=reading_date,
                         feeder_id__in=feeder_ids,
-                        submission_type='admin_override',
+                    ).filter(
+                        Q(submission_type='admin_override') | Q(submission_type='dso', load_mw=0)
                     ).delete()
                     HourlyLoad.objects.bulk_create([
                         HourlyLoad(
@@ -704,13 +722,18 @@ def sync_11kv_sheet(spreadsheet_id: str, year: int, month: int,
                 if hl_rows:
                     all_feeder_ids = {r[0].id for r in hl_rows}
 
-                    # Slots already owned by DataNest — never overwrite
+                    # Slots already owned by DataNest — never overwrite, UNLESS
+                    # DataNest's own value is exactly 0 (near-always a DataNest-
+                    # side gap rather than a real reading — see matching comment
+                    # in sync_33kv_sheet above for the confirmed evidence). Real
+                    # non-zero DataNest data still always wins.
                     existing_dso_keys = set(
                         HourlyLoad.objects
                         .filter(
                             date=reading_date,
                             feeder_id__in=all_feeder_ids,
                             submission_type='dso',
+                            load_mw__gt=0,
                         )
                         .values_list('feeder_id', 'hour')
                     )
@@ -723,11 +746,16 @@ def sync_11kv_sheet(spreadsheet_id: str, year: int, month: int,
                     if rows_to_write:
                         write_feeder_ids = list({r[0].id for r in rows_to_write})
 
-                        # Replace our own admin_override rows for this date
+                        # Replace our own admin_override rows for this date —
+                        # also clears stale zero-value dso rows for slots we're
+                        # about to fill (unique (feeder, date, hour) constraint
+                        # applies regardless of submission_type, so the old
+                        # dso=0 row must go before the new one can be inserted).
                         HourlyLoad.objects.filter(
                             date=reading_date,
                             feeder_id__in=write_feeder_ids,
-                            submission_type='admin_override',
+                        ).filter(
+                            Q(submission_type='admin_override') | Q(submission_type='dso', load_mw=0)
                         ).delete()
 
                         HourlyLoad.objects.bulk_create([

@@ -1087,7 +1087,7 @@ def render_cover_page(_data, context):
 
             <div class="cover-footer">
                 <img src="{context.get('footer_logo_url', '')}" alt="Powered by EMRC" />
-                <div class="cover-footer-period">{report_date}</div>
+                <div class="cover-footer-period">{context.get('period_label', report_date)}</div>
             </div>
 
         </div>
