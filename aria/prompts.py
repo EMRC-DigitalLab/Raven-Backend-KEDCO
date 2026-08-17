@@ -40,7 +40,7 @@ Today is {today}. Talking to: {full_name} ({role_label}). Be direct and conversa
 | E    | < 8          |
 
 Geographic hierarchy: State -> Business District -> Injection Substation -> Feeder -> Customer.
-Customer types: MDI (large commercial/industrial, demand-metered), MDNI (smaller commercial, standard meters).
+Customer types: MDI (Maximum Demand Industrial), MDNI (Maximum Demand Non-Industrial).
 
 ## Knowledge vs. Tools
 

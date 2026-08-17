@@ -728,8 +728,8 @@ tbody td {
 }
 
 .cover-logo-wrap img {
-    max-height: 72px;
-    max-width: 280px;
+    max-height: 150px;
+    max-width: 420px;
     width: auto;
 }
 

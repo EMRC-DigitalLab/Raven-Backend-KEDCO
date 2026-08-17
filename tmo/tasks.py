@@ -10,6 +10,37 @@ from django.utils import timezone
 logger = logging.getLogger(__name__)
 
 
+def _start_sync_run(feed_type: str):
+    """Record the start of a sync attempt — real history, not just 'the latest
+    run', so intermittent/silent failures leave a trace instead of vanishing
+    the moment a later run succeeds."""
+    from tmo.models import SheetSyncRun
+    return SheetSyncRun.objects.create(feed_type=feed_type, started_at=timezone.now(), status='failed')
+
+
+def _finish_sync_run(run, status: str, result):
+    run.finished_at = timezone.now()
+    run.status = status
+    run.result = str(result)
+    run.save(update_fields=['finished_at', 'status', 'result'])
+
+
+def _alert_final_failure(task_self, feed_type: str, year: int, month: int, exc: Exception):
+    """Only fires once retries are genuinely exhausted — a task's 1st/2nd
+    failed attempt is expected/normal (transient network blip, etc.) and
+    stays a quiet retry; only the FINAL failure is worth waking someone up
+    for. Previously nothing ever alerted on this — a task could exhaust all
+    3 retries and just stop, with no signal to anyone that it had failed."""
+    if task_self.request.retries >= task_self.max_retries:
+        _send_resend_email(
+            subject=f'[Raven] ALERT: {feed_type} sync failed after all retries ({year}-{month:02d})',
+            body=(
+                f'{feed_type} sync for {year}-{month:02d} failed and exhausted all '
+                f'{task_self.max_retries} retries.\n\nLast error:\n{exc}'
+            ),
+        )
+
+
 def _send_resend_email(subject: str, body: str):
     """Send a plain-text alert email to all active SheetAlertEmail recipients via Resend."""
     from tmo.models import SheetAlertEmail
@@ -49,6 +80,7 @@ def sync_33kv_sheet_task(self):
     """
     today = date.today()
     year, month = today.year, today.month
+    run = _start_sync_run('33kv_load_flow')
 
     try:
         from tmo.models import GoogleSheetFeed
@@ -70,6 +102,7 @@ def sync_33kv_sheet_task(self):
                 subject=f'[Raven] ALERT: No 33KV sheet registered for {year}-{month:02d}',
                 body=msg,
             )
+            _finish_sync_run(run, 'failed', msg)
             return {'status': 'no_feed'}
 
         logger.info('sync_33kv_sheet_task: starting for %s', feed)
@@ -91,6 +124,7 @@ def sync_33kv_sheet_task(self):
         feed.last_synced_at = timezone.now()
         feed.last_sync_log  = str(result)
         feed.save(update_fields=['last_synced_at', 'last_sync_log'])
+        _finish_sync_run(run, 'success', result)
 
         logger.info(
             'sync_33kv_sheet_task done: %d days, %d HL rows, %d dispatch-hours',
@@ -100,6 +134,8 @@ def sync_33kv_sheet_task(self):
 
     except Exception as exc:
         logger.exception('sync_33kv_sheet_task failed')
+        _finish_sync_run(run, 'failed', exc)
+        _alert_final_failure(self, '33kv_load_flow', year, month, exc)
         raise self.retry(exc=exc)
 
 
@@ -113,6 +149,7 @@ def sync_11kv_sheet_task(self):
     """
     today = date.today()
     year, month = today.year, today.month
+    run = _start_sync_run('11kv_load_flow')
 
     try:
         from tmo.models import GoogleSheetFeed
@@ -134,6 +171,7 @@ def sync_11kv_sheet_task(self):
                 subject=f'[Raven] ALERT: No 11KV sheet registered for {year}-{month:02d}',
                 body=msg,
             )
+            _finish_sync_run(run, 'failed', msg)
             return {'status': 'no_feed'}
 
         logger.info('sync_11kv_sheet_task: starting for %s', feed)
@@ -152,6 +190,7 @@ def sync_11kv_sheet_task(self):
         feed.last_synced_at = timezone.now()
         feed.last_sync_log  = str(result)
         feed.save(update_fields=['last_synced_at', 'last_sync_log'])
+        _finish_sync_run(run, 'success', result)
 
         logger.info(
             'sync_11kv_sheet_task done: %d days, %d HL rows',
@@ -161,6 +200,8 @@ def sync_11kv_sheet_task(self):
 
     except Exception as exc:
         logger.exception('sync_11kv_sheet_task failed')
+        _finish_sync_run(run, 'failed', exc)
+        _alert_final_failure(self, '11kv_load_flow', year, month, exc)
         raise self.retry(exc=exc)
 
 
@@ -174,6 +215,7 @@ def sync_33kv_energy_sheet_task(self):
     """
     today = date.today()
     year, month = today.year, today.month
+    run = _start_sync_run('33kv_energy_accounting')
 
     try:
         from tmo.models import GoogleSheetFeed
@@ -195,6 +237,7 @@ def sync_33kv_energy_sheet_task(self):
                 subject=f'[Raven] ALERT: No 33KV energy sheet registered for {year}-{month:02d}',
                 body=msg,
             )
+            _finish_sync_run(run, 'failed', msg)
             return {'status': 'no_feed'}
 
         logger.info('sync_33kv_energy_sheet_task: starting for %s', feed)
@@ -213,6 +256,7 @@ def sync_33kv_energy_sheet_task(self):
         feed.last_synced_at = timezone.now()
         feed.last_sync_log  = str(result)
         feed.save(update_fields=['last_synced_at', 'last_sync_log'])
+        _finish_sync_run(run, 'success', result)
 
         logger.info(
             'sync_33kv_energy_sheet_task done: %d days, %d CMR rows',
@@ -222,6 +266,8 @@ def sync_33kv_energy_sheet_task(self):
 
     except Exception as exc:
         logger.exception('sync_33kv_energy_sheet_task failed')
+        _finish_sync_run(run, 'failed', exc)
+        _alert_final_failure(self, '33kv_energy_accounting', year, month, exc)
         raise self.retry(exc=exc)
 
 
