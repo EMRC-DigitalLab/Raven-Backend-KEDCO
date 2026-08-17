@@ -190,6 +190,18 @@ app.conf.update(
             'task': 'tmo.tasks.send_monthly_sheet_reminder_task',
             'schedule': crontab(day_of_month=25, hour=8, minute=0),
         },
+        # Zero-load-coverage audit: every 30 minutes — catches the
+        # GAGARAWA-typo bug class automatically instead of needing someone to
+        # spot it in a screenshot. Reports can be generated at any time of
+        # day, so this checks often; it only emails about feeders that are
+        # NEW to the zero-coverage list since the last check (see
+        # audit_hourly_load_coverage_task docstring), so frequent runs don't
+        # turn into alert spam for feeders that are persistently/genuinely
+        # at zero.
+        'hourly-load-coverage-audit': {
+            'task': 'tmo.tasks.audit_hourly_load_coverage_task',
+            'schedule': crontab(minute='*/30'),
+        },
 
         # ── DataNest -> Raven TMO Sync ────────────────────────────────────────
         # TMO data changes infrequently (monthly targets) — sync every 30 min

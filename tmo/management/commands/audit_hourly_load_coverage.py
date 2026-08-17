@@ -24,12 +24,8 @@ Usage:
     python manage.py audit_hourly_load_coverage --month 2026-08
     python manage.py audit_hourly_load_coverage --month 2026-08 --no-sync   (audit only, skip the resync)
 """
-from datetime import date
-
 from django.core.management.base import BaseCommand, CommandError
 
-from common.models import Feeder
-from technical.models import HourlyLoad
 from tmo.models import GoogleSheetFeed
 
 
@@ -78,38 +74,26 @@ class Command(BaseCommand):
             self.stdout.write(self.style.WARNING(f'No active 11kv_load_flow feed for {year}-{month:02d}'))
 
     def _audit_coverage(self, year, month, voltage_level):
-        from tmo.sheet_sync import SKIP_PREFIXES
+        from tmo.sheet_sync import audit_hourly_load_coverage
 
-        from_date = date(year, month, 1)
-        # last day of month, without pulling in calendar just for this
-        to_date = (date(year + (month == 12), (month % 12) + 1, 1) - date.resolution)
-
-        feeders = list(Feeder.objects.filter(is_onboarded=True, voltage_level=voltage_level))
-        covered_ids = set(
-            HourlyLoad.objects.filter(
-                feeder__in=feeders, date__gte=from_date, date__lte=to_date, load_mw__gt=0,
-            ).values_list('feeder_id', flat=True).distinct()
-        )
-
-        zero_coverage = [f for f in feeders if f.id not in covered_ids]
+        result = audit_hourly_load_coverage(year, month, voltage_level)
+        zero_coverage = result['zero_coverage']
 
         self.stdout.write(f'=== {voltage_level.upper()} — {year}-{month:02d} coverage audit ===')
-        self.stdout.write(f'{len(feeders)} onboarded feeders, {len(zero_coverage)} with ZERO real (>0) load all month')
+        self.stdout.write(f'{result["total"]} onboarded feeders, {len(zero_coverage)} with ZERO real (>0) load all month')
 
         if not zero_coverage:
             self.stdout.write(self.style.SUCCESS('  All feeders have at least some real data this month.'))
             return
 
         for f in zero_coverage:
-            name_upper = f.name.upper()
-            skip_hit = next((p for p in SKIP_PREFIXES if name_upper.startswith(p)), None)
-            if skip_hit:
+            if f['skip_hit']:
                 self.stdout.write(self.style.ERROR(
-                    f'  {f.name} ({f.slug}) — LIKELY SKIP-LIST BUG: matches SKIP_PREFIXES entry "{skip_hit}" '
+                    f'  {f["name"]} ({f["slug"]}) — LIKELY SKIP-LIST BUG: matches SKIP_PREFIXES entry "{f["skip_hit"]}" '
                     f'(the exact GAGARAWA pattern — check tmo/sheet_sync.py SKIP_PREFIXES)'
                 ))
             else:
                 self.stdout.write(self.style.WARNING(
-                    f'  {f.name} ({f.slug}) — zero coverage all month, no obvious skip-list match; '
+                    f'  {f["name"]} ({f["slug"]}) — zero coverage all month, no obvious skip-list match; '
                     f'check name-matching (NAME_MAP / _find_feeder) or whether it\'s genuinely absent from the sheet'
                 ))
