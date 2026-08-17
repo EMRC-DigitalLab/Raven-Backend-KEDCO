@@ -1131,3 +1131,48 @@ def sync_33kv_energy_sheet(spreadsheet_id: str, year: int, month: int,
         'unmatched':   sorted(unmatched),
         'errors':      errors,
     }
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# COVERAGE AUDIT — shared by audit_hourly_load_coverage (management command)
+# and the daily Celery beat task, so both report the exact same thing.
+# ══════════════════════════════════════════════════════════════════════════════
+
+def audit_hourly_load_coverage(year: int, month: int, voltage_level: str) -> dict:
+    """
+    For every onboarded feeder at the given voltage level, check whether it has
+    ANY real (>0) HourlyLoad reading across the given month (up to today, for
+    the current month). A feeder with zero real readings for the whole period
+    almost always means a name-matching/skip-list bug silently discarding its
+    rows — a full-month outage is implausible — same pattern that hid
+    GAGARAWA's real data for as long as it did.
+
+    Returns {'total': N, 'zero_coverage': [{'name', 'slug', 'skip_hit'}, ...]}
+    where skip_hit is the matching SKIP_PREFIXES entry if found (the exact
+    GAGARAWA bug pattern), else None.
+    """
+    from common.models import Feeder
+    from technical.models import HourlyLoad
+
+    from_date = date(year, month, 1)
+    to_date = min(
+        date(year + (month == 12), (month % 12) + 1, 1) - timedelta(days=1),
+        date.today(),
+    )
+
+    feeders = list(Feeder.objects.filter(is_onboarded=True, voltage_level=voltage_level))
+    covered_ids = set(
+        HourlyLoad.objects.filter(
+            feeder__in=feeders, date__gte=from_date, date__lte=to_date, load_mw__gt=0,
+        ).values_list('feeder_id', flat=True).distinct()
+    )
+
+    zero_coverage = []
+    for f in feeders:
+        if f.id in covered_ids:
+            continue
+        name_upper = f.name.upper()
+        skip_hit = next((p for p in SKIP_PREFIXES if name_upper.startswith(p)), None)
+        zero_coverage.append({'name': f.name, 'slug': f.slug, 'skip_hit': skip_hit})
+
+    return {'total': len(feeders), 'zero_coverage': zero_coverage}

@@ -271,6 +271,106 @@ def sync_33kv_energy_sheet_task(self):
         raise self.retry(exc=exc)
 
 
+_COVERAGE_ALERT_CACHE_KEY = 'tmo:zero_coverage_alerted_slugs'
+_COVERAGE_ALERT_CACHE_TTL = 60 * 60 * 24 * 3  # 3 days — well past a month boundary refresh
+
+
+@shared_task(bind=True, max_retries=3, default_retry_delay=300)
+def audit_hourly_load_coverage_task(self):
+    """
+    Runs every 30 min: catch the whole "feeder silently gets zero data every
+    sync" bug class automatically instead of relying on someone spotting it
+    in a screenshot — this is exactly the gap that let GAGARAWA's real data
+    stay hidden for as long as it did, with nothing ever flagging it.
+
+    Audit-only — does NOT resync (the hourly sync tasks already keep data
+    fresh; a full-month force resync here would just duplicate that work).
+    This task only detects/alerts; it does not itself make report data any
+    fresher — that's governed by sync_33kv_sheet_task / sync_11kv_sheet_task,
+    which already run hourly with force=True.
+
+    Only emails about feeders that are NEW to the zero-coverage list since
+    the last run (tracked in cache) — a feeder that's genuinely, persistently
+    at zero (e.g. a real outage, or a known-absent-from-sheet asset) would
+    otherwise trigger the exact same alert every 30 minutes forever and
+    become noise nobody reads. A newly-appearing entry is the actionable
+    signal (a fresh bug or a fresh real outage), so that's what gets emailed
+    promptly; the full current list is always logged either way.
+    """
+    from django.core.cache import cache
+
+    from tmo.sheet_sync import audit_hourly_load_coverage
+
+    today = date.today()
+    year, month = today.year, today.month
+
+    try:
+        flagged = []
+        for voltage_level in ('33kv', '11kv'):
+            result = audit_hourly_load_coverage(year, month, voltage_level)
+            for f in result['zero_coverage']:
+                flagged.append((voltage_level, f))
+
+        current_keys = {(vl, f['slug']) for vl, f in flagged}
+        previously_alerted = cache.get(_COVERAGE_ALERT_CACHE_KEY) or set()
+        new_keys = current_keys - previously_alerted
+
+        # Always persist the full current set — a feeder that drops off the
+        # list (fixed, or sync catches up) and later reappears should alert
+        # again, not be treated as "already alerted" forever.
+        cache.set(_COVERAGE_ALERT_CACHE_KEY, current_keys, timeout=_COVERAGE_ALERT_CACHE_TTL)
+
+        if not flagged:
+            logger.info('audit_hourly_load_coverage_task: all feeders have some real data for %d-%02d', year, month)
+            return {'status': 'clean', 'flagged': 0, 'new': 0}
+
+        if not new_keys:
+            logger.info(
+                'audit_hourly_load_coverage_task: %d feeder(s) still flagged for %d-%02d, none new — no email',
+                len(flagged), year, month,
+            )
+            return {'status': 'unchanged', 'flagged': len(flagged), 'new': 0}
+
+        new_flagged = [(vl, f) for vl, f in flagged if (vl, f['slug']) in new_keys]
+
+        lines = []
+        for voltage_level, f in new_flagged:
+            if f['skip_hit']:
+                lines.append(
+                    f'  [{voltage_level.upper()}] {f["name"]} ({f["slug"]}) — LIKELY SKIP-LIST BUG: '
+                    f'matches SKIP_PREFIXES entry "{f["skip_hit"]}" (the GAGARAWA pattern — '
+                    f'check tmo/sheet_sync.py SKIP_PREFIXES)'
+                )
+            else:
+                lines.append(
+                    f'  [{voltage_level.upper()}] {f["name"]} ({f["slug"]}) — zero real load all month so far, '
+                    f'no skip-list match; check name-matching (NAME_MAP / _find_feeder) or whether it is '
+                    f'genuinely absent from the sheet'
+                )
+
+        body = (
+            f'{len(new_flagged)} feeder(s) NEWLY entered zero-load-coverage for {year}-{month:02d} '
+            f'(first time seen since the last check):\n\n'
+            + '\n'.join(lines)
+            + f'\n\n{len(flagged)} feeder(s) total currently flagged (including previously-alerted ones).\n\n'
+              'Run: python manage.py audit_hourly_load_coverage --month '
+              f'{year}-{month:02d} --no-sync for full details.'
+        )
+        logger.warning(
+            'audit_hourly_load_coverage_task: %d NEW feeder(s) flagged (of %d total) for %d-%02d',
+            len(new_flagged), len(flagged), year, month,
+        )
+        _send_resend_email(
+            subject=f'[Raven] ALERT: {len(new_flagged)} feeder(s) newly zero-coverage ({year}-{month:02d})',
+            body=body,
+        )
+        return {'status': 'flagged', 'flagged': len(flagged), 'new': len(new_flagged)}
+
+    except Exception as exc:
+        logger.exception('audit_hourly_load_coverage_task failed')
+        raise self.retry(exc=exc)
+
+
 @shared_task
 def send_monthly_sheet_reminder_task():
     """
