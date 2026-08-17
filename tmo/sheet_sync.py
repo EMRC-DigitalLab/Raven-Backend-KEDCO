@@ -153,7 +153,15 @@ SUMMARY_ROW_LABELS = {
     'VARIANCE':                       'variance',
 }
 
-FAULT_PREFIXES = ('OC', 'E/', 'LS', 'L/', 'EMG', 'EMRG', 'L/S', 'L/L', 'ON ')
+FAULT_PREFIXES = (
+    'OC', 'E/', 'LS', 'L/', 'EMG', 'EMRG', 'L/S', 'L/L', 'ON ',
+    # confirmed 2026-08-17: CB/F (breaker fault) and TR/F, T/F (transformer
+    # fault) codes were falling through _safe_float() as unrecognised strings
+    # and getting silently SKIPPED (no HourlyLoad row at all) instead of
+    # recorded as 0 MW — e.g. IDH showed "CB/F" for all 24 hours on the 16th
+    # and ended up with zero HourlyLoad rows for that day, not a 0-value one.
+    'CB/F', 'TR/F', 'T/F',
+)
 
 NAME_MAP = {
     "DAN'AGUNDI 1":           "DAN AGUNDI 1",
