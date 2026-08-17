@@ -758,14 +758,16 @@ tbody td {
 }
 
 .cover-main-title-accent {
-    color: #ffffff;
-    opacity: 0.75;
+    /* Same gold used for "Achievement" throughout the report body (see
+       _tmo_banner) — the cover page should read as the same brand as the
+       pages that follow it, not a different palette. */
+    color: #FFC107;
 }
 
 .cover-accent-rule {
     width: 70px;
     height: 5px;
-    background-color: rgba(255, 255, 255, 0.4);
+    background-color: #FFC107;
     border-radius: 3px;
     margin: 28px 0;
 }
@@ -5165,7 +5167,7 @@ def render_tmo_supply_hours(data, context, page_number):
     default_max_rows = 30 if is_portrait else 16
     max_rows = data.get('_max_rows') or default_max_rows
     tbl_html, tbl_pages = _paginate_table(
-        rows, hdr, 'Feeder Hours Supplied vs Target — Detail', context, page_number + 1,
+        rows, hdr, f'Feeder Hours Supplied vs Target — Detail ({period_label or "—"})', context, page_number + 1,
         max_rows=max_rows, landscape=not is_portrait,
     )
     return page1 + tbl_html, 1 + tbl_pages
