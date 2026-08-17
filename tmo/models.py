@@ -299,6 +299,35 @@ class GoogleSheetFeed(models.Model):
         return m.group(1) if m else None
 
 
+class SheetSyncRun(models.Model):
+    """
+    One row per sync attempt (success or failure), for every feed type —
+    a real history, not just "the latest run" (GoogleSheetFeed.last_synced_at/
+    last_sync_log only ever holds the most recent attempt, so a task that
+    silently failed at 3am and recovered by 9am left no trace of the gap).
+    Written by every sync task in tmo/tasks.py, success or failure, so
+    "has this been failing intermittently" becomes a query instead of a
+    guess.
+    """
+    STATUS_CHOICES = [
+        ('success', 'Success'),
+        ('failed',  'Failed'),
+    ]
+
+    feed_type    = models.CharField(max_length=30, db_index=True)
+    started_at   = models.DateTimeField(db_index=True)
+    finished_at  = models.DateTimeField(null=True, blank=True)
+    status       = models.CharField(max_length=10, choices=STATUS_CHOICES)
+    result       = models.TextField(blank=True, help_text='Sync result summary, or error traceback on failure')
+
+    class Meta:
+        ordering = ['-started_at']
+        indexes = [models.Index(fields=['feed_type', '-started_at'])]
+
+    def __str__(self):
+        return f'{self.feed_type} {self.status} @ {self.started_at:%Y-%m-%d %H:%M}'
+
+
 class TMOFeederOutlierFlag(models.Model):
     """
     A TMO/admin decision recorded against a specific feeder-day reading that

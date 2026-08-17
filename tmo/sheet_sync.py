@@ -135,7 +135,7 @@ SKIP_PREFIXES = (
     'TOTAL NUMBER', 'DATE', 'TRANSMISSION', 'KUMBOTSO', "DAN'AGUNDI 132",
     'DAKATA', 'KANKIA', 'KATSINA 132', 'KWANAR', 'TAMBURAWA 132',
     'HADEIJA', 'DUTSE 132', 'FUNTUA', 'DAURA 132', 'WUDIL 132',
-    'GAGARAWA', 'BICHI', 'TOTAL',
+    'GAGARAWA 132', 'BICHI', 'TOTAL',
     'ON SOAK',   # operational-state annotation, not a feeder
     'WIND FARM', # generation source row, not a distribution feeder
     # Non-KEDCO feeders — Bauchi/Yobe state (YEDC territory), appear in sheet but not KEDCO assets
