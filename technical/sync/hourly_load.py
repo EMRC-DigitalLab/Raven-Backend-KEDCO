@@ -131,6 +131,27 @@ def run_sync(override_start=None, override_end=None) -> dict:
 
                 existing_row = existing.get(key)
                 if existing_row:
+                    # Protect real sheet-corrected data from being stomped back
+                    # to a stale DataNest zero — same "DataNest wins UNLESS its
+                    # value is exactly 0" rule enforced in tmo/sheet_sync.py's
+                    # write path. Without this, a real non-zero admin_override
+                    # row placed by the Google Sheet sync got silently
+                    # overwritten back to dso=0 by this task's very next run
+                    # (5-15 min later), undoing the correction almost
+                    # immediately — confirmed 2026-08-17: CBN, KURNA,
+                    # PANSHEKARA, KOFAR FADA all reverted this way within
+                    # minutes of being fixed. A genuine non-zero DataNest
+                    # reading still always wins immediately (falls through
+                    # below) — only a DataNest zero replacing a real sheet
+                    # value is blocked.
+                    if (
+                        existing_row['submission_type'] == 'admin_override'
+                        and load_mw == 0
+                        and existing_row['load_mw'] > 0
+                    ):
+                        stats['records_skipped'] += 1
+                        continue
+
                     if (
                         existing_row['load_mw'] != load_mw
                         or existing_row['is_late'] != is_late
