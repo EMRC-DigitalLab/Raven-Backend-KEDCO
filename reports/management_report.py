@@ -20,7 +20,7 @@ Body:
 {
     "report_title":  "May 2026 11kV Management Report",      // optional
     "company_name":  "KANO ELECTRICITY DISTRIBUTION COMPANY",// optional
-    "theme": { "primary_color": "#002050", ... },            // optional
+    "theme": { "primary_color": "#001634", ... },            // optional
     "include_ai": true,                                      // default true
     "filters": {
         "from_date": "2026-05-01",
@@ -64,7 +64,15 @@ except (OSError, ImportError):
 # =============================================================================
 
 MANAGEMENT_STYLES = """
-@page { size: A4 portrait; margin: 0; }
+/* No @page size rule here on purpose — it used to hardcode "A4 portrait",
+   which silently forced every landscape report back to portrait once this
+   stylesheet became unconditional (2026-08-18). Page size is decided by
+   PORTRAIT_STYLES/LANDSCAPE_STYLES (pdf_generator.py) for the generic
+   report builder, and directly via the format/landscape Playwright
+   page.pdf() params for the three standalone report generators (which
+   are portrait-only regardless of any CSS). Only margin needs setting
+   here, not size. */
+@page { margin: 0; }
 @page :first { margin: 0; }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -72,7 +80,7 @@ MANAGEMENT_STYLES = """
 body {
     font-family: -apple-system, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
     background: #ffffff;
-    color: #002050;
+    color: #001634;
     font-size: 10.5px;
     line-height: 1.5;
 }
@@ -127,7 +135,7 @@ body {
     font-size: 17px;
     font-weight: 700;
     padding-left: 10px;
-    border-left: 4px solid #002050;
+    border-left: 4px solid #001634;
     line-height: 1.2;
     margin-bottom: 14px;
     flex-shrink: 0;
@@ -146,7 +154,7 @@ body {
 /* ── Callout box ────────────────────────────────────────────────────────── */
 .callout {
     background: rgba(0,32,80,0.05);
-    border-left: 3px solid #002050;
+    border-left: 3px solid #001634;
     border-radius: 0 8px 8px 0;
     padding: 9px 13px;
     margin: 10px 0;
@@ -175,7 +183,7 @@ body {
     margin-bottom: 10px;
 }
 .mgmt-table thead th {
-    background: #002050;
+    background: #001634;
     color: #ffffff;
     font-size: 9px;
     font-weight: 700;
@@ -211,43 +219,145 @@ body {
     flex-direction: row;
     min-height: 297mm;
     page-break-after: always;
-    background: #002050;
+    background: #001634;
     color: #ffffff;
+    position: relative;
+    overflow: hidden;
+    /* Top-to-bottom navy gradient (deepest at the bottom) plus a subtle
+       dot-grid texture for depth — palette matches the reference utility
+       cover design (#001634 / #001430 / #D9A400 accent / #0067A8 &
+       #1489D1 utility blues). */
+    background-image:
+        linear-gradient(180deg, #001634 0%, #001430 100%),
+        radial-gradient(circle, rgba(255, 255, 255, 0.06) 1px, transparent 1.4px);
+    background-size: 100% 100%, 26px 26px;
+    background-position: 0 0, 0 0;
+    background-repeat: no-repeat, repeat;
 }
-.cover-accent { width: 10px; background: rgba(255,255,255,0.2); flex-shrink: 0; }
+/* align-self:stretch guards against the back page's inline
+   align-items:center on .cover-page (needed to vertically centre its
+   content) — without it, that override stops this empty div from
+   stretching to full height, collapsing the bar to ~0px instead of
+   running the full page height. */
+.cover-accent { width: 10px; background: #D9A400; flex-shrink: 0; align-self: stretch; }
+.cover-grid-art {
+    position: absolute;
+    top: 0; right: 0; bottom: 0; left: 0;
+    z-index: 0;
+    pointer-events: none;
+}
+.cover-grid-art svg { width: 100%; height: 100%; display: block; }
 .cover-body {
     flex: 1;
     padding: 48px 55px;
     display: flex;
     flex-direction: column;
+    position: relative;
+    z-index: 1;
+}
+.cover-top-company {
+    font-size: 11px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 2.5px;
+    opacity: 0.55; margin-bottom: 40px;
 }
 .cover-eyebrow {
     font-size: 10px; font-weight: 700;
     text-transform: uppercase; letter-spacing: 3px;
-    opacity: 0.5; margin-bottom: 60px;
+    opacity: 0.5; margin-bottom: 20px;
 }
 .cover-main-title {
     font-size: 52px; font-weight: 800;
     line-height: 1.05; text-transform: uppercase;
     letter-spacing: -0.5px; margin: 0 0 8px 0;
 }
-.cover-main-title-accent { opacity: 0.7; }
+/* Same gold used for "Achievement" throughout the report body — the cover
+   should read as the same brand as the pages that follow it. */
+.cover-main-title-accent { color: #D9A400; }
+.cover-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 16px;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.20);
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.85);
+    margin-top: 20px;
+    width: fit-content;
+}
+.cover-badge svg { width: 14px; height: 14px; color: #D9A400; flex-shrink: 0; }
 .cover-rule {
     width: 60px; height: 4px;
-    background: rgba(255,255,255,0.4);
+    background: #D9A400;
     border-radius: 3px; margin: 22px 0;
 }
 .cover-subtitle { font-size: 13px; font-weight: 400; opacity: 0.6; line-height: 1.6; }
+.cover-logo-center {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 60px;
+}
+.cover-logo-center img { max-height: 175px; max-width: 440px; width: auto; }
 .cover-footer-strip {
-    margin-top: auto;
     padding-top: 18px;
     border-top: 1px solid rgba(255,255,255,0.15);
     display: flex;
     justify-content: space-between;
     align-items: center;
 }
-.cover-footer-strip img { max-height: 40px; width: auto; }
-.cover-period { font-size: 11px; font-weight: 600; opacity: 0.55; letter-spacing: 1px; }
+.cover-footer-strip img { max-height: 56px; width: auto; }
+.cover-period {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 11px; font-weight: 600; opacity: 0.55; letter-spacing: 1px;
+}
+.cover-period svg { width: 12px; height: 12px; flex-shrink: 0; }
+
+/* ── Table of Contents — single shared design (render_toc_row) ─────────── */
+.toc-container {
+    border-radius: 10px;
+    overflow: hidden;
+    border: 1px solid rgba(0, 32, 80, 0.1);
+}
+.toc-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 9px 14px;
+    border-bottom: 1px solid rgba(0, 32, 80, 0.08);
+}
+.toc-row:nth-child(even) { background: rgba(0, 32, 80, 0.03); }
+.toc-row:last-child { border-bottom: none; }
+.toc-number {
+    flex: 0 0 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: #001634;
+    color: #fff;
+    font-size: 9px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.toc-title { font-size: 10.5px; font-weight: 600; color: #001634; }
+.toc-description { font-size: 8px; color: #7C8FAC; margin-top: 1px; }
+.toc-dots { display: none; }
+.toc-page {
+    font-size: 10px;
+    font-weight: 700;
+    color: #001634;
+    background: rgba(0, 32, 80, 0.08);
+    border-radius: 5px;
+    flex: 0 0 26px;
+    height: 18px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
 """
 
 
@@ -517,9 +627,9 @@ def _page(content: str, context: dict, page_number: int,
             <span class="header-subtitle">{context.get('report_title', '')} &nbsp;|&nbsp; {context.get('report_date', '')}</span>
         </div>"""
 
-    primary = context.get('primary_color', '#002050')
-    accent  = context.get('accent_color',  'rgba(0,32,80,0.2)')
-    primary_light = context.get('primary_light', 'rgba(0,32,80,0.05)')
+    primary = context.get('primary_color', '#001634')
+    accent  = context.get('accent_color',  'rgba(0,22,52,0.2)')
+    primary_light = context.get('primary_light', 'rgba(0,22,52,0.05)')
 
     return f"""
     <div class="page">
@@ -538,13 +648,287 @@ def _page(content: str, context: dict, page_number: int,
 # SECTION RENDERERS
 # =============================================================================
 
+# Transmission-tower + constellation background art for the cover — two
+# detailed lattice-tower silhouettes (legs, 6 braced levels, 3 cross-arms
+# with insulator drops, apex) bottom-right, fading into a denser 14-node
+# constellation upper-right. Pure inline SVG (no external asset), sized to
+# the cover's own viewBox so it scales with the page. Coordinates were
+# generated programmatically (not hand-typed) from the same tower-lattice
+# logic as the reference design, then pasted here as a static constant —
+# only the cover's text content changes per report type, this art doesn't.
+_COVER_GRID_SVG_PORTRAIT = """
+<svg viewBox="0 0 210 297" preserveAspectRatio="xMaxYMax slice" xmlns="http://www.w3.org/2000/svg">
+    <!-- constellation of connected nodes, upper-right, clear of the title/logo -->
+    <g stroke="#1489D1" stroke-width="0.4" fill="none" opacity="0.4">
+        <line x1="126.0" y1="17.8" x2="142.8" y2="29.7"/>
+        <line x1="126.0" y1="17.8" x2="161.7" y2="20.8"/>
+        <line x1="142.8" y1="29.7" x2="161.7" y2="20.8"/>
+        <line x1="142.8" y1="29.7" x2="180.6" y2="35.6"/>
+        <line x1="161.7" y1="20.8" x2="180.6" y2="35.6"/>
+        <line x1="161.7" y1="20.8" x2="165.9" y2="56.4"/>
+        <line x1="180.6" y1="35.6" x2="197.4" y2="23.8"/>
+        <line x1="180.6" y1="35.6" x2="165.9" y2="56.4"/>
+        <line x1="197.4" y1="23.8" x2="207.9" y2="53.5"/>
+        <line x1="197.4" y1="23.8" x2="184.8" y2="59.4"/>
+        <line x1="207.9" y1="53.5" x2="184.8" y2="59.4"/>
+        <line x1="184.8" y1="59.4" x2="165.9" y2="56.4"/>
+        <line x1="184.8" y1="59.4" x2="147.0" y2="65.3"/>
+        <line x1="165.9" y1="56.4" x2="147.0" y2="65.3"/>
+        <line x1="165.9" y1="56.4" x2="132.3" y2="50.5"/>
+        <line x1="147.0" y1="65.3" x2="132.3" y2="50.5"/>
+        <line x1="147.0" y1="65.3" x2="201.6" y2="89.1"/>
+        <line x1="147.0" y1="65.3" x2="178.5" y2="86.1"/>
+        <line x1="132.3" y1="50.5" x2="153.3" y2="83.2"/>
+        <line x1="132.3" y1="50.5" x2="138.6" y2="95.0"/>
+        <line x1="153.3" y1="83.2" x2="178.5" y2="86.1"/>
+        <line x1="153.3" y1="83.2" x2="138.6" y2="95.0"/>
+        <line x1="178.5" y1="86.1" x2="201.6" y2="89.1"/>
+    </g>
+    <g fill="#D9A400" opacity="0.9">
+        <circle cx="142.8" cy="29.7" r="1.3"/>
+        <circle cx="197.4" cy="23.8" r="1.3"/>
+        <circle cx="147.0" cy="65.3" r="1.2"/>
+        <circle cx="153.3" cy="83.2" r="1.2"/>
+    </g>
+    <g fill="#1489D1" opacity="0.65">
+        <circle cx="126.0" cy="17.8" r="1"/>
+        <circle cx="161.7" cy="20.8" r="1"/>
+        <circle cx="180.6" cy="35.6" r="1"/>
+        <circle cx="207.9" cy="53.5" r="1"/>
+        <circle cx="184.8" cy="59.4" r="1"/>
+        <circle cx="165.9" cy="56.4" r="1"/>
+        <circle cx="132.3" cy="50.5" r="1"/>
+        <circle cx="178.5" cy="86.1" r="1"/>
+        <circle cx="201.6" cy="89.1" r="1"/>
+        <circle cx="138.6" cy="95.0" r="1"/>
+    </g>
+    <!-- main lattice tower, bottom-right, well clear of the centred logo -->
+    <g stroke="#1489D1" stroke-width="0.55" fill="none" opacity="0.32" stroke-linejoin="round" stroke-linecap="round">
+        <line x1="173.0" y1="296.0" x2="189.5" y2="178.0"/>
+        <line x1="211.0" y1="296.0" x2="194.5" y2="178.0"/>
+        <line x1="192.0" y1="296.0" x2="192.0" y2="178.0"/>
+        <line x1="174.9" y1="281.8" x2="209.1" y2="281.8"/>
+        <line x1="176.9" y1="266.5" x2="207.1" y2="266.5"/>
+        <line x1="174.9" y1="281.8" x2="207.1" y2="266.5"/>
+        <line x1="209.1" y1="281.8" x2="176.9" y2="266.5"/>
+        <line x1="178.9" y1="251.2" x2="205.1" y2="251.2"/>
+        <line x1="176.9" y1="266.5" x2="205.1" y2="251.2"/>
+        <line x1="207.1" y1="266.5" x2="178.9" y2="251.2"/>
+        <line x1="180.9" y1="235.8" x2="203.1" y2="235.8"/>
+        <line x1="178.9" y1="251.2" x2="203.1" y2="235.8"/>
+        <line x1="205.1" y1="251.2" x2="180.9" y2="235.8"/>
+        <line x1="183.0" y1="220.5" x2="201.0" y2="220.5"/>
+        <line x1="180.9" y1="235.8" x2="201.0" y2="220.5"/>
+        <line x1="203.1" y1="235.8" x2="183.0" y2="220.5"/>
+        <line x1="184.8" y1="206.3" x2="199.2" y2="206.3"/>
+        <line x1="183.0" y1="220.5" x2="199.2" y2="206.3"/>
+        <line x1="201.0" y1="220.5" x2="184.8" y2="206.3"/>
+        <line x1="184.0" y1="227.6" x2="200.0" y2="227.6"/>
+        <line x1="184.0" y1="227.6" x2="184.0" y2="232.9"/>
+        <line x1="200.0" y1="227.6" x2="200.0" y2="232.9"/>
+        <line x1="182.5" y1="213.4" x2="201.5" y2="213.4"/>
+        <line x1="182.5" y1="213.4" x2="182.5" y2="218.7"/>
+        <line x1="201.5" y1="213.4" x2="201.5" y2="218.7"/>
+        <line x1="185.2" y1="200.4" x2="198.8" y2="200.4"/>
+        <line x1="185.2" y1="200.4" x2="185.2" y2="205.7"/>
+        <line x1="198.8" y1="200.4" x2="198.8" y2="205.7"/>
+        <line x1="189.5" y1="178.0" x2="192.0" y2="169.7"/>
+        <line x1="194.5" y1="178.0" x2="192.0" y2="169.7"/>
+    </g>
+    <!-- smaller second tower, further left, partially behind the main one -->
+    <g stroke="#1489D1" stroke-width="0.5" fill="none" opacity="0.20" stroke-linejoin="round" stroke-linecap="round">
+        <line x1="139.0" y1="296.0" x2="148.4" y2="228.0"/>
+        <line x1="161.0" y1="296.0" x2="151.6" y2="228.0"/>
+        <line x1="150.0" y1="296.0" x2="150.0" y2="228.0"/>
+        <line x1="140.1" y1="287.8" x2="159.9" y2="287.8"/>
+        <line x1="141.3" y1="279.0" x2="158.7" y2="279.0"/>
+        <line x1="140.1" y1="287.8" x2="158.7" y2="279.0"/>
+        <line x1="159.9" y1="287.8" x2="141.3" y2="279.0"/>
+        <line x1="142.4" y1="270.2" x2="157.6" y2="270.2"/>
+        <line x1="141.3" y1="279.0" x2="157.6" y2="270.2"/>
+        <line x1="158.7" y1="279.0" x2="142.4" y2="270.2"/>
+        <line x1="143.6" y1="261.3" x2="156.4" y2="261.3"/>
+        <line x1="142.4" y1="270.2" x2="156.4" y2="261.3"/>
+        <line x1="157.6" y1="270.2" x2="143.6" y2="261.3"/>
+        <line x1="144.8" y1="252.5" x2="155.2" y2="252.5"/>
+        <line x1="143.6" y1="261.3" x2="155.2" y2="252.5"/>
+        <line x1="156.4" y1="261.3" x2="144.8" y2="252.5"/>
+        <line x1="145.9" y1="244.3" x2="154.1" y2="244.3"/>
+        <line x1="144.8" y1="252.5" x2="154.1" y2="244.3"/>
+        <line x1="155.2" y1="252.5" x2="145.9" y2="244.3"/>
+        <line x1="145.4" y1="256.6" x2="154.6" y2="256.6"/>
+        <line x1="145.4" y1="256.6" x2="145.4" y2="259.6"/>
+        <line x1="154.6" y1="256.6" x2="154.6" y2="259.6"/>
+        <line x1="144.5" y1="248.4" x2="155.5" y2="248.4"/>
+        <line x1="144.5" y1="248.4" x2="144.5" y2="251.5"/>
+        <line x1="155.5" y1="248.4" x2="155.5" y2="251.5"/>
+        <line x1="146.0" y1="240.9" x2="154.0" y2="240.9"/>
+        <line x1="146.0" y1="240.9" x2="146.0" y2="244.0"/>
+        <line x1="154.0" y1="240.9" x2="154.0" y2="244.0"/>
+        <line x1="148.4" y1="228.0" x2="150.0" y2="223.2"/>
+        <line x1="151.6" y1="228.0" x2="150.0" y2="223.2"/>
+    </g>
+</svg>
+"""
+
+# Same art, re-proportioned for a landscape (297x210) page instead of
+# stretching the portrait viewBox to fit — a straight reuse of the
+# portrait coordinates would have scaled hugely to cover the wider frame
+# and cropped almost everything out. Towers are shorter (less vertical
+# room available) and the mesh is compressed into the same upper-right band.
+_COVER_GRID_SVG_LANDSCAPE = """
+<svg viewBox="0 0 297 210" preserveAspectRatio="xMaxYMax slice" xmlns="http://www.w3.org/2000/svg">
+    <g stroke="#1489D1" stroke-width="0.4" fill="none" opacity="0.4">
+        <line x1="178.2" y1="16.8" x2="199.0" y2="33.6"/>
+        <line x1="178.2" y1="16.8" x2="222.8" y2="18.9"/>
+        <line x1="199.0" y1="33.6" x2="222.8" y2="18.9"/>
+        <line x1="199.0" y1="33.6" x2="246.5" y2="42.0"/>
+        <line x1="222.8" y1="18.9" x2="246.5" y2="42.0"/>
+        <line x1="222.8" y1="18.9" x2="231.7" y2="56.7"/>
+        <line x1="246.5" y1="42.0" x2="267.3" y2="21.0"/>
+        <line x1="246.5" y1="42.0" x2="231.7" y2="56.7"/>
+        <line x1="267.3" y1="21.0" x2="285.1" y2="54.6"/>
+        <line x1="267.3" y1="21.0" x2="255.4" y2="58.8"/>
+        <line x1="285.1" y1="54.6" x2="255.4" y2="58.8"/>
+        <line x1="255.4" y1="58.8" x2="231.7" y2="56.7"/>
+        <line x1="255.4" y1="58.8" x2="207.9" y2="63.0"/>
+        <line x1="231.7" y1="56.7" x2="207.9" y2="63.0"/>
+        <line x1="231.7" y1="56.7" x2="190.1" y2="48.3"/>
+        <line x1="207.9" y1="63.0" x2="190.1" y2="48.3"/>
+        <line x1="207.9" y1="63.0" x2="279.2" y2="88.2"/>
+        <line x1="207.9" y1="63.0" x2="249.5" y2="84.0"/>
+        <line x1="190.1" y1="48.3" x2="216.8" y2="79.8"/>
+        <line x1="190.1" y1="48.3" x2="196.0" y2="92.4"/>
+        <line x1="216.8" y1="79.8" x2="249.5" y2="84.0"/>
+        <line x1="216.8" y1="79.8" x2="196.0" y2="92.4"/>
+        <line x1="249.5" y1="84.0" x2="279.2" y2="88.2"/>
+    </g>
+    <g fill="#D9A400" opacity="0.9">
+        <circle cx="207.9" cy="63.0" r="1.3"/>
+        <circle cx="199.0" cy="33.6" r="1.3"/>
+        <circle cx="216.8" cy="79.8" r="1.3"/>
+        <circle cx="267.3" cy="21.0" r="1.3"/>
+    </g>
+    <g fill="#1489D1" opacity="0.65">
+        <circle cx="178.2" cy="16.8" r="1"/>
+        <circle cx="222.8" cy="18.9" r="1"/>
+        <circle cx="246.5" cy="42.0" r="1"/>
+        <circle cx="285.1" cy="54.6" r="1"/>
+        <circle cx="255.4" cy="58.8" r="1"/>
+        <circle cx="231.7" cy="56.7" r="1"/>
+        <circle cx="190.1" cy="48.3" r="1"/>
+        <circle cx="249.5" cy="84.0" r="1"/>
+        <circle cx="279.2" cy="88.2" r="1"/>
+        <circle cx="196.0" cy="92.4" r="1"/>
+    </g>
+    <g stroke="#1489D1" stroke-width="0.5" fill="none" opacity="0.32" stroke-linejoin="round" stroke-linecap="round">
+        <line x1="245.0" y1="209.0" x2="256.2" y2="131.0"/>
+        <line x1="271.0" y1="209.0" x2="259.8" y2="131.0"/>
+        <line x1="258.0" y1="209.0" x2="258.0" y2="131.0"/>
+        <line x1="246.3" y1="199.6" x2="269.7" y2="199.6"/>
+        <line x1="247.7" y1="189.5" x2="268.3" y2="189.5"/>
+        <line x1="246.3" y1="199.6" x2="268.3" y2="189.5"/>
+        <line x1="269.7" y1="199.6" x2="247.7" y2="189.5"/>
+        <line x1="249.1" y1="179.4" x2="266.9" y2="179.4"/>
+        <line x1="247.7" y1="189.5" x2="266.9" y2="179.4"/>
+        <line x1="268.3" y1="189.5" x2="249.1" y2="179.4"/>
+        <line x1="250.4" y1="169.2" x2="265.6" y2="169.2"/>
+        <line x1="249.1" y1="179.4" x2="265.6" y2="169.2"/>
+        <line x1="266.9" y1="179.4" x2="250.4" y2="169.2"/>
+        <line x1="251.8" y1="159.1" x2="264.2" y2="159.1"/>
+        <line x1="250.4" y1="169.2" x2="264.2" y2="159.1"/>
+        <line x1="265.6" y1="169.2" x2="251.8" y2="159.1"/>
+        <line x1="253.1" y1="149.7" x2="262.9" y2="149.7"/>
+        <line x1="251.8" y1="159.1" x2="262.9" y2="149.7"/>
+        <line x1="264.2" y1="159.1" x2="253.1" y2="149.7"/>
+        <line x1="252.5" y1="163.8" x2="263.5" y2="163.8"/>
+        <line x1="252.5" y1="163.8" x2="252.5" y2="167.3"/>
+        <line x1="263.5" y1="163.8" x2="263.5" y2="167.3"/>
+        <line x1="251.5" y1="154.4" x2="264.5" y2="154.4"/>
+        <line x1="251.5" y1="154.4" x2="251.5" y2="157.9"/>
+        <line x1="264.5" y1="154.4" x2="264.5" y2="157.9"/>
+        <line x1="253.3" y1="145.8" x2="262.7" y2="145.8"/>
+        <line x1="253.3" y1="145.8" x2="253.3" y2="149.3"/>
+        <line x1="262.7" y1="145.8" x2="262.7" y2="149.3"/>
+        <line x1="256.2" y1="131.0" x2="258.0" y2="125.5"/>
+        <line x1="259.8" y1="131.0" x2="258.0" y2="125.5"/>
+    </g>
+    <g stroke="#1489D1" stroke-width="0.45" fill="none" opacity="0.20" stroke-linejoin="round" stroke-linecap="round">
+        <line x1="214.0" y1="209.0" x2="220.8" y2="163.0"/>
+        <line x1="230.0" y1="209.0" x2="223.2" y2="163.0"/>
+        <line x1="222.0" y1="209.0" x2="222.0" y2="163.0"/>
+        <line x1="214.8" y1="203.5" x2="229.2" y2="203.5"/>
+        <line x1="215.6" y1="197.5" x2="228.4" y2="197.5"/>
+        <line x1="214.8" y1="203.5" x2="228.4" y2="197.5"/>
+        <line x1="229.2" y1="203.5" x2="215.6" y2="197.5"/>
+        <line x1="216.5" y1="191.5" x2="227.5" y2="191.5"/>
+        <line x1="215.6" y1="197.5" x2="227.5" y2="191.5"/>
+        <line x1="228.4" y1="197.5" x2="216.5" y2="191.5"/>
+        <line x1="217.3" y1="185.5" x2="226.7" y2="185.5"/>
+        <line x1="216.5" y1="191.5" x2="226.7" y2="185.5"/>
+        <line x1="227.5" y1="191.5" x2="217.3" y2="185.5"/>
+        <line x1="218.2" y1="179.6" x2="225.8" y2="179.6"/>
+        <line x1="217.3" y1="185.5" x2="225.8" y2="179.6"/>
+        <line x1="226.7" y1="185.5" x2="218.2" y2="179.6"/>
+        <line x1="219.0" y1="174.0" x2="225.0" y2="174.0"/>
+        <line x1="218.2" y1="179.6" x2="225.0" y2="174.0"/>
+        <line x1="225.8" y1="179.6" x2="219.0" y2="174.0"/>
+        <line x1="218.6" y1="182.3" x2="225.4" y2="182.3"/>
+        <line x1="218.6" y1="182.3" x2="218.6" y2="184.4"/>
+        <line x1="225.4" y1="182.3" x2="225.4" y2="184.4"/>
+        <line x1="218.0" y1="176.8" x2="226.0" y2="176.8"/>
+        <line x1="218.0" y1="176.8" x2="218.0" y2="178.9"/>
+        <line x1="226.0" y1="176.8" x2="226.0" y2="178.9"/>
+        <line x1="219.1" y1="171.7" x2="224.9" y2="171.7"/>
+        <line x1="219.1" y1="171.7" x2="219.1" y2="173.8"/>
+        <line x1="224.9" y1="171.7" x2="224.9" y2="173.8"/>
+        <line x1="220.8" y1="163.0" x2="222.0" y2="159.8"/>
+        <line x1="223.2" y1="163.0" x2="222.0" y2="159.8"/>
+    </g>
+</svg>
+"""
+
+
 def render_mgmt_cover(context: dict) -> str:
-    """Render the management report cover page."""
+    """Render the management report cover page.
+
+    Single canonical cover renderer for EVERY report in the app, portrait
+    or landscape — the generic flexible report builder, TMO Management
+    Report, and Commercial Management Report all call this one function
+    rather than each keeping their own copy of the cover HTML. A fix or
+    design change made here applies everywhere at once; before this
+    consolidation (2026-08-18) there were 3 separate near-duplicate cover
+    functions that had quietly drifted out of sync with each other, and
+    landscape reports used a 4th, entirely different implementation.
+
+    context['orientation'] picks between the portrait- and
+    landscape-proportioned background art (_COVER_GRID_SVG_PORTRAIT /
+    _COVER_GRID_SVG_LANDSCAPE) — reusing one viewBox for both would either
+    stretch it (wrong aspect ratio) or leave the wrong amount of empty
+    canvas depending on which way round the page is.
+
+    context['cover_eyebrow'] overrides the small label under the company
+    name (default 'Performance Monitoring Tool') — e.g. 'Transmission &
+    Market Operations' for the TMO report, 'Commercial' for the commercial
+    report — everything else about the cover stays identical across report
+    types.
+    """
     company  = context.get('company_name', 'KANO ELECTRICITY DISTRIBUTION COMPANY')
     title    = context.get('report_title',  'Management Report')
-    date     = context.get('report_date',   '')
+    eyebrow  = context.get('cover_eyebrow', 'Performance Monitoring Tool')
+    grid_svg = (
+        _COVER_GRID_SVG_LANDSCAPE if context.get('orientation') == 'landscape'
+        else _COVER_GRID_SVG_PORTRAIT
+    )
+    # period_label (the actual data period), not report_date (always
+    # today's generation date) — this footer is labelled "period", and
+    # showing the generation date here produced e.g. "18 August" on a
+    # report whose every table and KPI was for the 17th. Same fix already
+    # applied to render_cover_page in pdf_generator.py.
+    date     = context.get('period_label', context.get('report_date', ''))
     subtitle = context.get('report_subtitle', '')
     footer_logo = context.get('footer_logo_url', '')
+    logo     = context.get('logo_url', '')
 
     words = title.split()
     title_main   = ' '.join(words[:-1]) if len(words) > 1 else title
@@ -555,31 +939,105 @@ def render_mgmt_cover(context: dict) -> str:
         else f'<div class="cover-subtitle">{company}</div>'
     )
 
+    clock_svg = (
+        '<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">'
+        '<circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2"/>'
+        '<path d="M12 7v5l3 3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>'
+        '</svg>'
+    )
+    calendar_svg = (
+        '<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">'
+        '<rect x="3" y="5" width="18" height="16" rx="2" stroke="currentColor" stroke-width="2"/>'
+        '<path d="M3 9.5h18M8 3v4M16 3v4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>'
+        '</svg>'
+    )
+
     return f"""
     <div class="cover-page">
         <div class="cover-accent"></div>
+        <div class="cover-grid-art">{grid_svg}</div>
         <div class="cover-body">
-            <div class="cover-eyebrow">{company} &nbsp;&bull;&nbsp; Management Report</div>
+            <div class="cover-top-company">{company}</div>
 
-            <div style="flex:1;">
-                <div style="font-size:10px;font-weight:700;text-transform:uppercase;
-                            letter-spacing:2.5px;opacity:0.5;margin-bottom:18px;">
-                    Performance Monitoring Tool
-                </div>
+            <div>
+                <div class="cover-eyebrow">{eyebrow}</div>
                 <h1 class="cover-main-title">
                     {title_main}<br/>
                     <span class="cover-main-title-accent">{title_accent}</span>
                 </h1>
+                <div class="cover-badge">{clock_svg}<span>Performance Report</span></div>
                 <div class="cover-rule"></div>
                 {subtitle_html}
             </div>
 
+            <div class="cover-logo-center">
+                <img src="{logo}" alt="Company Logo" />
+            </div>
+
             <div class="cover-footer-strip">
                 <img src="{footer_logo}" alt="Powered by EMRC" />
-                <span class="cover-period">{date}</span>
+                <span class="cover-period">{calendar_svg}<span>{date}</span></span>
             </div>
         </div>
     </div>"""
+
+
+def render_mgmt_back_page(context: dict) -> str:
+    """Single canonical closing/back page — same consolidation as
+    render_mgmt_cover: the generic flexible report builder, TMO Management
+    Report, and Commercial Management Report all call this one function
+    instead of each keeping a near-duplicate copy. Brings the back page in
+    line with the cover: real KEDCO logo (was missing entirely from two of
+    the three old copies), yellow accent bar and rule (.cover-accent /
+    .cover-rule already resolve to gold via MANAGEMENT_STYLES).
+    """
+    company = context.get('company_name', 'KANO ELECTRICITY DISTRIBUTION COMPANY')
+    date    = context.get('period_label', context.get('report_date', ''))
+    logo    = context.get('logo_url', '')
+
+    return f"""
+    <div class="cover-page" style="justify-content:center;align-items:center;text-align:center;">
+        <div class="cover-accent"></div>
+        <div class="cover-body" style="justify-content:center;align-items:center;">
+            <div class="cover-logo-center" style="flex:none;margin-bottom:32px;">
+                <img src="{logo}" alt="Company Logo" style="max-height:150px;" />
+            </div>
+            <div style="margin-bottom:32px;">
+                <div class="cover-eyebrow" style="text-align:center;margin-bottom:24px;">End of Report</div>
+                <h2 style="font-size:30px;font-weight:800;color:#fff;text-transform:uppercase;
+                            letter-spacing:-0.5px;line-height:1.1;">{company}</h2>
+                <div class="cover-rule" style="margin:24px auto;"></div>
+                <div style="font-size:12px;color:#fff;opacity:0.5;letter-spacing:1.5px;
+                             text-transform:uppercase;font-weight:600;">{date}</div>
+            </div>
+            <div style="font-size:10px;color:#fff;opacity:0.3;text-transform:uppercase;
+                         letter-spacing:2px;margin-top:60px;">
+                Powered by RAVEN &mdash; Performance Monitoring Tool
+            </div>
+        </div>
+    </div>"""
+
+
+def render_toc_row(num: int, title: str, page, description: str = None) -> str:
+    """Single canonical Table-of-Contents row design (numbered circular
+    badge, title, optional description line, rounded page-number badge) —
+    used by both the generic flexible report builder
+    (render_table_of_contents in pdf_generator.py) and every management
+    report family (render_toc in tmo_management_report.py) so a design
+    change here applies to every report's TOC at once, instead of needing
+    to be copied into each report type separately.
+    """
+    desc_html = f'<div class="toc-description">{description}</div>' if description else ''
+    return f"""
+        <div class="toc-row">
+            <span class="toc-number">{num:02d}</span>
+            <div style="flex:1;">
+                <div class="toc-title">{title}</div>
+                {desc_html}
+            </div>
+            <span class="toc-dots"></span>
+            <span class="toc-page">{page}</span>
+        </div>"""
 
 
 def render_mgmt_executive_summary(narrative: dict, data: dict,
@@ -1093,31 +1551,6 @@ def render_mgmt_action_plan(narrative: dict, context: dict,
     return html, len(chunks)
 
 
-def render_mgmt_back_page(context: dict) -> str:
-    company = context.get('company_name', 'KANO ELECTRICITY DISTRIBUTION COMPANY')
-    date    = context.get('report_date', '')
-    footer_logo = context.get('footer_logo_url', '')
-
-    return f"""
-    <div class="cover-page" style="justify-content:center;align-items:center;text-align:center;">
-        <div class="cover-accent"></div>
-        <div class="cover-body" style="justify-content:center;align-items:center;">
-            <div style="margin-bottom:32px;">
-                <div class="cover-eyebrow" style="text-align:center;margin-bottom:24px;">End of Report</div>
-                <h2 style="font-size:30px;font-weight:800;color:#fff;text-transform:uppercase;
-                            letter-spacing:-0.5px;line-height:1.1;">{company}</h2>
-                <div class="cover-rule" style="margin:24px auto;"></div>
-                <div style="font-size:12px;color:#fff;opacity:0.5;letter-spacing:1.5px;
-                             text-transform:uppercase;font-weight:600;">{date}</div>
-            </div>
-            <div style="font-size:10px;color:#fff;opacity:0.3;text-transform:uppercase;
-                         letter-spacing:2px;margin-top:60px;">
-                Powered by RAVEN &mdash; Performance Monitoring Tool
-            </div>
-        </div>
-    </div>"""
-
-
 # =============================================================================
 # MAIN GENERATOR CLASS
 # =============================================================================
@@ -1139,12 +1572,13 @@ class ManagementPDFGenerator:
         self.data_service  = data_service
         self.include_ai    = report_config.get('include_ai', True)
 
-        # Theme
+        # Theme — matches the cover page's navy (#001634); PDFGenerator in
+        # pdf_generator.py got the same update, same reasoning.
         raw_theme = report_config.get('theme') or {}
         self.theme = {
-            'primary_color': raw_theme.get('primary_color') or '#002050',
-            'accent_color':  raw_theme.get('accent_color')  or 'rgba(0, 32, 80, 0.2)',
-            'text_color':    raw_theme.get('text_color')    or '#002050',
+            'primary_color': raw_theme.get('primary_color') or '#001634',
+            'accent_color':  raw_theme.get('accent_color')  or 'rgba(0, 22, 52, 0.2)',
+            'text_color':    raw_theme.get('text_color')    or '#001634',
         }
 
         try:
@@ -1176,6 +1610,7 @@ class ManagementPDFGenerator:
             'report_subtitle': self.report_config.get('report_subtitle', ''),
             'report_date':    period_label,
             'period_label':   period_label,
+            'logo_url':       self._get_static_url('reports/images/kedco_logo.png'),
             'logo_gray_url':  self._get_static_url('reports/images/kedco_gray_logo.png'),
             'footer_logo_url': self._get_static_url('reports/images/footer_logo.png'),
             **self.theme,

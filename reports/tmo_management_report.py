@@ -92,14 +92,10 @@ TMO_EXTRA = """
 
 .chart-wrap { margin: 4px 0 6px; }
 
-/* TOC page */
-.toc-page { padding: 40px 48px; }
-.toc-row { display:flex; align-items:baseline; gap:6px; padding:5px 0;
-           border-bottom: 1px dashed rgba(0,32,80,0.1); }
-.toc-num  { font-size:9px; font-weight:800; color:#5D87FF; width:22px; flex-shrink:0; }
-.toc-title{ font-size:10px; font-weight:600; color:#002050; flex:1; }
-.toc-dots { flex:1; border-bottom:1px dotted rgba(0,32,80,0.2); margin:0 6px 3px; }
-.toc-pg   { font-size:9px; color:#7C8FAC; }
+/* TOC row design (.toc-container/.toc-row/.toc-number/.toc-title/
+   .toc-description/.toc-dots/.toc-page) now comes from the shared
+   MANAGEMENT_STYLES block above — see render_toc_row in
+   management_report.py. This report no longer keeps its own copy. */
 """
 
 # =============================================================================
@@ -116,7 +112,7 @@ _C = {
     'poor':         '#EF9A9A',
     'critical':     '#E53935',
     'gap_green':    '#4CAF50',
-    'text':         '#002050',
+    'text':         '#001634',  # matches the cover page's navy, was #002050
     'grey':         '#7C8FAC',
     'divider':      '#e5eaef',
 }
@@ -944,38 +940,20 @@ def _fallback_aria():
 # ── 1. Cover ─────────────────────────────────────────────────────────────────
 
 def render_cover(context: dict) -> str:
-    company     = context.get('company_name', 'KANO ELECTRICITY DISTRIBUTION COMPANY')
-    title       = context.get('report_title', 'TMO Management Report')
-    period      = context.get('period_label', '')
-    footer_logo = context.get('footer_logo_url', '')
+    """TMO Management Report cover — delegates to the single canonical
+    cover renderer (render_mgmt_cover) rather than keeping its own
+    duplicate HTML/CSS. See render_commercial_cover in
+    management_commercial_report.py for the same pattern applied to the
+    commercial report.
+    """
+    from reports.management_report import render_mgmt_cover
 
-    words       = title.split()
-    main        = ' '.join(words[:-1]) if len(words) > 1 else title
-    accent      = words[-1] if len(words) > 1 else ''
-
-    return f"""
-    <div class="cover-page">
-        <div class="cover-accent"></div>
-        <div class="cover-body">
-            <div class="cover-eyebrow">{company} &nbsp;&bull;&nbsp; TMO Management Report</div>
-            <div style="flex:1;">
-                <div style="font-size:10px;font-weight:700;text-transform:uppercase;
-                            letter-spacing:2.5px;opacity:0.5;margin-bottom:18px;">
-                    Transmission &amp; Market Operations
-                </div>
-                <h1 class="cover-main-title">
-                    {main}<br/>
-                    <span class="cover-main-title-accent">{accent}</span>
-                </h1>
-                <div class="cover-rule"></div>
-                <div class="cover-subtitle">{company}</div>
-            </div>
-            <div class="cover-footer-strip">
-                <img src="{footer_logo}" alt="RAVEN"/>
-                <span class="cover-period">{period}</span>
-            </div>
-        </div>
-    </div>"""
+    cover_context = {
+        **context,
+        'report_title': context.get('report_title', 'TMO Management Report'),
+        'cover_eyebrow': 'Transmission & Market Operations',
+    }
+    return render_mgmt_cover(cover_context)
 
 
 # ── Table of Contents ────────────────────────────────────────────────────────
@@ -993,6 +971,12 @@ _TOC_SECTIONS = [
 ]
 
 def render_toc(context: dict, sections: list) -> str:
+    """TMO Management Report TOC — uses the single shared row design
+    (render_toc_row in management_report.py) rather than its own copy, so
+    it stays visually identical to every other report's Table of Contents.
+    """
+    from reports.management_report import render_toc_row
+
     company = context.get('company_name', 'KANO ELECTRICITY DISTRIBUTION COMPANY')
     period  = context.get('period_label', '')
     title   = context.get('report_title', 'TMO Management Report')
@@ -1010,16 +994,7 @@ def render_toc(context: dict, sections: list) -> str:
     for (num, sec_title, desc), key in zip(_TOC_SECTIONS, sec_keys):
         if key not in active:
             continue
-        rows += f"""
-        <div class="toc-row">
-            <span class="toc-num">{num:02d}</span>
-            <div style="flex:1;">
-                <div class="toc-title">{sec_title}</div>
-                <div style="font-size:8px;color:#7C8FAC;margin-top:1px;">{desc}</div>
-            </div>
-            <span class="toc-dots"></span>
-            <span class="toc-pg">{pg}</span>
-        </div>"""
+        rows += render_toc_row(num, sec_title, pg, description=desc)
         pg += 1
 
     content = f"""
@@ -1030,11 +1005,11 @@ def render_toc(context: dict, sections: list) -> str:
         <div style="margin-bottom:18px;">
             <div style="font-size:7px;font-weight:700;text-transform:uppercase;letter-spacing:2px;
                         color:#5D87FF;margin-bottom:6px;">Contents</div>
-            <h2 style="font-size:20px;font-weight:800;color:#002050;margin:0 0 4px;">
+            <h2 style="font-size:20px;font-weight:800;color:#001634;margin:0 0 4px;">
                 Table of Contents</h2>
             <div style="width:32px;height:3px;background:#5D87FF;border-radius:2px;"></div>
         </div>
-        {rows}"""
+        <div class="toc-container">{rows}</div>"""
 
     return f"""
     <div class="page">
@@ -1851,27 +1826,10 @@ def render_action_plan(ai: dict, context: dict, pg: int) -> str:
 # ── 11. Back Page ─────────────────────────────────────────────────────────────
 
 def render_back_page(context: dict) -> str:
-    company     = context.get('company_name', 'KANO ELECTRICITY DISTRIBUTION COMPANY')
-    period      = context.get('period_label', '')
-    footer_logo = context.get('footer_logo_url', '')
-    return f"""
-    <div class="cover-page" style="justify-content:center;align-items:center;text-align:center;">
-        <div class="cover-accent"></div>
-        <div class="cover-body" style="justify-content:center;align-items:center;">
-            <div style="margin-bottom:32px;">
-                <div class="cover-eyebrow" style="text-align:center;margin-bottom:24px;">End of Report</div>
-                <h2 style="font-size:28px;font-weight:800;color:#fff;text-transform:uppercase;
-                            letter-spacing:-0.5px;line-height:1.1;">{company}</h2>
-                <div class="cover-rule" style="margin:24px auto;"></div>
-                <div style="font-size:11px;color:#fff;opacity:0.5;letter-spacing:1.5px;
-                             text-transform:uppercase;font-weight:600;">{period}</div>
-            </div>
-            <div style="font-size:10px;color:#fff;opacity:0.3;text-transform:uppercase;
-                         letter-spacing:2px;margin-top:60px;">
-                Powered by RAVEN &mdash; Performance Monitoring Tool
-            </div>
-        </div>
-    </div>"""
+    """TMO Management Report back page — delegates to the single canonical
+    back page (render_mgmt_back_page in management_report.py)."""
+    from reports.management_report import render_mgmt_back_page
+    return render_mgmt_back_page(context)
 
 # =============================================================================
 # SECTION REGISTRY — maps toggle keys → renderer functions
@@ -1937,6 +1895,7 @@ class TMOManagementPDFGenerator:
             'report_title':    title,
             'period_label':    self.period_label,
             'footer_logo_url': self._static_b64('reports/images/footer_logo.png'),
+            'logo_url':        self._static_b64('reports/images/kedco_logo.png'),
             'yesterday':       self.yesterday,
             'yesterday_label': self.yesterday.strftime('%d %b %Y'),
             'is_current':      self.is_current,

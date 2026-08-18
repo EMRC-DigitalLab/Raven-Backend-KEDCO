@@ -15,7 +15,7 @@ Body:
 {
     "report_title":  "May 2026 Commercial Management Report",
     "company_name":  "KANO ELECTRICITY DISTRIBUTION COMPANY",
-    "theme":         { "primary_color": "#002050", ... },
+    "theme":         { "primary_color": "#001634", ... },
     "include_ai":    true,
     "filters": {
         "from_date": "2026-05-01",
@@ -229,7 +229,7 @@ def _page_footer(_context: dict, page_num: int) -> str:
 def _aria_badge() -> str:
     return """
     <div style="display:inline-flex;align-items:center;gap:8px;
-                background:#002050;color:#fff;border-radius:8px;
+                background:#001634;color:#fff;border-radius:8px;
                 padding:5px 12px;margin-bottom:12px;">
         <span style="font-size:12px;font-weight:800;letter-spacing:1px;">ARIA</span>
         <span style="font-size:8.5px;font-weight:400;opacity:0.75;letter-spacing:0.5px;">
@@ -394,38 +394,24 @@ def _fallback_narrative() -> dict:
 # =============================================================================
 
 def render_commercial_cover(context: dict) -> str:
-    period = context.get('period_label', '')
-    title  = context.get('report_title', 'Commercial Management Report')
-    words  = title.rsplit(' ', 1)
-    main   = words[0] if len(words) > 1 else title
-    last   = words[1] if len(words) > 1 else ''
+    """Commercial Management Report cover — delegates to the single
+    canonical cover renderer (render_mgmt_cover) rather than keeping its
+    own duplicate HTML/CSS. Only the eyebrow label and description
+    subtitle differ from the other report types; everything else (logo
+    placement, badge, accent colours, footer) stays identical across every
+    report by construction, not by remembering to copy a fix three times.
+    """
+    from reports.management_report import render_mgmt_cover
 
-    return f"""
-    <div class="cover-page">
-        <div class="cover-accent"></div>
-        <div class="cover-body">
-            <div class="cover-eyebrow">{context.get('company_name', 'KEDCO')}</div>
-            <div style="flex:1;display:flex;flex-direction:column;justify-content:center;">
-                <div style="font-size:11px;font-weight:700;text-transform:uppercase;
-                            letter-spacing:3px;opacity:0.5;margin-bottom:16px;">
-                    Commercial
-                </div>
-                <div class="cover-main-title">
-                    {main}<br/>
-                    <span class="cover-main-title-accent">{last}</span>
-                </div>
-                <div class="cover-rule"></div>
-                <div class="cover-subtitle">
-                    MDI &amp; MDNI Revenue Performance Review<br/>
-                    Billing Coverage · Customer Analysis · ARIA Insights
-                </div>
-            </div>
-            <div class="cover-footer-strip">
-                <img src="{context.get('logo_gray_url', '')}" alt="KEDCO" />
-                <span class="cover-period">{period}</span>
-            </div>
-        </div>
-    </div>"""
+    cover_context = {
+        **context,
+        'cover_eyebrow': 'Commercial',
+        'report_subtitle': context.get('report_subtitle') or (
+            'MDI &amp; MDNI Revenue Performance Review<br/>'
+            'Billing Coverage &middot; Customer Analysis &middot; ARIA Insights'
+        ),
+    }
+    return render_mgmt_cover(cover_context)
 
 
 def render_commercial_executive_summary(narrative: dict, data: dict, context: dict, page_num: int) -> str:
@@ -452,16 +438,16 @@ def render_commercial_executive_summary(narrative: dict, data: dict, context: di
                 border-radius:10px;overflow:hidden;">
         <div style="flex:1;padding:11px 14px;text-align:center;border-right:1px solid rgba(0,32,80,0.1);">
             <div style="font-size:7.5px;font-weight:700;text-transform:uppercase;opacity:0.55;margin-bottom:4px;">Total Revenue</div>
-            <div style="font-size:18px;font-weight:800;color:#002050;">{_fmt_naira(curr_rev)}</div>
+            <div style="font-size:18px;font-weight:800;color:#001634;">{_fmt_naira(curr_rev)}</div>
             <div style="font-size:8px;color:#64748b;margin-top:2px;">{_movement_html(curr_rev, prev_rev) if prev_rev else ''}</div>
         </div>
         <div style="flex:1;padding:11px 14px;text-align:center;border-right:1px solid rgba(0,32,80,0.1);">
             <div style="font-size:7.5px;font-weight:700;text-transform:uppercase;opacity:0.55;margin-bottom:4px;">MDI Revenue</div>
-            <div style="font-size:18px;font-weight:800;color:#002050;">{_fmt_naira(mdi_rev)}</div>
+            <div style="font-size:18px;font-weight:800;color:#001634;">{_fmt_naira(mdi_rev)}</div>
         </div>
         <div style="flex:1;padding:11px 14px;text-align:center;border-right:1px solid rgba(0,32,80,0.1);">
             <div style="font-size:7.5px;font-weight:700;text-transform:uppercase;opacity:0.55;margin-bottom:4px;">MDNI Revenue</div>
-            <div style="font-size:18px;font-weight:800;color:#002050;">{_fmt_naira(mdni_rev)}</div>
+            <div style="font-size:18px;font-weight:800;color:#001634;">{_fmt_naira(mdni_rev)}</div>
         </div>
         <div style="flex:1;padding:11px 14px;text-align:center;">
             <div style="font-size:7.5px;font-weight:700;text-transform:uppercase;opacity:0.55;margin-bottom:4px;">Coverage Rate</div>
@@ -471,7 +457,7 @@ def render_commercial_executive_summary(narrative: dict, data: dict, context: di
     </div>"""
 
     headline_html = f"""
-    <div style="background:#002050;border-radius:10px;padding:14px 18px;margin-bottom:16px;">
+    <div style="background:#001634;border-radius:10px;padding:14px 18px;margin-bottom:16px;">
         <div style="font-size:7.5px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;
                     color:rgba(255,255,255,0.55);margin-bottom:5px;">Key Finding</div>
         <div style="font-size:13px;font-weight:700;color:#fff;line-height:1.5;">{headline}</div>
@@ -517,8 +503,8 @@ def render_commercial_kpi_dashboard(narrative: dict, data: dict, context: dict, 
     atc_loss  = ov.get('atc_loss')
 
     def _card(label, current_str, prev_str, movement_html, highlight=False):
-        bg = '#002050' if highlight else '#f8fafc'
-        tc = '#fff'    if highlight else '#002050'
+        bg = '#001634' if highlight else '#f8fafc'
+        tc = '#fff'    if highlight else '#001634'
         bc = 'transparent' if highlight else 'rgba(0,32,80,0.08)'
         mc = 'rgba(255,255,255,0.65)' if highlight else '#64748b'
         return f"""
@@ -628,7 +614,7 @@ def render_commercial_mdi_mdni_split(narrative: dict, data: dict, context: dict,
                 <div>
                     <div style="font-size:7.5px;color:#64748b;text-transform:uppercase;
                                 letter-spacing:0.8px;margin-bottom:2px;">Customers</div>
-                    <div style="font-size:20px;font-weight:800;color:#002050;">{count:,}</div>
+                    <div style="font-size:20px;font-weight:800;color:#001634;">{count:,}</div>
                 </div>
                 <div>
                     <div style="font-size:7.5px;color:#64748b;text-transform:uppercase;
@@ -638,17 +624,17 @@ def render_commercial_mdi_mdni_split(narrative: dict, data: dict, context: dict,
                 <div>
                     <div style="font-size:7.5px;color:#64748b;text-transform:uppercase;
                                 letter-spacing:0.8px;margin-bottom:2px;">Total Billed</div>
-                    <div style="font-size:14px;font-weight:700;color:#002050;">{_fmt_naira(revenue)}</div>
+                    <div style="font-size:14px;font-weight:700;color:#001634;">{_fmt_naira(revenue)}</div>
                 </div>
                 <div>
                     <div style="font-size:7.5px;color:#64748b;text-transform:uppercase;
                                 letter-spacing:0.8px;margin-bottom:2px;">kWh Billed</div>
-                    <div style="font-size:14px;font-weight:700;color:#002050;">{_fmt_kwh(kwh)}</div>
+                    <div style="font-size:14px;font-weight:700;color:#001634;">{_fmt_kwh(kwh)}</div>
                 </div>
                 <div>
                     <div style="font-size:7.5px;color:#64748b;text-transform:uppercase;
                                 letter-spacing:0.8px;margin-bottom:2px;">Avg Rev / Customer</div>
-                    <div style="font-size:13px;font-weight:700;color:#002050;">{_fmt_naira(arpu)}</div>
+                    <div style="font-size:13px;font-weight:700;color:#001634;">{_fmt_naira(arpu)}</div>
                 </div>
             </div>
             {"<div style='font-size:9.5px;color:#475569;line-height:1.55;border-top:1px solid rgba(0,32,80,0.08);padding-top:10px;'>" + note + "</div>" if note else ""}
@@ -660,7 +646,7 @@ def render_commercial_mdi_mdni_split(narrative: dict, data: dict, context: dict,
         <div style="font-size:8px;font-weight:700;text-transform:uppercase;
                     letter-spacing:0.8px;opacity:0.6;margin-bottom:5px;">Revenue Split</div>
         <div style="display:flex;height:14px;border-radius:6px;overflow:hidden;">
-            <div style="background:#002050;width:{mdi_share:.1f}%;display:flex;align-items:center;
+            <div style="background:#001634;width:{mdi_share:.1f}%;display:flex;align-items:center;
                         justify-content:center;">
                 <span style="font-size:7.5px;font-weight:700;color:#fff;">MDI {mdi_share:.1f}%</span>
             </div>
@@ -676,7 +662,7 @@ def render_commercial_mdi_mdni_split(narrative: dict, data: dict, context: dict,
         {_aria_badge()}
         {bar_html}
         <div style="display:flex;gap:12px;">
-            {_seg_card('MDI — Maximum Demand Industrial', mdi_count, mdi_kwh, mdi_rev, mdi_arpu, mdi_share, mdi_note, '#002050')}
+            {_seg_card('MDI — Maximum Demand Industrial', mdi_count, mdi_kwh, mdi_rev, mdi_arpu, mdi_share, mdi_note, '#001634')}
             {_seg_card('MDNI — Maximum Demand Non-Industrial', mdni_count, mdni_kwh, mdni_rev, mdni_arpu, mdni_share, mdni_note, '#0ea5e9')}
         </div>
         {"<div class='callout' style='margin-top:12px;'><div class='callout-title'>Coverage Assessment</div><div class='callout-text'>" + cov_note + "</div></div>" if cov_note else ""}"""
@@ -703,7 +689,7 @@ def render_commercial_revenue_by_district(narrative: dict, data: dict, context: 
             <td style="text-align:right;">{share:.1f}%</td>
             <td style="width:80px;padding:6px 9px;">
                 <div style="background:#e2e8f0;border-radius:3px;height:6px;">
-                    <div style="background:#002050;height:100%;width:{bar_w:.0f}%;border-radius:3px;"></div>
+                    <div style="background:#001634;height:100%;width:{bar_w:.0f}%;border-radius:3px;"></div>
                 </div>
             </td>
         </tr>"""
@@ -777,7 +763,7 @@ def render_commercial_top_customers(narrative: dict, data: dict, context: dict, 
                 vp_color = '#22c55e' if (vp or 0) >= 0 else '#ef4444'
                 r += f"""
                 <tr>
-                    <td style="font-weight:700;color:#002050;">{i}</td>
+                    <td style="font-weight:700;color:#001634;">{i}</td>
                     <td><strong style="font-size:9.5px;">{c.get('customer_name','—')}</strong><br/>
                         <span style="font-size:8px;color:#64748b;">{c.get('account_no','—')}</span></td>
                     <td style="font-size:8.5px;">{c.get('feeder','—')}</td>
@@ -962,20 +948,10 @@ def render_commercial_action_plan(narrative: dict, context: dict, page_num: int)
 
 
 def render_commercial_back_page(context: dict) -> str:
-    return f"""
-    <div class="cover-page" style="justify-content:center;align-items:center;text-align:center;">
-        <div style="padding:60px;">
-            <div style="font-size:52px;font-weight:800;text-transform:uppercase;
-                        letter-spacing:-1px;opacity:0.15;margin-bottom:20px;">KEDCO</div>
-            <div style="font-size:13px;font-weight:600;opacity:0.55;margin-bottom:8px;">
-                {context.get('company_name','KANO ELECTRICITY DISTRIBUTION COMPANY')}
-            </div>
-            <div style="font-size:10px;opacity:0.4;">{context.get('period_label','')}</div>
-            <div style="margin-top:30px;font-size:9px;opacity:0.3;font-style:italic;">
-                Generated by ARIA — Automated Raven Intelligence Assistance
-            </div>
-        </div>
-    </div>"""
+    """Commercial Management Report back page — delegates to the single
+    canonical back page (render_mgmt_back_page in management_report.py)."""
+    from reports.management_report import render_mgmt_back_page
+    return render_mgmt_back_page(context)
 
 
 # =============================================================================
@@ -1000,11 +976,13 @@ class CommercialManagementPDFGenerator:
         self.include_ai    = report_config.get('include_ai', True)
         self.user          = user
 
+        # Matches the cover page's navy (#001634) — same update as
+        # PDFGenerator.__init__ in pdf_generator.py.
         raw_theme = report_config.get('theme') or {}
         self.theme = {
-            'primary_color': raw_theme.get('primary_color') or '#002050',
-            'accent_color':  raw_theme.get('accent_color')  or 'rgba(0, 32, 80, 0.2)',
-            'text_color':    raw_theme.get('text_color')    or '#002050',
+            'primary_color': raw_theme.get('primary_color') or '#001634',
+            'accent_color':  raw_theme.get('accent_color')  or 'rgba(0, 22, 52, 0.2)',
+            'text_color':    raw_theme.get('text_color')    or '#001634',
         }
 
         try:
@@ -1034,6 +1012,7 @@ class CommercialManagementPDFGenerator:
             'report_subtitle': self.report_config.get('report_subtitle', ''),
             'report_date':     period_label,
             'period_label':    period_label,
+            'logo_url':        self._get_static_url('reports/images/kedco_logo.png'),
             'logo_gray_url':   self._get_static_url('reports/images/kedco_gray_logo.png'),
             'footer_logo_url': self._get_static_url('reports/images/footer_logo.png'),
             **self.theme,
