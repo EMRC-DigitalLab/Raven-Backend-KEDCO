@@ -328,7 +328,13 @@ def _get_one_section_insight(section_type: str, data: Any, period_label: str) ->
 
     try:
         prompt   = _build_section_prompt(section_type, data, period_label)
-        insights = _call_claude(prompt, model=_HAIKU_MODEL, max_tokens=1024)
+        # 1024 was enough before per-feeder fault_breakdown data existed —
+        # confirmed 2026-08-18 the richer tmo_supply_hours payload (fault
+        # causes for every underperforming feeder) gives the model enough to
+        # say that it now runs past 1024 tokens and gets cut off mid-JSON,
+        # failing the whole insight (no card at all) instead of just being
+        # terser. 2048 matches the overall/executive prompt's budget.
+        insights = _call_claude(prompt, model=_HAIKU_MODEL, max_tokens=2048)
         _set_cached(cache_key, insights)
         return {**insights, 'cached': False}
     except Exception as exc:

@@ -153,16 +153,6 @@ SUMMARY_ROW_LABELS = {
     'VARIANCE':                       'variance',
 }
 
-FAULT_PREFIXES = (
-    'OC', 'E/', 'LS', 'L/', 'EMG', 'EMRG', 'L/S', 'L/L', 'ON ',
-    # confirmed 2026-08-17: CB/F (breaker fault) and TR/F, T/F (transformer
-    # fault) codes were falling through _safe_float() as unrecognised strings
-    # and getting silently SKIPPED (no HourlyLoad row at all) instead of
-    # recorded as 0 MW — e.g. IDH showed "CB/F" for all 24 hours on the 16th
-    # and ended up with zero HourlyLoad rows for that day, not a 0-value one.
-    'CB/F', 'TR/F', 'T/F',
-)
-
 NAME_MAP = {
     "DAN'AGUNDI 1":           "DAN AGUNDI 1",
     "DAN'AGUNDI 2":           "DAN AGUNDI 2",
@@ -181,15 +171,148 @@ NAME_MAP = {
     "DR. JIMETA":             "DR JIMETA",
 }
 
+# Read-time normalisation for HourlyLoad.fault_code — the source sheet is not
+# consistent about how it spells the same underlying problem (confirmed
+# 2026-08-18: 27 distinct raw codes across one month for what is really only
+# ~6 categories). The raw code is stored verbatim in the DB for traceability;
+# this dict is ONLY used when GROUPING/reporting on fault codes, so a new
+# spelling variant just needs a new dict entry here — no migration, and the
+# raw historical data doesn't need to change. Same pattern as NAME_MAP above.
+# Any raw code not listed here falls back to 'Other/Unspecified' rather than
+# raising or guessing.
+FAULT_CODE_CATEGORIES: dict[str, str] = {
+    # Earth fault
+    'EF': 'Earth Fault', 'E/F': 'Earth Fault', 'EF/OC': 'Earth Fault',
+    'INST. E/F': 'Earth Fault', 'INST E/F': 'Earth Fault',
+    # Over current
+    'OC': 'Over Current', 'O/C': 'Over Current',
+    # Transformer fault
+    'TR/F': 'Transformer Fault', 'TR2/F': 'Transformer Fault', 'T/F': 'Transformer Fault',
+    # Breaker fault
+    'CB/F': 'Breaker Fault',
+    # Maintenance / disconnect (by far the most spelling variants observed)
+    'MTC/DISC': 'Maintenance / Disconnect', 'MTC/DISCO': 'Maintenance / Disconnect',
+    'MTC(DISC)': 'Maintenance / Disconnect', 'MTC/D': 'Maintenance / Disconnect',
+    'MTCN': 'Maintenance / Disconnect', 'MTCN/D': 'Maintenance / Disconnect',
+    'MTCN DIS': 'Maintenance / Disconnect', 'MTN/DSC': 'Maintenance / Disconnect',
+    'MTCE/D': 'Maintenance / Disconnect', 'MTCE/DISC': 'Maintenance / Disconnect',
+    'MTCE/KEDCO': 'Maintenance / Disconnect', 'DISC/MTCE': 'Maintenance / Disconnect',
+    'DIS/MTC': 'Maintenance / Disconnect', 'D/MNT': 'Maintenance / Disconnect',
+    'DISCO MAINT': 'Maintenance / Disconnect',
+    # Emergency disconnect
+    'EMERG/DISC': 'Emergency Disconnect', 'EMERG/D': 'Emergency Disconnect',
+    'EMG/D': 'Emergency Disconnect', 'EMG': 'Emergency Disconnect', 'EMRG': 'Emergency Disconnect',
+    # Out of service
+    'O/S': 'Out of Service',
+    # Load shedding
+    'LS': 'Load Shedding', 'L/S': 'Load Shedding', 'LS/GS': 'Load Shedding', 'L/L': 'Load Shedding',
+}
+
+
+# Fuzzy fallback for codes NOT in FAULT_CODE_CATEGORIES — catches a NEW
+# spelling of a KNOWN family (e.g. "MTCE-DISCONNECT", "TRAFO 2 FLT") without
+# needing a fresh dict entry for every variant TCN staff invent. Checked
+# against the raw code with all punctuation/spaces stripped (so "E/F",
+# "E-F", "E F" are all just "EF"), in priority order — most specific
+# families first, broadest ("MTC"/"DISC") last, so e.g. "EMERG/DISC"
+# (contains both "EMERG" and "DISC") correctly resolves to Emergency
+# Disconnect rather than the more generic Maintenance/Disconnect bucket.
+#
+# Deliberately conservative: every fragment here was checked against the 27
+# real codes confirmed 2026-08-18 plus the known garbage values ('N',
+# 'EN/A', malformed numbers like '.0.1') to confirm no false positives — a
+# 2-character fragment like 'LS' or 'OC' only ships once verified none of
+# the OTHER known families accidentally contain it. Anything matching no
+# fragment falls to 'Other/Unspecified' rather than a guessed category —
+# an honest "unknown" is safer than dirty data baked into a report.
+_FAULT_FRAGMENT_RULES: list[tuple[str, str]] = [
+    ('EMERG',    'Emergency Disconnect'),
+    ('EMG',      'Emergency Disconnect'),
+    ('TRANSF',   'Transformer Fault'),
+    ('TRAFO',    'Transformer Fault'),
+    ('TR2',      'Transformer Fault'),
+    ('TRF',      'Transformer Fault'),
+    ('BREAKER',  'Breaker Fault'),
+    ('BRKR',     'Breaker Fault'),
+    ('CBF',      'Breaker Fault'),
+    ('EARTH',    'Earth Fault'),
+    ('EF',       'Earth Fault'),
+    ('OVERCUR',  'Over Current'),
+    ('OC',       'Over Current'),
+    ('LOADSHED', 'Load Shedding'),
+    ('SHED',     'Load Shedding'),
+    ('LS',       'Load Shedding'),
+    ('OOS',      'Out of Service'),
+    ('MTC',      'Maintenance / Disconnect'),
+    ('MTN',      'Maintenance / Disconnect'),
+    ('MAINT',    'Maintenance / Disconnect'),
+    ('DISC',     'Maintenance / Disconnect'),
+]
+# Fragments shorter than this are too ambiguous to trust on their own (e.g.
+# a bare 'N' or single stray letter) — only length-2+ fragments are used
+# above anyway, but this also gates the MINIMUM length of the cleaned input
+# itself, so single-character noise never reaches fragment matching at all.
+_FAULT_FUZZY_MIN_LEN = 2
+
+
+def categorize_fault_code(raw_code) -> str:
+    """Normalise a raw fault_code string into one of the small, consistent
+    categories in FAULT_CODE_CATEGORIES (or _FAULT_FRAGMENT_RULES as a fuzzy
+    fallback), for grouping/reporting — never used to change what's stored,
+    only how it's read back."""
+    if not raw_code:
+        return 'Other/Unspecified'
+    raw = str(raw_code).strip().upper()
+    if raw in FAULT_CODE_CATEGORIES:
+        return FAULT_CODE_CATEGORIES[raw]
+
+    cleaned = re.sub(r'[^A-Z0-9]', '', raw)
+    if len(cleaned) < _FAULT_FUZZY_MIN_LEN:
+        return 'Other/Unspecified'
+    for fragment, category in _FAULT_FRAGMENT_RULES:
+        if fragment in cleaned:
+            return category
+    return 'Other/Unspecified'
+
+
+def _repair_malformed_decimal(s: str):
+    """Recover a real number from a stray-extra-decimal-point typo, e.g.
+    '.0.1' or '0..4' — both clearly meant a single decimal value ('0.1',
+    '0.4') but picked up an extra '.' along the way. General rule, not a
+    hardcoded fix for those two examples: only fires when the string is
+    ENTIRELY digits and periods (nothing else — a real fault code always
+    has letters, so this can never misfire on one) with more than one '.'.
+    Treats the LAST '.' as the real decimal separator and drops the rest,
+    keeping however many digits preceded it in their original position.
+    Returns a float, or None if the string doesn't fit this exact pattern.
+    """
+    if not s or not all(c.isdigit() or c == '.' for c in s) or s.count('.') <= 1:
+        return None
+    last_dot = s.rfind('.')
+    digits_before = sum(1 for c in s[:last_dot] if c.isdigit())
+    digits_only = s.replace('.', '')
+    if not digits_only:
+        return None
+    repaired = f'{digits_only[:digits_before]}.{digits_only[digits_before:]}'
+    try:
+        f = float(repaired)
+        return None if (math.isnan(f) or math.isinf(f)) else f
+    except ValueError:
+        return None
+
 
 def _safe_float(val):
     if val is None:
         return None
+    s = str(val).strip().replace(',', '')
     try:
-        f = float(str(val).strip().replace(',', ''))
+        f = float(s)
         return None if (math.isnan(f) or math.isinf(f)) else f
     except (ValueError, TypeError):
-        return None
+        repaired = _repair_malformed_decimal(s)
+        if repaired is not None:
+            logger.debug('_safe_float: repaired malformed decimal %r -> %s', s, repaired)
+        return repaired
 
 
 def _is_blank(val):
@@ -198,16 +321,6 @@ def _is_blank(val):
         return True
     s = str(val).strip().upper()
     return not s or s == 'NAN'
-
-
-def _is_explicit_fault(val):
-    """True for explicit fault/outage/load-shed code strings (e.g. OC/EF, LS/GS)."""
-    if val is None:
-        return False
-    s = str(val).strip().upper()
-    if not s or s == 'NAN':
-        return False
-    return any(s.startswith(p) for p in FAULT_PREFIXES)
 
 
 def _sheet_day(name):
@@ -350,13 +463,28 @@ def sync_33kv_sheet(spreadsheet_id: str, year: int, month: int,
                 val = df.iloc[r, col]
                 if _is_blank(val):
                     continue                 # genuinely no data — skip
-                if _is_explicit_fault(val):
-                    mw = 0.0                # feeder on fault/outage = 0 MW
-                else:
-                    mw = _safe_float(val)
-                    if mw is None:
-                        continue            # unrecognised string — skip
-                hl_rows.append((feeder, h_idx, round(max(mw, 0.0), 4)))
+                mw = _safe_float(val)
+                fault_code = None
+                if mw is None:
+                    # Any non-blank, non-numeric cell is a fault/outage/
+                    # maintenance/disconnect code — the sheet uses dozens of
+                    # ad hoc abbreviations for this (EF, O/C, TR2/F,
+                    # MTC/DISC, DISCO MAINT, EMERG/DISC, ...) and new
+                    # variants keep appearing. Rather than whack-a-moling a
+                    # literal whitelist (confirmed 2026-08-18: 27 distinct
+                    # unrecognised codes across just one month, effectively
+                    # all fault/maintenance-related), treat any such value
+                    # as 0 MW so the feeder still gets a real HourlyLoad row
+                    # instead of that hour being silently dropped — this was
+                    # producing full-day gaps for feeders like NB CERAMIC
+                    # (TR2/F all day) and partial gaps for many others
+                    # (O/C, EF) that FAULT_PREFIXES didn't happen to cover.
+                    # The raw code itself is kept (not just flattened to 0)
+                    # so reporting can say WHY a feeder had no supply, not
+                    # just that it didn't.
+                    mw = 0.0
+                    fault_code = str(val).strip()[:32]
+                hl_rows.append((feeder, h_idx, round(max(mw, 0.0), 4), fault_code))
 
         # ── Dispatch rows ────────────────────────────────────────────────────
         dispatch_hourly = {}
@@ -442,15 +570,16 @@ def sync_33kv_sheet(spreadsheet_id: str, year: int, month: int,
                             hour=hour,
                             load_mw=Decimal(str(mw)),
                             submission_type='admin_override',
+                            fault_code=fault_code,
                         )
-                        for feeder, hour, mw in hl_rows
+                        for feeder, hour, mw, fault_code in hl_rows
                         if (feeder.id, hour) not in existing_dso_keys
                     ], batch_size=500)
                     total_hl += len(hl_rows)
 
                     # Derive supply hours: count hours with load_mw > 0 per feeder
                     supply_hrs: dict = {}
-                    for feeder, hour, mw in hl_rows:
+                    for feeder, hour, mw, _fault_code in hl_rows:
                         if mw > 0:
                             supply_hrs[feeder] = supply_hrs.get(feeder, 0) + 1
                     if supply_hrs:
@@ -676,9 +805,13 @@ def sync_11kv_sheet(spreadsheet_id: str, year: int, month: int,
             for h_idx, col in enumerate(HOUR_COLS_11KV):
                 val = row[col] if col < len(row) else ''
                 mw  = _safe_float(val)
+                fault_code = None
                 if mw is None:
                     mw = 0.0        # non-numeric (blank, fault code, etc.) → 0
-                hl_rows.append((feeder, h_idx, round(max(mw, 0.0), 4)))
+                    raw = str(val).strip()
+                    if raw:
+                        fault_code = raw[:32]   # blank cells stay fault_code=None
+                hl_rows.append((feeder, h_idx, round(max(mw, 0.0), 4), fault_code))
 
             variance_val = row[ENERGY_VARIANCE_COL_11KV] if ENERGY_VARIANCE_COL_11KV < len(row) else ''
             variance_mwh = _safe_float(variance_val)
@@ -747,7 +880,7 @@ def sync_11kv_sheet(spreadsheet_id: str, year: int, month: int,
                     )
 
                     rows_to_write = [
-                        (f, h, mw) for f, h, mw in hl_rows
+                        (f, h, mw, fc) for f, h, mw, fc in hl_rows
                         if (f.id, h) not in existing_dso_keys
                     ]
 
@@ -773,15 +906,16 @@ def sync_11kv_sheet(spreadsheet_id: str, year: int, month: int,
                                 hour=h_idx,
                                 load_mw=Decimal(str(mw)),
                                 submission_type='admin_override',
+                                fault_code=fault_code,
                             )
-                            for feeder, h_idx, mw in rows_to_write
+                            for feeder, h_idx, mw, fault_code in rows_to_write
                         ], batch_size=500)
                         rows_written = len(rows_to_write)
                         total_hl += rows_written
 
                         # Update DailyHoursOfSupply for feeders we wrote
                         supply_hrs: dict = {}
-                        for feeder, h_idx, mw in rows_to_write:
+                        for feeder, h_idx, mw, _fault_code in rows_to_write:
                             if mw > 0:
                                 supply_hrs[feeder] = supply_hrs.get(feeder, 0) + 1
                         # Feeders with all-zero/fault hours still get 0 hours recorded

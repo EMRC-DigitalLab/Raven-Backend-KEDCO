@@ -1183,6 +1183,28 @@ class TMOService:
                 'days':        days,
             }
 
+        # Why a feeder had no supply, not just that it didn't — grouped into
+        # a small set of consistent categories (see FAULT_CODE_CATEGORIES;
+        # the source sheet spells the same problem a dozen different ways, so
+        # tallying by raw fault_code text directly would be noise, not
+        # insight). Local import: tmo.sheet_sync imports from tmo.services,
+        # so importing at module level here would be circular.
+        from tmo.sheet_sync import categorize_fault_code
+        fault_category_map: dict = {}
+        for row in (
+            HourlyLoad.objects
+            .filter(
+                feeder_id__in=feeder_ids, date__gte=self.from_date, date__lte=self.to_date,
+                load_mw=0, fault_code__isnull=False,
+            )
+            .exclude(fault_code='')
+            .values('feeder_id', 'fault_code')
+            .annotate(n=Count('id'))
+        ):
+            cat = categorize_fault_code(row['fault_code'])
+            bucket = fault_category_map.setdefault(row['feeder_id'], {})
+            bucket[cat] = bucket.get(cat, 0) + row['n']
+
         feeders = {f.id: f for f in feeder_qs}
 
         # Admin-set segment targets for the period's month (use from_date month)
@@ -1240,6 +1262,8 @@ class TMOService:
             else:
                 min_h = float(feeder.band.minimum_hours) if feeder and feeder.band else 0.0
             c_pct  = _pct(avg_h, min_h) if min_h else 0.0
+            fault_breakdown = fault_category_map.get(fid, {})
+            dominant_fault  = max(fault_breakdown, key=fault_breakdown.get) if fault_breakdown else None
             rows.append({
                 'feeder_id':          str(fid),
                 'feeder_name':        feeder.name if feeder else str(fid),
@@ -1258,6 +1282,8 @@ class TMOService:
                 'status':             _compliance(c_pct),
                 'bucket':             _compliance(c_pct),   # alias used by frontend RAG coloring
                 'is_minigrid':        feeder.is_minigrid if feeder else False,
+                'dominant_fault':     dominant_fault,     # e.g. 'Earth Fault' — most common cause of missed hours
+                'fault_breakdown':    fault_breakdown,    # e.g. {'Earth Fault': 18, 'Maintenance / Disconnect': 4}
             })
 
         # Disambiguate duplicate feeder names by appending the slug
@@ -1271,6 +1297,14 @@ class TMOService:
         compliant = sum(1 for r in rows if r['compliance_pct'] >= 100)
         total     = len(rows)
 
+        # Network-wide fault-category tally — e.g. "of 32 zero-supply
+        # feeders: 12 Earth Fault, 8 Maintenance/Disconnect, ..." — so the
+        # report/AI insight can name actual causes instead of just a count.
+        network_fault_summary: dict = {}
+        for r in rows:
+            for cat, n in r['fault_breakdown'].items():
+                network_fault_summary[cat] = network_fault_summary.get(cat, 0) + n
+
         return {
             'period':  {'from': str(self.from_date), 'to': str(self.to_date)},
             'feeders': rows,
@@ -1278,6 +1312,7 @@ class TMOService:
                 'compliant_feeders':  compliant,
                 'total_feeders':      total,
                 'compliance_rate_pct': round(_pct(compliant, total), 1),
+                'fault_category_summary': network_fault_summary,
             },
             'methodology': METHODOLOGY['supply_compliance'],
         }
