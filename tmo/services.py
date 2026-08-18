@@ -1142,7 +1142,19 @@ class TMOService:
     # ── 4. Supply Compliance ─────────────────────────────────────────────────
 
     def get_supply_compliance(self):
-        feeder_qs  = self._base_feeder_qs()
+        feeder_qs = self._base_feeder_qs()
+        # Minigrids (e.g. HASKE SOLAR) generate their own power and aren't fed
+        # a TCN dispatch target the way grid feeders are — comparing their
+        # supply hours against a fixed daily target (and flagging them as a
+        # "zero-supply failure" needing breaker/transformer diagnostics like a
+        # normal feeder) doesn't make operational sense. Same exclusion
+        # _bulk_feeder_ids() already applies to the grid-supply-accounting
+        # population, for the same underlying reason — confirmed 2026-08-18
+        # this compliance check was still including them by default (only
+        # excluded when segment='MINIGRID' was explicitly requested, which
+        # left them counted in the general/unsegmented view).
+        if not (self.filters.get('segment') or '').upper() == 'MINIGRID':
+            feeder_qs = feeder_qs.exclude(is_minigrid=True)
         feeder_ids = list(feeder_qs.values_list('id', flat=True))
 
         # Computed directly from HourlyLoad, not the DailyHoursOfSupply table —
