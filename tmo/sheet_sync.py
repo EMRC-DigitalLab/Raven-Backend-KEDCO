@@ -202,8 +202,9 @@ FAULT_CODE_CATEGORIES: dict[str, str] = {
     # Emergency disconnect
     'EMERG/DISC': 'Emergency Disconnect', 'EMERG/D': 'Emergency Disconnect',
     'EMG/D': 'Emergency Disconnect', 'EMG': 'Emergency Disconnect', 'EMRG': 'Emergency Disconnect',
-    # Out of service
-    'O/S': 'Out of Service',
+    # Out of supply (not "out of service" — the feeder itself may be fine,
+    # it just has nothing to supply, e.g. upstream constraint)
+    'O/S': 'Out of Supply',
     # Load shedding
     'LS': 'Load Shedding', 'L/S': 'Load Shedding', 'LS/GS': 'Load Shedding', 'L/L': 'Load Shedding',
 }
@@ -242,7 +243,7 @@ _FAULT_FRAGMENT_RULES: list[tuple[str, str]] = [
     ('LOADSHED', 'Load Shedding'),
     ('SHED',     'Load Shedding'),
     ('LS',       'Load Shedding'),
-    ('OOS',      'Out of Service'),
+    ('OOS',      'Out of Supply'),
     ('MTC',      'Maintenance / Disconnect'),
     ('MTN',      'Maintenance / Disconnect'),
     ('MAINT',    'Maintenance / Disconnect'),

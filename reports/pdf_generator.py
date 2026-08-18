@@ -681,11 +681,23 @@ tbody td {
     page-break-after: always;
     background-color: #002050;
     color: #ffffff;
+    position: relative;
+    overflow: hidden;
+    /* Subtle dot-grid texture (evokes a network/grid without needing an
+       image asset) plus two soft glows for depth — kept low-opacity so it
+       reads as texture, not clutter, behind the real content. */
+    background-image:
+        radial-gradient(circle at 88% 8%, rgba(255, 193, 7, 0.10) 0%, transparent 32%),
+        radial-gradient(circle at 8% 92%, rgba(255, 255, 255, 0.06) 0%, transparent 28%),
+        radial-gradient(circle, rgba(255, 255, 255, 0.07) 1px, transparent 1.4px);
+    background-size: 100% 100%, 100% 100%, 26px 26px;
+    background-position: 0 0, 0 0, 0 0;
+    background-repeat: no-repeat, no-repeat, repeat;
 }
 
 .cover-left-accent {
     width: 10px;
-    background-color: rgba(255, 255, 255, 0.25);
+    background-color: #FFC107;
     flex-shrink: 0;
 }
 
@@ -695,15 +707,15 @@ tbody td {
     display: -webkit-flex;
     display: flex;
     flex-direction: column;
+    position: relative;
+    z-index: 1;
 }
 
-/* Top strip: company name left, date right */
+/* Top strip: company name only — the generation date belongs at the
+   bottom next to the period it's describing, not floating alone up here
+   with nothing to give it context. */
 .cover-top-strip {
-    display: -webkit-flex;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 48px;
+    margin-bottom: 40px;
 }
 
 .cover-top-company {
@@ -714,29 +726,11 @@ tbody td {
     opacity: 0.55;
 }
 
-.cover-top-date {
-    font-size: 11px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 2.5px;
-    opacity: 0.55;
-}
-
-/* Logo */
-.cover-logo-wrap {
-    margin-bottom: 52px;
-}
-
-.cover-logo-wrap img {
-    max-height: 150px;
-    max-width: 420px;
-    width: auto;
-}
-
-/* Main title block — takes remaining vertical space */
+/* Title block — natural height now (not flex:1), so the logo below gets
+   real, deliberate centred space instead of the title stretching to fill
+   the whole page. */
 .cover-title-block {
-    -webkit-flex: 1;
-    flex: 1;
+    flex: 0 0 auto;
 }
 
 .cover-eyebrow {
@@ -764,12 +758,35 @@ tbody td {
     color: #FFC107;
 }
 
+.cover-badge {
+    display: -webkit-inline-flex;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 16px;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.20);
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.85);
+    margin-top: 22px;
+    width: fit-content;
+}
+
+.cover-badge svg {
+    width: 14px;
+    height: 14px;
+    color: #FFC107;
+    flex-shrink: 0;
+}
+
 .cover-accent-rule {
     width: 70px;
     height: 5px;
     background-color: #FFC107;
     border-radius: 3px;
-    margin: 28px 0;
+    margin: 24px 0;
 }
 
 .cover-subtitle-text {
@@ -780,6 +797,24 @@ tbody td {
     max-width: 480px;
 }
 
+/* Logo — vertically centred in whatever space is left between the title
+   block and the footer, in real (not grey) colour so it's actually
+   visible against the navy background. */
+.cover-logo-center {
+    flex: 1;
+    display: -webkit-flex;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 60px;
+}
+
+.cover-logo-center img {
+    max-height: 130px;
+    max-width: 360px;
+    width: auto;
+}
+
 /* Bottom footer strip */
 .cover-footer {
     display: -webkit-flex;
@@ -787,7 +822,7 @@ tbody td {
     justify-content: space-between;
     align-items: center;
     padding-top: 20px;
-    margin-top: 40px;
+    margin-top: 24px;
     border-top: 1px solid rgba(255, 255, 255, 0.15);
 }
 
@@ -797,10 +832,20 @@ tbody td {
 }
 
 .cover-footer-period {
+    display: -webkit-inline-flex;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
     font-size: 12px;
     font-weight: 600;
     opacity: 0.6;
     letter-spacing: 1px;
+}
+
+.cover-footer-period svg {
+    width: 13px;
+    height: 13px;
+    flex-shrink: 0;
 }
 
 /* ── Chart placeholder ────────────────────────────────────────────────────── */
@@ -882,6 +927,12 @@ tbody td {
     flex: 1;
 }
 
+.toc-description {
+    font-size: 10px;
+    color: rgba(0, 32, 80, 0.5);
+    margin-top: 2px;
+}
+
 .toc-dots {
     display: none;
 }
@@ -903,6 +954,15 @@ tbody td {
 LANDSCAPE_STYLES = """
 @page {
     size: A4 landscape;
+}
+
+/* Cover/back pages (render_mgmt_cover / render_mgmt_back_page,
+   management_report.py) default to portrait height (297mm) — force them
+   to the actual landscape page height (210mm) instead, or the cover
+   overflows onto a spurious second page. */
+.cover-page {
+    min-height: 210mm !important;
+    height: 210mm !important;
 }
 """
 
@@ -1059,6 +1119,19 @@ def render_cover_page(_data, context):
         f'<div class="cover-subtitle-text">{company_name} &bull; {context.get("report_scope", "")}</div>'
     )
 
+    clock_svg = (
+        '<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">'
+        '<circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2"/>'
+        '<path d="M12 7v5l3 3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>'
+        '</svg>'
+    )
+    calendar_svg = (
+        '<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">'
+        '<rect x="3" y="5" width="18" height="16" rx="2" stroke="currentColor" stroke-width="2"/>'
+        '<path d="M3 9.5h18M8 3v4M16 3v4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>'
+        '</svg>'
+    )
+
     return f"""
     <div class="cover-page">
         <div class="cover-left-accent"></div>
@@ -1067,11 +1140,6 @@ def render_cover_page(_data, context):
 
             <div class="cover-top-strip">
                 <div class="cover-top-company">{company_name}</div>
-                <div class="cover-top-date">{report_date}</div>
-            </div>
-
-            <div class="cover-logo-wrap">
-                <img src="{context.get('logo_gray_url', '')}" alt="Company Logo" />
             </div>
 
             <div class="cover-title-block">
@@ -1082,14 +1150,20 @@ def render_cover_page(_data, context):
                     <span class="cover-main-title-accent">{title_accent}</span>
                 </h1>
 
+                <div class="cover-badge">{clock_svg}<span>Performance Report</span></div>
+
                 <div class="cover-accent-rule"></div>
 
                 {subtitle_html}
             </div>
 
+            <div class="cover-logo-center">
+                <img src="{context.get('logo_url', '')}" alt="Company Logo" />
+            </div>
+
             <div class="cover-footer">
                 <img src="{context.get('footer_logo_url', '')}" alt="Powered by EMRC" />
-                <div class="cover-footer-period">{context.get('period_label', report_date)}</div>
+                <div class="cover-footer-period">{calendar_svg}<span>{context.get('period_label', report_date)}</span></div>
             </div>
 
         </div>
@@ -1105,8 +1179,13 @@ def render_table_of_contents(entries, context, page_number):
 
     Paginates automatically when entries exceed _TOC_MAX_PER_PAGE per page.
     Returns (html, pages_used) so generate_html can track the real page offset.
+
+    Row markup comes from the single shared render_toc_row (management_report.py)
+    — the same function TMO Management Report's TOC uses — so every report's
+    Table of Contents shares one design source, not a copy each.
     """
     import math
+    from reports.management_report import render_toc_row
     chunks = [entries[i:i + _TOC_MAX_PER_PAGE] for i in range(0, max(len(entries), 1), _TOC_MAX_PER_PAGE)]
     pages_html = ""
 
@@ -1115,14 +1194,7 @@ def render_table_of_contents(entries, context, page_number):
         suffix = " (continued)" if chunk_idx > 0 else ""
         rows_html = ""
         for i, entry in enumerate(chunk, start=chunk_idx * _TOC_MAX_PER_PAGE + 1):
-            rows_html += f"""
-        <div class="toc-row">
-            <span class="toc-number">{i:02d}</span>
-            <span class="toc-title">{entry['title']}</span>
-            <span class="toc-dots"></span>
-            <span class="toc-page">{entry['page']}</span>
-        </div>
-            """
+            rows_html += render_toc_row(i, entry['title'], entry['page'])
 
         pages_html += f"""
     <div class="page">
@@ -4047,39 +4119,14 @@ def render_dso_compliance_table(data, context, page_number):
 
 
 def render_back_page(context):
-    """Render the always-last branded back/closing page."""
-    company_name = context.get('company_name', 'KANO ELECTRICITY DISTRIBUTION COMPANY')
-    report_date  = context.get('report_date', '')
-    return f"""
-    <div class="cover-page" style="justify-content: center; align-items: center; text-align: center;">
-        <div class="cover-left-accent"></div>
-        <div class="cover-body" style="justify-content: center; align-items: center;">
-
-            <div class="cover-logo-wrap" style="margin-bottom: 40px;">
-                <img src="{context.get('logo_gray_url', '')}" alt="Company Logo" />
-            </div>
-
-            <div style="margin-bottom: 32px;">
-                <div class="cover-eyebrow" style="text-align:center; margin-bottom: 20px;">End of Report</div>
-                <h2 style="font-size:36px; font-weight:800; color:#ffffff; text-transform:uppercase;
-                            letter-spacing:-0.5px; margin:0 0 8px 0; line-height:1.1;">
-                    {company_name}
-                </h2>
-                <div class="cover-accent-rule" style="margin: 24px auto;"></div>
-                <div style="font-size:13px; color:#ffffff; opacity:0.55; letter-spacing:1.5px;
-                             text-transform:uppercase; font-weight:600;">
-                    {report_date}
-                </div>
-            </div>
-
-            <div style="font-size:11px; color:#ffffff; opacity:0.35; text-transform:uppercase;
-                         letter-spacing:2px; margin-top: 60px;">
-                Powered by RAVEN &mdash; Performance Monitoring Tool
-            </div>
-
-        </div>
-    </div>
+    """Render the always-last branded back/closing page — delegates to the
+    single canonical back page (render_mgmt_back_page in management_report.py),
+    same consolidation as the cover page and TOC. Landscape reports get
+    MANAGEMENT_STYLES injected on demand here since generate_html() only
+    loads it unconditionally for portrait (see mgmt_css in generate_html).
     """
+    from reports.management_report import render_mgmt_back_page
+    return render_mgmt_back_page(context)
 
 
 
@@ -5279,9 +5326,13 @@ class PDFGenerator:
         # Theme — extract with defaults so missing keys never cause KeyErrors
         raw_theme = report_config.get('theme') or {}
         self.theme = {
-            'primary_color': raw_theme.get('primary_color') or '#002050',
-            'accent_color':  raw_theme.get('accent_color')  or 'rgba(0, 32, 80, 0.2)',
-            'text_color':    raw_theme.get('text_color')    or '#002050',
+            # Matches the cover page's navy (#001634 / #001430) — was
+            # #002050 before 2026-08-18, a visibly different, slightly
+            # brighter navy that made the cover and the report body read
+            # as two different brands stitched together.
+            'primary_color': raw_theme.get('primary_color') or '#001634',
+            'accent_color':  raw_theme.get('accent_color')  or 'rgba(0, 22, 52, 0.2)',
+            'text_color':    raw_theme.get('text_color')    or '#001634',
         }
 
         # Determine scope
@@ -5442,15 +5493,17 @@ class PDFGenerator:
         content_sections = [s for s in sections if s.get('section_type') not in ('cover_page', 'table_of_contents')]
 
         # --- Pass 1: render cover (page 1) ---
+        # render_mgmt_cover is the single canonical cover for every
+        # orientation now (2026-08-18) — it picks portrait- or
+        # landscape-proportioned background art itself from
+        # context['orientation']. render_cover_page (the old
+        # landscape-only implementation) is no longer called here, though
+        # it's kept in this module for now rather than deleted outright.
         cover_html = ""
         page_number = 1
         if cover_section:
-            if self.orientation == 'portrait':
-                from reports.management_report import render_mgmt_cover
-                cover_html = render_mgmt_cover(self.context)
-            else:
-                data = self.data_service.get_all_section_data('cover_page', cover_section.get('config', {}))
-                cover_html = self.SECTION_RENDERERS['cover_page'](data, self.context)
+            from reports.management_report import render_mgmt_cover
+            cover_html = render_mgmt_cover(self.context)
             page_number = 2  # TOC is always page 2
 
         toc_page_number = page_number
@@ -5543,6 +5596,25 @@ class PDFGenerator:
 
         orientation_css = PORTRAIT_STYLES if self.orientation == 'portrait' else LANDSCAPE_STYLES
 
+        # render_mgmt_cover() (used for portrait covers, see pass 1 above)
+        # emits HTML built entirely around MANAGEMENT_STYLES class names
+        # (.cover-accent, .cover-badge, .cover-logo-center, .cover-period,
+        # etc.) — none of which exist in BASE_STYLES. Without this, those
+        # classes are simply undefined in the rendered document and every
+        # element using them falls back to raw browser defaults (confirmed
+        # 2026-08-18: an unstyled inline SVG rendered at ~300px instead of
+        # the intended 12px icon, and the "centred" logo wasn't centred at
+        # all — nothing was actually broken in the HTML, the CSS defining
+        # its layout just never made it into the document).
+        # Always included now, not just for portrait — render_back_page
+        # (used for BOTH orientations) also delegates to the shared
+        # render_mgmt_back_page, which depends on these same classes
+        # (.cover-accent, .cover-eyebrow, .cover-rule, .cover-logo-center).
+        # Scoped entirely to .cover-*/.toc-* class names, so it doesn't
+        # collide with anything landscape content pages actually use.
+        from reports.management_report import MANAGEMENT_STYLES
+        mgmt_css = MANAGEMENT_STYLES
+
         html = f"""
         <!DOCTYPE html>
         <html lang="en">
@@ -5553,6 +5625,7 @@ class PDFGenerator:
             <style>
                 {BASE_STYLES}
                 {orientation_css}
+                {mgmt_css}
                 {theme_css}
             </style>
         </head>
