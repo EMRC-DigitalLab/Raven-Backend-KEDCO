@@ -131,7 +131,7 @@ BASE_STYLES = """
 body {
     font-family: -apple-system, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
     background-color: #ffffff;
-    color: #002050;
+    color: #001634;
     font-size: 12px;
     line-height: 1.4;
 }
@@ -260,7 +260,7 @@ body {
 .stat-item .value {
     font-size: 34px;
     font-weight: 700;
-    color: #002050;
+    color: #001634;
 }
 
 /* ── Content Box ─────────────────────────────────────────────────────────── */
@@ -319,7 +319,7 @@ table {
 }
 
 thead {
-    background-color: #002050;
+    background-color: #001634;
 }
 
 thead th {
@@ -360,7 +360,7 @@ tbody td {
 }
 
 .table-container thead {
-    background-color: #002050;
+    background-color: #001634;
 }
 
 
@@ -450,7 +450,7 @@ tbody td {
 .metric-value {
     font-size: 24px;
     font-weight: 700;
-    color: #002050;
+    color: #001634;
     margin-bottom: 4px;
     line-height: 1.1;
     word-break: break-word;
@@ -494,7 +494,7 @@ tbody td {
     font-weight: 700;
     line-height: 1.2;
     text-transform: uppercase;
-    color: #002050;
+    color: #001634;
 }
 
 .reliability-metrics {
@@ -520,7 +520,7 @@ tbody td {
     font-weight: 700;
     line-height: 1;
     margin-bottom: 8px;
-    color: #002050;
+    color: #001634;
 }
 
 .reliability-description {
@@ -551,7 +551,7 @@ tbody td {
 .reliability-kpi-value {
     font-size: 42px;
     font-weight: 700;
-    color: #002050;
+    color: #001634;
     line-height: 1;
     margin-bottom: 10px;
 }
@@ -578,7 +578,7 @@ tbody td {
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 1px;
-    color: #002050;
+    color: #001634;
     margin-bottom: 6px;
 }
 
@@ -625,7 +625,7 @@ tbody td {
 .section-card-title {
     font-size: 15px;
     font-weight: 700;
-    color: #002050;
+    color: #001634;
     line-height: 1.2;
     flex: 1;
 }
@@ -633,7 +633,7 @@ tbody td {
 .section-icon {
     width: 28px;
     height: 28px;
-    background-color: #002050;
+    background-color: #001634;
     border-radius: 50%;
     display: flex;
     align-items: center;
@@ -679,7 +679,7 @@ tbody td {
     flex-direction: row;
     min-height: 210mm;
     page-break-after: always;
-    background-color: #002050;
+    background-color: #001634;
     color: #ffffff;
     position: relative;
     overflow: hidden;
@@ -911,7 +911,7 @@ tbody td {
     flex: 0 0 26px;
     height: 26px;
     border-radius: 50%;
-    background: #002050;
+    background: #001634;
     color: #fff;
     font-size: 11px;
     font-weight: 700;
@@ -923,7 +923,7 @@ tbody td {
 .toc-title {
     font-size: 14px;
     font-weight: 600;
-    color: #002050;
+    color: #001634;
     flex: 1;
 }
 
@@ -940,7 +940,7 @@ tbody td {
 .toc-page {
     font-size: 12px;
     font-weight: 700;
-    color: #002050;
+    color: #001634;
     background: rgba(0, 32, 80, 0.08);
     border-radius: 5px;
     flex: 0 0 34px;
@@ -1358,12 +1358,12 @@ def render_technical_metrics(data, context, page_number, config=None):
                     f'<div style="flex:1;background:rgba(0,32,80,0.07);border-radius:6px;'
                     f'padding:5px 8px;text-align:center;">'
                     f'<div style="font-size:8px;font-weight:700;opacity:0.6;margin-bottom:2px;">33kV</div>'
-                    f'<div style="font-size:10px;font-weight:700;color:#002050;">{data["energy_33kv"]:,.1f} MWh</div>'
+                    f'<div style="font-size:10px;font-weight:700;color:#001634;">{data["energy_33kv"]:,.1f} MWh</div>'
                     f'</div>'
                     f'<div style="flex:1;background:rgba(0,32,80,0.07);border-radius:6px;'
                     f'padding:5px 8px;text-align:center;">'
                     f'<div style="font-size:8px;font-weight:700;opacity:0.6;margin-bottom:2px;">11kV</div>'
-                    f'<div style="font-size:10px;font-weight:700;color:#002050;">{data["energy_11kv"]:,.1f} MWh</div>'
+                    f'<div style="font-size:10px;font-weight:700;color:#001634;">{data["energy_11kv"]:,.1f} MWh</div>'
                     f'</div>'
                     f'</div>'
                     if data.get('energy_33kv') is not None and data.get('energy_11kv') is not None
@@ -1541,7 +1541,7 @@ def render_feeder_performance_table(data, context, page_number):
         if band != current_band:
             current_band = band
             row_strings.append(f"""
-        <tr style="background-color:#002050;">
+        <tr style="background-color:#001634;">
             <td colspan="7" style="
                 font-weight:700;
                 font-size:11px;
@@ -1836,7 +1836,7 @@ def _split_trend_rows(data, key_date, key_value, unit):
 
 def _render_svg_line_chart(
     data_points, value_key, unit,
-    color='#002050', fill='rgba(0,32,80,0.08)',
+    color='#001634', fill='rgba(0,32,80,0.08)',
     prev_data_points=None, curr_label='Current', prev_label='Previous',
 ):
     """
@@ -1967,7 +1967,7 @@ def _render_svg_line_chart(
     )
 
 
-def _render_svg_bar_chart(data_points, value_key, unit, color='#002050'):
+def _render_svg_bar_chart(data_points, value_key, unit, color='#001634'):
     """Generate an inline SVG bar chart. Works in both Playwright and WeasyPrint."""
     items = data_points if isinstance(data_points, list) else []
     if not items:
@@ -2074,15 +2074,15 @@ def _trend_summary_row(values, unit, prev_values=None, prev_label='Prev period')
 <div style="display:flex;gap:0;margin-top:10px;">
   <div style="flex:1;text-align:center;background:#f0f4f8;border-radius:8px;padding:8px 4px;margin-right:8px;">
     <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;opacity:0.6;margin-bottom:3px;">Min</div>
-    <div style="font-size:16px;font-weight:700;color:#002050;">{mn:.2f} <span style="font-size:9px;font-weight:400;">{unit}</span></div>
+    <div style="font-size:16px;font-weight:700;color:#001634;">{mn:.2f} <span style="font-size:9px;font-weight:400;">{unit}</span></div>
   </div>
   <div style="flex:1;text-align:center;background:#f0f4f8;border-radius:8px;padding:8px 4px;margin-right:8px;">
     <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;opacity:0.6;margin-bottom:3px;">Avg</div>
-    <div style="font-size:16px;font-weight:700;color:#002050;">{avg:.2f} <span style="font-size:9px;font-weight:400;">{unit}</span></div>
+    <div style="font-size:16px;font-weight:700;color:#001634;">{avg:.2f} <span style="font-size:9px;font-weight:400;">{unit}</span></div>
   </div>
   <div style="flex:1;text-align:center;background:#f0f4f8;border-radius:8px;padding:8px 4px;margin-right:8px;">
     <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;opacity:0.6;margin-bottom:3px;">Max</div>
-    <div style="font-size:16px;font-weight:700;color:#002050;">{mx:.2f} <span style="font-size:9px;font-weight:400;">{unit}</span></div>
+    <div style="font-size:16px;font-weight:700;color:#001634;">{mx:.2f} <span style="font-size:9px;font-weight:400;">{unit}</span></div>
   </div>
   <div style="flex:1;text-align:center;background:#f0f4f8;border-radius:8px;padding:8px 4px;">
     <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;opacity:0.6;margin-bottom:3px;">Trend</div>
@@ -2948,7 +2948,7 @@ def render_commercial_comparison_summary(data, context, page_number):
         f'<span style="width:7px;height:7px;border-radius:50%;background:{trend_colors.get(label,"#94a3b8")};display:inline-block;flex-shrink:0;"></span>'
         f'<span style="font-size:10px;color:#1e293b;">{label}</span>'
         f'</div>'
-        f'<span style="font-size:11px;font-weight:700;color:#002050;">{count}</span>'
+        f'<span style="font-size:11px;font-weight:700;color:#001634;">{count}</span>'
         f'</div>'
         for label, count in trend_d.items() if count > 0
     )
@@ -2958,12 +2958,12 @@ def render_commercial_comparison_summary(data, context, page_number):
         <div style="background:#f8fafc;border-radius:8px;padding:10px 14px;
                     border:1px solid rgba(0,32,80,0.08);">
             <div style="font-size:7.5px;font-weight:700;text-transform:uppercase;
-                        letter-spacing:1px;color:#002050;opacity:0.55;margin-bottom:7px;">
+                        letter-spacing:1px;color:#001634;opacity:0.55;margin-bottom:7px;">
                 {label}
             </div>
             <div style="font-size:7.5px;font-weight:600;text-transform:uppercase;
                         letter-spacing:0.8px;color:#64748b;margin-bottom:2px;">Current</div>
-            <div style="font-size:15px;font-weight:800;color:#002050;margin-bottom:7px;">
+            <div style="font-size:15px;font-weight:800;color:#001634;margin-bottom:7px;">
                 {prefix}{current_val}
             </div>
             <div style="border-top:1px solid rgba(0,32,80,0.08);padding-top:6px;">
@@ -2989,7 +2989,7 @@ def render_commercial_comparison_summary(data, context, page_number):
             <h1 class="page-title">Consumption Comparison Summary</h1>
 
             <!-- Period header -->
-            <div style="background:#002050;border-radius:8px;padding:10px 16px;
+            <div style="background:#001634;border-radius:8px;padding:10px 16px;
                         margin-bottom:12px;display:flex;align-items:center;gap:14px;">
                 <div style="flex:1;">
                     <div style="font-size:7.5px;font-weight:700;letter-spacing:1px;
@@ -3035,7 +3035,7 @@ def render_commercial_comparison_summary(data, context, page_number):
                 <div style="background:#f8fafc;border-radius:8px;padding:10px 14px;
                             border:1px solid rgba(0,32,80,0.08);">
                     <div style="font-size:7.5px;font-weight:700;text-transform:uppercase;
-                                letter-spacing:1px;color:#002050;opacity:0.55;margin-bottom:7px;">
+                                letter-spacing:1px;color:#001634;opacity:0.55;margin-bottom:7px;">
                         Trend Distribution
                     </div>
                     {trend_badges}
@@ -3116,7 +3116,7 @@ def render_commercial_comparison_insights(data, context, page_number):
 
     aria_badge = """
         <div style="display:inline-flex;align-items:center;gap:8px;
-                    background:#002050;color:#fff;border-radius:8px;
+                    background:#001634;color:#fff;border-radius:8px;
                     padding:6px 14px;margin-bottom:14px;">
             <span style="font-size:13px;font-weight:800;letter-spacing:1px;">ARIA</span>
             <span style="font-size:9px;font-weight:400;opacity:0.75;letter-spacing:0.5px;">
@@ -3161,7 +3161,7 @@ def render_commercial_comparison_insights(data, context, page_number):
             f'<span style="font-size:10.5px;color:#1e293b;line-height:1.5;">{text}</span></div>'
         )
 
-    notable_html = "".join(_bullet(t, '#002050') for t in notable)
+    notable_html = "".join(_bullet(t, '#001634') for t in notable)
     recs_html    = "".join(_bullet(r, '#1a6b3c') for r in recommendations)
 
     watch_rows = "".join(
@@ -3176,7 +3176,7 @@ def render_commercial_comparison_insights(data, context, page_number):
     def _section_label(text):
         return (
             f'<div style="font-size:9px;font-weight:700;text-transform:uppercase;'
-            f'letter-spacing:1px;color:#002050;opacity:0.6;margin-bottom:8px;">{text}</div>'
+            f'letter-spacing:1px;color:#001634;opacity:0.6;margin-bottom:8px;">{text}</div>'
         )
 
     watch_block = f"""
@@ -3227,7 +3227,7 @@ def render_commercial_comparison_insights(data, context, page_number):
             {aria_badge}
 
             <!-- Headline card -->
-            <div style="background:#002050;border-radius:10px;padding:16px 20px;margin-bottom:16px;">
+            <div style="background:#001634;border-radius:10px;padding:16px 20px;margin-bottom:16px;">
                 <div style="font-size:8px;font-weight:700;letter-spacing:1.5px;
                             text-transform:uppercase;color:rgba(255,255,255,0.6);margin-bottom:6px;">
                     Key Finding
@@ -3420,32 +3420,32 @@ def render_segment_compliance_summary(data, context, page_number):
         cards_html += f"""
         <div style="flex:1;background:#f8f9fa;border-radius:12px;padding:16px 18px;
                     margin-right:10px;border:1px solid rgba(0,32,80,0.1);min-width:0;">
-            <div style="font-size:11px;font-weight:700;color:#002050;margin-bottom:10px;
-                        border-bottom:2px solid #002050;padding-bottom:6px;">{name}</div>
+            <div style="font-size:11px;font-weight:700;color:#001634;margin-bottom:10px;
+                        border-bottom:2px solid #001634;padding-bottom:6px;">{name}</div>
             <div style="display:flex;margin-bottom:12px;">
                 <div style="flex:1;text-align:center;">
                     <div style="font-size:8px;font-weight:700;text-transform:uppercase;
                                 opacity:0.5;margin-bottom:3px;">Feeders</div>
-                    <div style="font-size:22px;font-weight:800;color:#002050;">{total}</div>
+                    <div style="font-size:22px;font-weight:800;color:#001634;">{total}</div>
                 </div>
                 <div style="flex:1;text-align:center;">
                     <div style="font-size:8px;font-weight:700;text-transform:uppercase;
                                 opacity:0.5;margin-bottom:3px;">Avg Supply</div>
-                    <div style="font-size:22px;font-weight:800;color:#002050;">{avg_s}
+                    <div style="font-size:22px;font-weight:800;color:#001634;">{avg_s}
                         <span style="font-size:10px;font-weight:400;opacity:0.6;"> hrs</span>
                     </div>
                 </div>
                 <div style="flex:1;text-align:center;">
                     <div style="font-size:8px;font-weight:700;text-transform:uppercase;
                                 opacity:0.5;margin-bottom:3px;">Avg Achieved</div>
-                    <div style="font-size:22px;font-weight:800;color:#002050;">{avg_pct}
+                    <div style="font-size:22px;font-weight:800;color:#001634;">{avg_pct}
                         <span style="font-size:10px;font-weight:400;opacity:0.6;">%</span>
                     </div>
                 </div>
                 <div style="flex:1;text-align:center;">
                     <div style="font-size:8px;font-weight:700;text-transform:uppercase;
                                 opacity:0.5;margin-bottom:3px;">Energy Delivered</div>
-                    <div style="font-size:16px;font-weight:800;color:#002050;">{total_nrg:,.1f}
+                    <div style="font-size:16px;font-weight:800;color:#001634;">{total_nrg:,.1f}
                         <span style="font-size:9px;font-weight:400;opacity:0.6;"> MWh</span>
                     </div>
                 </div>
@@ -3518,7 +3518,7 @@ def render_feeder_segment_compliance(data, context, page_number):
         if seg != current_segment:
             current_segment = seg
             row_strings.append(f"""
-        <tr style="background-color:#002050;">
+        <tr style="background-color:#001634;">
             <td colspan="9" style="font-weight:700;font-size:10px;letter-spacing:1px;
                 text-transform:uppercase;color:#ffffff;padding:6px 10px;">
                 &#9658; {seg}
@@ -3567,7 +3567,7 @@ def render_energy_by_segment_pl(data, context, page_number):
         bars_html += f"""
         <div style="margin-bottom:18px;">
             <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:5px;">
-                <div style="font-size:12px;font-weight:700;color:#002050;">{seg['label']}</div>
+                <div style="font-size:12px;font-weight:700;color:#001634;">{seg['label']}</div>
                 <div style="font-size:11px;font-weight:600;color:{color};">{seg['pct']}%</div>
             </div>
             <div style="background:#eff0f1;border-radius:6px;height:20px;overflow:hidden;">
@@ -3588,7 +3588,7 @@ def render_energy_by_segment_pl(data, context, page_number):
         <div style="flex:1;text-align:center;border-right:1px solid rgba(0,32,80,0.15);">
             <div style="font-size:8px;font-weight:700;text-transform:uppercase;opacity:0.5;margin-bottom:4px;">
                 Total Energy Delivered</div>
-            <div style="font-size:26px;font-weight:800;color:#002050;">{total:,.2f}
+            <div style="font-size:26px;font-weight:800;color:#001634;">{total:,.2f}
                 <span style="font-size:11px;font-weight:400;opacity:0.6;"> MWh</span>
             </div>
         </div>
@@ -3645,7 +3645,7 @@ def render_segment_voltage_energy(data, context, page_number):
         bars_html += f"""
         <div style="margin-bottom:14px;">
             <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
-                <div style="font-size:11px;font-weight:700;color:#002050;">{row['label']}</div>
+                <div style="font-size:11px;font-weight:700;color:#001634;">{row['label']}</div>
                 <div style="font-size:11px;font-weight:600;color:{color};">
                     {row['energy_mwh']:,.2f} MWh &nbsp; ({row['pct']}%)
                 </div>
@@ -3671,7 +3671,7 @@ def render_segment_voltage_energy(data, context, page_number):
         </div>
         <div style="flex:1;background:#f0f4f8;border-radius:10px;padding:14px 16px;">
             <div style="font-size:9px;font-weight:700;text-transform:uppercase;opacity:0.6;margin-bottom:4px;">Grand Total</div>
-            <div style="font-size:22px;font-weight:800;color:#002050;">{total:,.2f}
+            <div style="font-size:22px;font-weight:800;color:#001634;">{total:,.2f}
                 <span style="font-size:10px;font-weight:400;opacity:0.6;"> MWh</span>
             </div>
         </div>
@@ -3714,7 +3714,7 @@ def render_energy_md_nmd_mix(data, context, page_number):
     def _bar(label, target_pct, actual_pct, color):
         return f"""
         <div style="margin-bottom:22px;">
-            <div style="font-size:12px;font-weight:700;color:#002050;margin-bottom:8px;">{label}</div>
+            <div style="font-size:12px;font-weight:700;color:#001634;margin-bottom:8px;">{label}</div>
             <div style="margin-bottom:6px;">
                 <div style="display:flex;justify-content:space-between;font-size:9px;opacity:0.6;margin-bottom:3px;">
                     <span>Target ({target_pct:.0f}%)</span>
@@ -3750,7 +3750,7 @@ def render_energy_md_nmd_mix(data, context, page_number):
             <div style="display:flex;gap:0;margin-bottom:22px;">
                 <div style="flex:1;background:#f0f4f8;border-radius:10px;padding:14px 16px;margin-right:10px;text-align:center;">
                     <div style="font-size:9px;font-weight:700;text-transform:uppercase;opacity:0.5;margin-bottom:4px;">Total Energy</div>
-                    <div style="font-size:24px;font-weight:800;color:#002050;">{total:,.2f}
+                    <div style="font-size:24px;font-weight:800;color:#001634;">{total:,.2f}
                         <span style="font-size:10px;font-weight:400;opacity:0.6;"> MWh</span>
                     </div>
                 </div>
@@ -3933,7 +3933,7 @@ def render_dso_compliance_overview(data, context, page_number):
           stroke-dashoffset="{circumference / 4:.1f}"
           stroke-linecap="round"/>
   <text x="{cx}" y="{cy - 5}" text-anchor="middle" font-size="15" font-weight="700"
-        fill="#002050" font-family="Arial,sans-serif">{pct:.0f}%</text>
+        fill="#001634" font-family="Arial,sans-serif">{pct:.0f}%</text>
   <text x="{cx}" y="{cy + 12}" text-anchor="middle" font-size="9" fill="#888"
         font-family="Arial,sans-serif">Compliant</text>
 </svg>"""
@@ -3963,16 +3963,16 @@ def render_dso_compliance_overview(data, context, page_number):
         return f"""
         <div style="flex:1;background:#f0f4f8;border-radius:12px;padding:16px;margin-right:10px;">
             <div style="font-size:9px;font-weight:700;text-transform:uppercase;
-                        letter-spacing:0.5px;color:#002050;opacity:0.6;margin-bottom:10px;">{title}</div>
+                        letter-spacing:0.5px;color:#001634;opacity:0.6;margin-bottom:10px;">{title}</div>
             <div style="display:flex;justify-content:space-between;margin-bottom:6px;">
                 <span style="font-size:9px;opacity:0.5;">Expected</span>
-                <span style="font-size:10px;font-weight:700;color:#002050;">{expected:,}</span>
+                <span style="font-size:10px;font-weight:700;color:#001634;">{expected:,}</span>
             </div>
             <div style="display:flex;justify-content:space-between;margin-bottom:2px;">
-                <span style="font-size:9px;color:#002050;font-weight:600;">DSO Submitted</span>
-                <span style="font-size:10px;font-weight:700;color:#002050;">{dso_count:,} &nbsp;({dso_pct}%)</span>
+                <span style="font-size:9px;color:#001634;font-weight:600;">DSO Submitted</span>
+                <span style="font-size:10px;font-weight:700;color:#001634;">{dso_count:,} &nbsp;({dso_pct}%)</span>
             </div>
-            {_bar(dso_pct, '#002050')}
+            {_bar(dso_pct, '#001634')}
             <div style="display:flex;justify-content:space-between;margin-top:8px;margin-bottom:2px;">
                 <span style="font-size:9px;color:#8b1a1a;font-weight:600;">Admin Override</span>
                 <span style="font-size:10px;font-weight:700;color:#8b1a1a;">{admin_count:,} &nbsp;({admin_pct}%)</span>
@@ -4005,7 +4005,7 @@ def render_dso_compliance_overview(data, context, page_number):
                 <div style="display:flex;flex:1;gap:0;">
                     <div style="flex:1;background:#f0f4f8;border-radius:12px;padding:16px;text-align:center;margin-right:10px;">
                         <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;opacity:0.6;margin-bottom:6px;">Total Stations</div>
-                        <div style="font-size:30px;font-weight:700;color:#002050;">{total}</div>
+                        <div style="font-size:30px;font-weight:700;color:#001634;">{total}</div>
                         <div style="font-size:9px;opacity:0.5;">with 11kV feeders</div>
                     </div>
                     <div style="flex:1;background:#e8f5e9;border-radius:12px;padding:16px;text-align:center;margin-right:10px;">
@@ -4022,7 +4022,7 @@ def render_dso_compliance_overview(data, context, page_number):
             </div>
 
             <!-- Row 2: Submission breakdown cards -->
-            <div style="font-size:11px;font-weight:600;color:#002050;margin-bottom:8px;">
+            <div style="font-size:11px;font-weight:600;color:#001634;margin-bottom:8px;">
                 Network-Wide Submission Summary
             </div>
             <div style="display:flex;margin-bottom:16px;">
@@ -4260,7 +4260,7 @@ def _tmo_compliance(pct):
 def _tmo_banner(title, eyebrow, ach_pct, status):
     col = _ach_color(ach_pct)
     return (
-        f'<div style="background:linear-gradient(135deg,#1565C0 0%,#0D47A1 100%);'
+        f'<div style="background:linear-gradient(135deg,#001634 0%,#001430 100%);'
         f'border-radius:10px;padding:11px 18px;margin-bottom:10px;'
         f'display:flex;justify-content:space-between;align-items:center;">'
         f'<div>'
@@ -4280,7 +4280,7 @@ def _tmo_banner(title, eyebrow, ach_pct, status):
     )
 
 
-def _tmo_kpi(label, value, color='#1565C0', bg='#f0f4f8', accent=None):
+def _tmo_kpi(label, value, color='#001634', bg='#f0f4f8', accent=None):
     # accent param kept (not removed) so any old call sites passing it don't
     # break, but the colored left-border it used to draw is gone everywhere —
     # no card in the TMO report should carry that line.
@@ -4567,7 +4567,7 @@ def _be_gauge_svg(pct, center_label, sub_label, size=170):
         f' transform="rotate(-90 {cx} {cy})"/>'
         # Percentage text
         f'<text x="{cx}" y="{cy-6}" text-anchor="middle"'
-        f' font-size="20" font-weight="800" fill="#002050"'
+        f' font-size="20" font-weight="800" fill="#001634"'
         f' font-family="Arial,sans-serif">{pct:.1f}%</text>'
         # Label
         f'<text x="{cx}" y="{cy+12}" text-anchor="middle"'
@@ -4607,9 +4607,9 @@ def render_tmo_billing_efficiency(data, context, page_number):
         f'{be_gauge}'
         f'<div style="margin-top:6px;">'
         f'<div style="font-size:9px;color:#666;">Delivered: '
-        f'<strong style="color:#002050;">{tot_del:,.3f} GWh</strong></div>'
+        f'<strong style="color:#001634;">{tot_del:,.3f} GWh</strong></div>'
         f'<div style="font-size:9px;color:#666;">Billed: '
-        f'<strong style="color:#002050;">{tot_bil:,.3f} GWh</strong></div>'
+        f'<strong style="color:#001634;">{tot_bil:,.3f} GWh</strong></div>'
         f'</div>'
         f'<div style="margin-top:6px;">{_status_badge(be_status)}</div>'
         f'</div>'
@@ -4622,16 +4622,16 @@ def render_tmo_billing_efficiency(data, context, page_number):
         f'{fbe_gauge}'
         f'<div style="margin-top:6px;">'
         f'<div style="font-size:9px;color:#666;">Target Rev: '
-        f'<strong style="color:#002050;">&#8358;{tot_trev/1e6:,.1f}M</strong></div>'
+        f'<strong style="color:#001634;">&#8358;{tot_trev/1e6:,.1f}M</strong></div>'
         f'<div style="font-size:9px;color:#666;">Billed Rev: '
-        f'<strong style="color:#002050;">&#8358;{tot_brev/1e6:,.1f}M</strong></div>'
+        f'<strong style="color:#001634;">&#8358;{tot_brev/1e6:,.1f}M</strong></div>'
         f'</div>'
         f'<div style="margin-top:6px;">{_status_badge(re_status)}</div>'
         f'</div>'
 
         # ── Right KPI column ──
         f'<div style="flex:1;display:flex;flex-direction:column;">'
-        f'<div style="background:#1565C0;border-radius:10px;padding:13px 15px;margin-bottom:8px;flex:1;">'
+        f'<div style="background:#001634;border-radius:10px;padding:13px 15px;margin-bottom:8px;flex:1;">'
         f'<div style="color:rgba(255,255,255,0.65);font-size:7px;font-weight:700;'
         f'text-transform:uppercase;margin-bottom:3px;">Energy Delivered</div>'
         f'<div style="color:#FFC107;font-size:22px;font-weight:800;">{tot_del:,.2f}'
@@ -4639,12 +4639,12 @@ def render_tmo_billing_efficiency(data, context, page_number):
         f'</div>'
         f'<div style="background:#f0f4f8;border-radius:10px;padding:13px 15px;margin-bottom:8px;flex:1;">'
         f'<div style="color:#999;font-size:7px;font-weight:700;text-transform:uppercase;margin-bottom:3px;">Energy Billed</div>'
-        f'<div style="color:#002050;font-size:22px;font-weight:800;">{tot_bil:,.2f}'
+        f'<div style="color:#001634;font-size:22px;font-weight:800;">{tot_bil:,.2f}'
         f'<span style="font-size:11px;color:#aaa;margin-left:3px;">GWh</span></div>'
         f'</div>'
         f'<div style="background:#f0f4f8;border-radius:10px;padding:13px 15px;flex:1;">'
         f'<div style="color:#999;font-size:7px;font-weight:700;text-transform:uppercase;margin-bottom:3px;">Target Revenue</div>'
-        f'<div style="color:#002050;font-size:18px;font-weight:800;">&#8358;{tot_trev/1e6:,.1f}M</div>'
+        f'<div style="color:#001634;font-size:18px;font-weight:800;">&#8358;{tot_trev/1e6:,.1f}M</div>'
         f'<div style="color:#888;font-size:9px;margin-top:3px;">Billed: &#8358;{tot_brev/1e6:,.1f}M</div>'
         f'</div>'
         f'</div>'
@@ -4746,16 +4746,16 @@ def _tmo_insight_card(insights):
     <div style="background:#f8fafc;border:1px solid #e2e8f0;
                 border-radius:8px;padding:10px 14px;margin-top:10px;">
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
-            <span style="background:#002050;color:#fff;font-size:9px;font-weight:800;
+            <span style="background:#001634;color:#fff;font-size:9px;font-weight:800;
                         letter-spacing:1px;border-radius:5px;padding:2px 8px;">ARIA</span>
-            <span style="font-size:10px;font-weight:700;color:#002050;">{headline}</span>
+            <span style="font-size:10px;font-weight:700;color:#001634;">{headline}</span>
         </div>
         <div style="font-size:9.5px;color:#475569;line-height:1.5;margin-bottom:8px;">{summary}</div>
         <div style="display:flex;gap:18px;">
             <div style="flex:1;">
                 <div style="font-size:7.5px;font-weight:700;text-transform:uppercase;
                             letter-spacing:0.5px;color:#94a3b8;margin-bottom:4px;">Key Observations</div>
-                {_bullets(obs, '#002050')}
+                {_bullets(obs, '#001634')}
             </div>
             <div style="flex:1;">
                 <div style="font-size:7.5px;font-weight:700;text-transform:uppercase;
@@ -4772,7 +4772,7 @@ def _tmo_section_title(title, eyebrow=''):
         f'<div style="margin-bottom:8px;">'
         + (f'<div style="color:#94a3b8;font-size:8px;font-weight:700;letter-spacing:2px;'
            f'text-transform:uppercase;margin-bottom:2px;">{eyebrow}</div>' if eyebrow else '')
-        + f'<div style="color:#0D47A1;font-size:15px;font-weight:800;">{title}</div>'
+        + f'<div style="color:#001430;font-size:15px;font-weight:800;">{title}</div>'
         f'</div>'
     )
 
@@ -4884,7 +4884,7 @@ def render_tmo_pnl_deficit(data, context, page_number):
             f'<rect x="{LW}" y="{y}" width="{c_w}" height="{RH}" fill="#15803d" rx="3"/>'
             f'<rect x="{LW+c_w}" y="{y}" width="{g_w}" height="{RH}" fill="#ef4444" rx="3"/>'
             f'<line x1="{LW+round(BW*target/max_target)}" y1="{y-3}" x2="{LW+round(BW*target/max_target)}" y2="{y+RH+3}"'
-            f' stroke="#0D47A1" stroke-width="2" stroke-dasharray="2,2"/>'
+            f' stroke="#001430" stroke-width="2" stroke-dasharray="2,2"/>'
             f'<text x="{LW+c_w+g_w+6}" y="{y+RH/2+4}" font-size="9" fill="#666"'
             f' font-family="Arial,sans-serif">{target:,.1f} GWh target</text>'
         )
@@ -4894,7 +4894,7 @@ def render_tmo_pnl_deficit(data, context, page_number):
         f'<text x="{LW+16}" y="{legend_y+9}" font-size="8" fill="#666" font-family="Arial,sans-serif">Consumed</text>'
         f'<rect x="{LW+80}" y="{legend_y}" width="12" height="9" fill="#ef4444" rx="2"/>'
         f'<text x="{LW+96}" y="{legend_y+9}" font-size="8" fill="#666" font-family="Arial,sans-serif">Gap</text>'
-        f'<line x1="{LW+140}" y1="{legend_y+4}" x2="{LW+156}" y2="{legend_y+4}" stroke="#0D47A1"'
+        f'<line x1="{LW+140}" y1="{legend_y+4}" x2="{LW+156}" y2="{legend_y+4}" stroke="#001430"'
         f' stroke-width="2" stroke-dasharray="2,2"/>'
         f'<text x="{LW+160}" y="{legend_y+9}" font-size="8" fill="#666" font-family="Arial,sans-serif">Target</text>'
     )
@@ -4930,7 +4930,7 @@ def render_tmo_energy_pnl_donut(data, context, page_number):
         rows_html = ''.join(
             f"<tr><td>{s.get('segment')}</td>"
             f"<td style='text-align:right'>{s.get('energy_gwh',0):,.2f} GWh</td>"
-            f"<td style='text-align:right;font-weight:700;color:#1565C0'>{s.get('pct',0):.1f}%</td></tr>"
+            f"<td style='text-align:right;font-weight:700;color:#001634'>{s.get('pct',0):.1f}%</td></tr>"
             for s in segs
         )
         flex_style = 'flex:1;margin-right:10px;' if grow else ''
@@ -5326,10 +5326,10 @@ class PDFGenerator:
         # Theme — extract with defaults so missing keys never cause KeyErrors
         raw_theme = report_config.get('theme') or {}
         self.theme = {
-            # Matches the cover page's navy (#001634 / #001430) — was
-            # #002050 before 2026-08-18, a visibly different, slightly
-            # brighter navy that made the cover and the report body read
-            # as two different brands stitched together.
+            # Matches the cover page's navy (#001634 / #001430) — old
+            # navy/blue tones (#002050, #1565C0, #0D47A1) made the cover
+            # and the report body read as two different brands stitched
+            # together, confirmed 2026-08-18 from a real screenshot.
             'primary_color': raw_theme.get('primary_color') or '#001634',
             'accent_color':  raw_theme.get('accent_color')  or 'rgba(0, 22, 52, 0.2)',
             'text_color':    raw_theme.get('text_color')    or '#001634',
