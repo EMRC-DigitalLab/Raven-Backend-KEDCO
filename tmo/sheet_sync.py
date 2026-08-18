@@ -153,16 +153,6 @@ SUMMARY_ROW_LABELS = {
     'VARIANCE':                       'variance',
 }
 
-FAULT_PREFIXES = (
-    'OC', 'E/', 'LS', 'L/', 'EMG', 'EMRG', 'L/S', 'L/L', 'ON ',
-    # confirmed 2026-08-17: CB/F (breaker fault) and TR/F, T/F (transformer
-    # fault) codes were falling through _safe_float() as unrecognised strings
-    # and getting silently SKIPPED (no HourlyLoad row at all) instead of
-    # recorded as 0 MW — e.g. IDH showed "CB/F" for all 24 hours on the 16th
-    # and ended up with zero HourlyLoad rows for that day, not a 0-value one.
-    'CB/F', 'TR/F', 'T/F',
-)
-
 NAME_MAP = {
     "DAN'AGUNDI 1":           "DAN AGUNDI 1",
     "DAN'AGUNDI 2":           "DAN AGUNDI 2",
@@ -198,16 +188,6 @@ def _is_blank(val):
         return True
     s = str(val).strip().upper()
     return not s or s == 'NAN'
-
-
-def _is_explicit_fault(val):
-    """True for explicit fault/outage/load-shed code strings (e.g. OC/EF, LS/GS)."""
-    if val is None:
-        return False
-    s = str(val).strip().upper()
-    if not s or s == 'NAN':
-        return False
-    return any(s.startswith(p) for p in FAULT_PREFIXES)
 
 
 def _sheet_day(name):
@@ -350,12 +330,22 @@ def sync_33kv_sheet(spreadsheet_id: str, year: int, month: int,
                 val = df.iloc[r, col]
                 if _is_blank(val):
                     continue                 # genuinely no data — skip
-                if _is_explicit_fault(val):
-                    mw = 0.0                # feeder on fault/outage = 0 MW
-                else:
-                    mw = _safe_float(val)
-                    if mw is None:
-                        continue            # unrecognised string — skip
+                mw = _safe_float(val)
+                if mw is None:
+                    # Any non-blank, non-numeric cell is a fault/outage/
+                    # maintenance/disconnect code — the sheet uses dozens of
+                    # ad hoc abbreviations for this (EF, O/C, TR2/F,
+                    # MTC/DISC, DISCO MAINT, EMERG/DISC, ...) and new
+                    # variants keep appearing. Rather than whack-a-moling a
+                    # literal whitelist (confirmed 2026-08-18: 27 distinct
+                    # unrecognised codes across just one month, effectively
+                    # all fault/maintenance-related), treat any such value
+                    # as 0 MW so the feeder still gets a real HourlyLoad row
+                    # instead of that hour being silently dropped — this was
+                    # producing full-day gaps for feeders like NB CERAMIC
+                    # (TR2/F all day) and partial gaps for many others
+                    # (O/C, EF) that FAULT_PREFIXES didn't happen to cover.
+                    mw = 0.0
                 hl_rows.append((feeder, h_idx, round(max(mw, 0.0), 4)))
 
         # ── Dispatch rows ────────────────────────────────────────────────────

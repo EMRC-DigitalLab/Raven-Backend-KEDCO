@@ -5330,7 +5330,13 @@ class PDFGenerator:
         """
         try:
             from analytics.services.report_insights import get_report_insights
-            period_label = self.context.get('report_date', '')
+            # NOT report_date — that's always today's real generation date.
+            # period_label is the actual selected data period; using
+            # report_date here fed the AI prompt the wrong date, causing it
+            # to write "As of <today>" even when the underlying data was for
+            # a different, earlier period (e.g. yesterday's compliance
+            # numbers labelled with today's date) — confirmed 2026-08-18.
+            period_label = self.context.get('period_label', '')
             result = get_report_insights(
                 sections_data=[{'section_type': section_type, 'data': data}],
                 period_label=period_label,
