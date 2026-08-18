@@ -197,6 +197,20 @@ class HourlyLoad(UUIDModel, models.Model):
         blank=True,
         help_text="The actual datetime the DSO submitted this record in DataNest"
     )
+    fault_code = models.CharField(
+        max_length=32,
+        null=True,
+        blank=True,
+        help_text=(
+            "Raw fault/outage/maintenance code exactly as written in the source "
+            "sheet when load_mw=0 was derived from a non-numeric cell (e.g. "
+            "'EF', 'O/C', 'TR2/F', 'MTC/DISC') — never normalised at write time, "
+            "since the source is inconsistent about spelling. Only populated for "
+            "sheet-derived (admin_override) rows; DataNest (dso) doesn't supply "
+            "a reason with its zeros. See tmo.sheet_sync.FAULT_CODE_CATEGORIES "
+            "for the read-time normalisation used to group these for reporting."
+        ),
+    )
 
     class Meta:
         unique_together = ('feeder', 'date', 'hour')

@@ -5129,20 +5129,27 @@ def render_tmo_supply_hours(data, context, page_number):
     page1 = _tmo_page(context, page_number, overview_body)
 
     hdr = (
-        '<colgroup><col style="width:24%"><col style="width:13%"><col style="width:16%">'
-        '<col style="width:16%"><col style="width:8%"><col style="width:11%">'
-        '<col style="width:11%"><col style="width:11%"></colgroup>'
+        '<colgroup><col style="width:18%"><col style="width:8%"><col style="width:11%">'
+        '<col style="width:11%"><col style="width:6%"><col style="width:9%">'
+        '<col style="width:9%"><col style="width:9%"><col style="width:19%"></colgroup>'
         '<thead><tr>'
         '<th>Feeder</th><th>Voltage</th><th>Segment</th><th>District</th><th>Band</th>'
         '<th style="text-align:right">Target Hrs</th>'
         '<th style="text-align:right">Actual Hrs</th>'
         '<th style="text-align:right">Gap</th>'
+        '<th>Cause</th>'
         '</tr></thead>'
     )
     rows = []
     for f in feeders:
         gap = f.get('gap_hours', 0)
         gap_col = '#15803d' if gap >= 0 else '#ef4444'
+        # Only meaningful for a real shortfall (gap < 0) — a feeder that met
+        # or exceeded its target can still have had an isolated bad hour
+        # (dominant_fault would be set from that single hour), but showing
+        # a "cause" next to a positive gap reads as contradictory: it wasn't
+        # actually short, so there's nothing to explain.
+        cause = f.get('dominant_fault') or '—' if gap < 0 else '—'
         rows.append(
             f"<tr><td>{f.get('feeder_name','—')}</td>"
             f"<td>{f.get('voltage_level','').upper()}</td>"
@@ -5151,7 +5158,8 @@ def render_tmo_supply_hours(data, context, page_number):
             f"<td>{f.get('band','—')}</td>"
             f"<td style='text-align:right'>{f.get('band_minimum_hours',0):.2f}</td>"
             f"<td style='text-align:right'>{f.get('avg_daily_hours',0):.2f}</td>"
-            f"<td style='text-align:right;font-weight:700;color:{gap_col}'>{gap:+.1f}</td></tr>"
+            f"<td style='text-align:right;font-weight:700;color:{gap_col}'>{gap:+.1f}</td>"
+            f"<td>{cause}</td></tr>"
         )
     # Row cap is tuned to the physical page height, not a fixed number —
     # portrait (297mm tall) has ~40% more vertical room than landscape
