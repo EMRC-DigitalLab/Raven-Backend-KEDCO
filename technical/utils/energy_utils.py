@@ -23,7 +23,7 @@ from django.db import connection
 from django.db.models import Avg, Count, Max, Q, Sum
 from django.utils import timezone
 
-from common.models import Feeder
+from common.models import Feeder, FeederSupplyRelationship
 from technical.models import EnergyDelivered, HourlyLoad
 
 # Feeders confirmed against TCN's own ground-truth workbook to have a
@@ -51,6 +51,47 @@ CONFIRMED_ZERO_TRUSTED_SLUGS = ['KS-KAN-MUS', 'KN-KUM-RIJ', 'KN-KUM-SPA', 'KN-DA
 #   to be ~3× larger than the sum of daily queries.  Using MAX ensures the same
 #   feeder classification regardless of the date range queried.
 DAILY_BALLOON_LIMIT = 500.0
+
+
+def _children_in_scope_map(feeder_ids):
+    """{parent_feeder_id: [child_feeder_id, ...]} for 33kV→11kV supply
+    relationships where BOTH the parent and the child are inside the
+    caller's own feeder_ids — i.e. only when double-counting is actually
+    possible for THIS specific query.
+
+    Why scoped this way instead of a fixed network-wide topology (which is
+    what tmo.services.TMOService._segment_topology() builds): a caller that
+    queries 33kV feeders only, or a single feeder's own detail page, has no
+    double-counting risk in the first place — subtracting children that
+    aren't even part of what was asked for would silently shrink a total
+    the caller explicitly wanted as a raw sum. Only a query that mixes both
+    voltage levels together (a Band, District, or State total with no
+    voltage_level filter — exactly where this bug was found 2026-08-19)
+    actually needs netting, and this function naturally does nothing for
+    every other case since neither side of a relationship would be in
+    scope.
+
+    Deliberately does NOT reuse TMOService._segment_topology() — that
+    layers in a long list of TCN-SUMIF-specific corrections (confirmed
+    subtracted/never-subtracted child slugs, minigrid exclusion, duplicate
+    slug exclusion, etc.) that exist to match TCN's own reporting quirks,
+    not physical reality. Technical's own reporting wants the real,
+    unmodified supply topology — a feeder that physically feeds another is
+    embedded in its reading regardless of how TCN chooses to report it.
+    """
+    feeder_id_set = set(feeder_ids)
+    children_by_parent = {}
+    for supplier_id, supplied_id in (
+        FeederSupplyRelationship.objects
+        .filter(
+            supplier_feeder_id__in=feeder_id_set,
+            supplied_feeder_id__in=feeder_id_set,
+            status='active',
+        )
+        .values_list('supplier_feeder_id', 'supplied_feeder_id')
+    ):
+        children_by_parent.setdefault(supplier_id, []).append(supplied_id)
+    return children_by_parent
 
 
 def calculate_energy_delivered(feeder_ids, from_date, to_date):
@@ -140,6 +181,23 @@ def calculate_energy_delivered(feeder_ids, from_date, to_date):
             supply_hours = int(row['supply_hours'] or 0)
             system_by_feeder[fid] = avg_load * supply_hours
 
+    # ── Step 3: net out double-counted downstream 11kV children ──────────────
+    # A 33kV parent's own reading already embeds any in-scope 11kV child (the
+    # parent's meter measures everything flowing through it, including what
+    # the child later re-meters on its own line) — only matters when both
+    # were requested together (e.g. an unfiltered Band/District/State total),
+    # see _children_in_scope_map(). No floor at zero, matching TMO's own
+    # confirmed methodology (tmo/services.py _segment_voltage_daily_map).
+    children_map = _children_in_scope_map(feeder_ids)
+    if children_map:
+        def _value_of(fid):
+            return ed_by_feeder.get(fid, system_by_feeder.get(fid, 0.0))
+
+        for parent_id, child_ids in children_map.items():
+            if parent_id not in ed_by_feeder:
+                continue
+            ed_by_feeder[parent_id] -= sum(_value_of(cid) for cid in child_ids)
+
     total_mwh = sum(ed_by_feeder.values()) + sum(system_by_feeder.values())
 
     return {
@@ -209,6 +267,17 @@ def calculate_energy_delivered_per_feeder(feeder_ids, from_date, to_date):
         for row in hl_records:
             fid = row['feeder_id']
             system_by_feeder[fid] = float(row['avg_load'] or 0) * int(row['supply_hours'] or 0)
+
+    # See calculate_energy_delivered() Step 3 for why this netting exists.
+    children_map = _children_in_scope_map(feeder_ids)
+    if children_map:
+        def _value_of(fid):
+            return ed_by_feeder.get(fid, system_by_feeder.get(fid, 0.0))
+
+        for parent_id, child_ids in children_map.items():
+            if parent_id not in ed_by_feeder:
+                continue
+            ed_by_feeder[parent_id] -= sum(_value_of(cid) for cid in child_ids)
 
     result = {}
     for fid, mwh in ed_by_feeder.items():
