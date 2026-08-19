@@ -143,7 +143,11 @@ CHILD_ZERO_ENERGY_SLUGS = {'asian-plastic'}
 # parent's own NET value is kept out of every segment total here, matching
 # TCN's own classification gap instead of forcing it into a segment TCN
 # itself doesn't put it in.
-PARENT_UNCLASSIFIED_BY_TCN_SLUGS = {'KN-KUM-SHA'}  # Sharada Bata
+PARENT_UNCLASSIFIED_BY_TCN_SLUGS = {
+    'KN-KUM-SHA',   # Sharada Bata
+    'KN-DAN-DAN2',  # Dan Agundi 2 — express feeder, no TCN segment tag; children (City, Kofar Naisa) stay classified normally
+    'KN-TAM2-MET',  # Metro — express feeder, no TCN segment tag, no children, zero own energy
+}
 
 # Feeders that have NO real EnergyDelivered data of their own (never synced —
 # not "broken meter", genuinely nothing to sync) AND whose own row in TCN's
