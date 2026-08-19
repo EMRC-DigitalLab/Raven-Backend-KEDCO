@@ -8,7 +8,7 @@ from django.utils import timezone
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from common.models import Feeder
+from common.models import Feeder, FeederSupplyRelationship
 from technical.constants import TURNAROUND_EXCLUSIONS
 from technical.models import FeederInterruption, HourlyLoad
 from technical.utils.energy_utils import calculate_energy_delivered_per_feeder
@@ -342,7 +342,98 @@ def _bulk_interruption_metrics(feeder_ids, from_date, to_date, exclude_types=Non
     return result
 
 
-def get_feeder_availability_summary_optimized(from_date, to_date, mode, state=None, business_district=None, voltage_level=None, interruption_category=None):
+def _build_feeder_row(feeder, mode, from_date, to_date, supply_map, interrupt_map, turnaround_map, ongoing_map, energy_map):
+    fid = feeder.id
+    in_supply_map = fid in supply_map
+    avg_supply = round(min(supply_map.get(fid, 0.0), 24.0), 2)
+    avg_duration = round(24.0 - avg_supply, 2)
+    _, ftc = interrupt_map.get(fid, (0.0, 0))
+    turnaround, _ = turnaround_map.get(fid, (0.0, 0))
+
+    band = feeder.band
+    target_hours = BAND_TARGET_HOURS.get(band.slug, float(band.target_hours_per_day) if hasattr(band, 'target_hours_per_day') else 0.0) if band else 0.0
+    band_info = {
+        'slug': band.slug,
+        'name': band.name,
+        'target_hours_per_day': target_hours,
+    } if band else None
+
+    energy_rec = energy_map.get(fid)
+    return {
+        "feeder_name": feeder.name,
+        "feeder_slug": feeder.slug,
+        "voltage_level": feeder.voltage_level,
+        "substation_name": feeder.substation.name if feeder.substation else "",
+        "avg_hours_of_supply": avg_supply,
+        "duration_of_interruptions": avg_duration,
+        "turnaround_time": round(min(turnaround, 24.0), 2),
+        "ftc": ftc,
+        "energy_delivered": {
+            "mwh": energy_rec['mwh'] if energy_rec else 0.0,
+            "source": energy_rec['source'] if energy_rec else "no_data",
+        },
+        "band": band_info,
+        "compliance_status": compliance_status(avg_supply, in_supply_map, target_hours) if band else "no_band",
+        "ongoing_interruption": build_ongoing_interruption(fid, ongoing_map, target_hours, from_date, to_date),
+        "_band_order": BAND_ORDER.get(band.slug, 99) if band else 99,
+        "_feeder_name": feeder.name,
+        "_source": f"bulk_sql_{mode}",
+    }
+
+
+def _attach_children(row_by_fid, parent_ids, from_date, to_date, mode):
+    """
+    Attach a "children" array (downstream 11kV feeders, via active
+    FeederSupplyRelationship rows) to each parent's row dict, in-place.
+
+    Most 33kV feeders have no metered downstream child in this table — that's
+    the normal case, not a gap to fix here, so a parent simply gets no
+    "children" key (and no "own_trunk_mwh") rather than an empty placeholder.
+    """
+    rel_rows = (
+        FeederSupplyRelationship.objects
+        .filter(supplier_feeder_id__in=parent_ids, status='active')
+        .values_list('supplier_feeder_id', 'supplied_feeder_id')
+    )
+    children_by_parent = {}
+    child_ids = set()
+    for parent_id, child_id in rel_rows:
+        children_by_parent.setdefault(parent_id, []).append(child_id)
+        child_ids.add(child_id)
+
+    if not child_ids:
+        return
+
+    child_ids = list(child_ids)
+    children_feeders = {
+        f.id: f for f in
+        Feeder.objects.filter(id__in=child_ids).select_related('business_district__state', 'substation', 'band')
+    }
+
+    c_supply_map = _bulk_supply_hours(child_ids, from_date, to_date)
+    c_interrupt_map = _bulk_interruption_metrics(child_ids, from_date, to_date)
+    c_turnaround_map = _bulk_interruption_metrics(child_ids, from_date, to_date, exclude_types=list(TURNAROUND_EXCLUSIONS))
+    c_ongoing_map = bulk_ongoing_interruptions(child_ids)
+    c_energy_map = calculate_energy_delivered_per_feeder(child_ids, from_date, to_date)
+
+    child_rows = {
+        cid: _build_feeder_row(cfeeder, mode, from_date, to_date, c_supply_map, c_interrupt_map, c_turnaround_map, c_ongoing_map, c_energy_map)
+        for cid, cfeeder in children_feeders.items()
+    }
+
+    for parent_id, kid_ids in children_by_parent.items():
+        parent_row = row_by_fid.get(parent_id)
+        if not parent_row:
+            continue
+        kid_rows = [child_rows[cid] for cid in kid_ids if cid in child_rows]
+        if not kid_rows:
+            continue
+        children_mwh_total = sum(k['energy_delivered']['mwh'] for k in kid_rows)
+        parent_row['own_trunk_mwh'] = round(parent_row['energy_delivered']['mwh'] - children_mwh_total, 2)
+        parent_row['children'] = kid_rows
+
+
+def get_feeder_availability_summary_optimized(from_date, to_date, mode, state=None, business_district=None, voltage_level=None, interruption_category=None, include_children=False):
     """
     HIGH-PERFORMANCE feeder availability summary.
 
@@ -354,6 +445,10 @@ def get_feeder_availability_summary_optimized(from_date, to_date, mode, state=No
     interruption_category: optional — 'load_shedding' | 'transmission' | 'disco'
         When set, only feeders that had an interruption of that category in the
         period are returned (used by the ?interruption_type= filter on feeders/all/).
+
+    include_children: optional — when True, each parent feeder's row gets a
+        "children" array of its downstream 11kV feeders (own_trunk_mwh too).
+        Off by default since it costs a handful of extra bulk queries.
     """
     today = timezone.now().date()
     if from_date > today:
@@ -395,44 +490,14 @@ def get_feeder_availability_summary_optimized(from_date, to_date, mode, state=No
     # ────────────────────────────────────────────────────────────────────────
 
     result = []
+    row_by_fid = {}
     for feeder in feeders:
-        fid = feeder.id
-        in_supply_map = fid in supply_map
-        avg_supply = round(min(supply_map.get(fid, 0.0), 24.0), 2)
-        avg_duration = round(24.0 - avg_supply, 2)
-        _, ftc = interrupt_map.get(fid, (0.0, 0))
-        turnaround, _ = turnaround_map.get(fid, (0.0, 0))
+        row = _build_feeder_row(feeder, mode, from_date, to_date, supply_map, interrupt_map, turnaround_map, ongoing_map, energy_map)
+        result.append(row)
+        row_by_fid[feeder.id] = row
 
-        # Band
-        band = feeder.band
-        target_hours = BAND_TARGET_HOURS.get(band.slug, float(band.target_hours_per_day) if hasattr(band, 'target_hours_per_day') else 0.0) if band else 0.0
-        band_info = {
-            'slug': band.slug,
-            'name': band.name,
-            'target_hours_per_day': target_hours,
-        } if band else None
-
-        energy_rec = energy_map.get(fid)
-        result.append({
-            "feeder_name": feeder.name,
-            "feeder_slug": feeder.slug,
-            "voltage_level": feeder.voltage_level,
-            "substation_name": feeder.substation.name if feeder.substation else "",
-            "avg_hours_of_supply": avg_supply,
-            "duration_of_interruptions": avg_duration,
-            "turnaround_time": round(min(turnaround, 24.0), 2),
-            "ftc": ftc,
-            "energy_delivered": {
-                "mwh": energy_rec['mwh'] if energy_rec else 0.0,
-                "source": energy_rec['source'] if energy_rec else "no_data",
-            },
-            "band": band_info,
-            "compliance_status": compliance_status(avg_supply, in_supply_map, target_hours) if band else "no_band",
-            "ongoing_interruption": build_ongoing_interruption(fid, ongoing_map, target_hours, from_date, to_date),
-            "_band_order": BAND_ORDER.get(band.slug, 99) if band else 99,
-            "_feeder_name": feeder.name,
-            "_source": f"bulk_sql_{mode}",
-        })
+    if include_children:
+        _attach_children(row_by_fid, feeder_ids, from_date, to_date, mode)
 
     # Sort: Band A → E, then alphabetically within each band
     result.sort(key=lambda r: (r['_band_order'], r['_feeder_name']))
@@ -543,7 +608,8 @@ class FeederAvailabilityOverview(APIView):
         feeder_type_param = request.GET.get("feeder_type", "")
         voltage_level = feeder_type_param if feeder_type_param in ("11kv", "33kv") else None
         interruption_category = request.GET.get("interruption_type")  # load_shedding | transmission | disco
-        
+        include_children = request.GET.get("include_children", "").lower() in ("1", "true", "yes")
+
         data = get_feeder_availability_summary_optimized(
             from_date=from_date,
             to_date=to_date,
@@ -552,12 +618,18 @@ class FeederAvailabilityOverview(APIView):
             business_district=business_district,
             voltage_level=voltage_level,
             interruption_category=interruption_category,
+            include_children=include_children,
         )
-        
-        # Remove internal source field for response
+
+        # Remove internal fields for response (top-level and nested children rows)
         clean_data = []
         for item in data:
             clean_item = {k: v for k, v in item.items() if not k.startswith('_')}
+            if 'children' in clean_item:
+                clean_item['children'] = [
+                    {k: v for k, v in child.items() if not k.startswith('_')}
+                    for child in clean_item['children']
+                ]
             clean_data.append(clean_item)
 
         from technical.utils.explanations import FEEDER_LIST
