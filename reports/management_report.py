@@ -309,7 +309,7 @@ body {
     justify-content: space-between;
     align-items: center;
 }
-.cover-footer-strip img { max-height: 56px; width: auto; }
+.cover-footer-strip img { max-height: 74px; width: auto; }
 .cover-period {
     display: inline-flex; align-items: center; gap: 6px;
     font-size: 11px; font-weight: 600; opacity: 0.55; letter-spacing: 1px;
@@ -920,12 +920,13 @@ def render_mgmt_cover(context: dict) -> str:
         _COVER_GRID_SVG_LANDSCAPE if context.get('orientation') == 'landscape'
         else _COVER_GRID_SVG_PORTRAIT
     )
-    # period_label (the actual data period), not report_date (always
-    # today's generation date) — this footer is labelled "period", and
-    # showing the generation date here produced e.g. "18 August" on a
-    # report whose every table and KPI was for the 17th. Same fix already
-    # applied to render_cover_page in pdf_generator.py.
-    date     = context.get('period_label', context.get('report_date', ''))
+    # report_date (always today's real generation date) — NOT period_label.
+    # Every other recurring header/footer in the report shows today's date;
+    # the actual data period only ever shows up inside the content itself
+    # (the DATE KPI card, table titles, etc.), driven by whatever period
+    # the frontend requested. Cover/back page chrome follows the same rule
+    # (confirmed 2026-08-19) — it isn't a special case.
+    date     = context.get('report_date', '')
     subtitle = context.get('report_subtitle', '')
     footer_logo = context.get('footer_logo_url', '')
     logo     = context.get('logo_url', '')
@@ -992,7 +993,8 @@ def render_mgmt_back_page(context: dict) -> str:
     .cover-rule already resolve to gold via MANAGEMENT_STYLES).
     """
     company = context.get('company_name', 'KANO ELECTRICITY DISTRIBUTION COMPANY')
-    date    = context.get('period_label', context.get('report_date', ''))
+    # report_date (today), not period_label — same rule as render_mgmt_cover.
+    date    = context.get('report_date', '')
     logo    = context.get('logo_url', '')
 
     return f"""
