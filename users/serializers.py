@@ -7,39 +7,72 @@ from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from .models import (
     AccessLog,
     Permission,
+    RolePermission,
     Section,
     TemporaryAccess,
     User,
     UserSectionAccess,
+    UserSession,
 )
 
 
 class UserSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, min_length=8)
-    
+    # Declared explicitly (rather than left to ModelSerializer's auto-generated
+    # unique field) so blank input can be normalized to None before the
+    # uniqueness check runs — otherwise a second user submitted with '' hits
+    # a UNIQUE violation on the empty string.
+    employee_id = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+
     class Meta:
         model = User
-        fields = ['id', 'username', 'email', 'first_name', 'last_name', 'phone_number', 
-                 'department', 'employee_id', 'role', 'is_active', 'created_at', 'password']
+        fields = ['id', 'username', 'email', 'first_name', 'last_name', 'phone_number',
+                 'department', 'employee_id', 'role', 'is_active', 'profile_picture', 'created_at', 'password']
         extra_kwargs = {
             'password': {'write_only': True}
         }
-    
+
+    def validate_employee_id(self, value):
+        if not value:
+            return None
+        qs = User.objects.filter(employee_id=value)
+        if self.instance:
+            qs = qs.exclude(pk=self.instance.pk)
+        if qs.exists():
+            raise serializers.ValidationError('A user with this employee ID already exists.')
+        return value
+
+    def validate_role(self, value):
+        request = self.context.get('request')
+        requester = getattr(request, 'user', None) if request else None
+        if value == 'super_admin' and (requester is None or requester.role != 'super_admin'):
+            raise serializers.ValidationError('Only a super admin can assign the super_admin role.')
+        return value
+
     def create(self, validated_data):
         password = validated_data.pop('password')
-        user = User.objects.create_user(**validated_data)
-        user.set_password(password)
-        user.save()
-        return user
+        return User.objects.create_user(password=password, **validated_data)
 
 
 class UserListSerializer(serializers.ModelSerializer):
     """Serializer for listing users without sensitive data"""
-    
+
     class Meta:
         model = User
-        fields = ['id', 'username', 'email', 'first_name', 'last_name', 
-                 'department', 'employee_id', 'role', 'is_active', 'created_at']
+        fields = ['id', 'username', 'email', 'first_name', 'last_name',
+                 'department', 'employee_id', 'role', 'is_active', 'profile_picture', 'created_at']
+
+
+class MyProfileSerializer(serializers.ModelSerializer):
+    """Self-service profile: a user editing their own name/phone/picture.
+    Deliberately excludes role/department/employee_id/is_active/username/email —
+    those stay admin-controlled via UserSerializer (see UserViewSet)."""
+
+    class Meta:
+        model = User
+        fields = ['id', 'username', 'email', 'first_name', 'last_name', 'phone_number',
+                 'department', 'employee_id', 'role', 'profile_picture', 'created_at']
+        read_only_fields = ['id', 'username', 'email', 'department', 'employee_id', 'role', 'created_at']
 
 
 class SectionSerializer(serializers.ModelSerializer):
@@ -103,28 +136,78 @@ class TemporaryAccessSerializer(serializers.ModelSerializer):
         return temp_access
 
 
+class RolePermissionSerializer(serializers.ModelSerializer):
+    role_display = serializers.CharField(source='get_role_display', read_only=True)
+    section_name = serializers.CharField(source='section.name', read_only=True)
+    section_display_name = serializers.CharField(source='section.display_name', read_only=True)
+    permissions = PermissionSerializer(many=True, read_only=True)
+    permission_ids = serializers.ListField(child=serializers.IntegerField(), write_only=True, required=False)
+
+    class Meta:
+        model = RolePermission
+        fields = ['id', 'role', 'role_display', 'section', 'section_name', 'section_display_name',
+                 'permissions', 'permission_ids', 'is_manager', 'updated_by', 'updated_at']
+        read_only_fields = ['updated_by', 'updated_at']
+
+    def create(self, validated_data):
+        permission_ids = validated_data.pop('permission_ids', [])
+        role_permission = RolePermission.objects.create(**validated_data)
+        if permission_ids:
+            role_permission.permissions.set(Permission.objects.filter(id__in=permission_ids))
+        return role_permission
+
+    def update(self, instance, validated_data):
+        permission_ids = validated_data.pop('permission_ids', None)
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+        if permission_ids is not None:
+            instance.permissions.set(Permission.objects.filter(id__in=permission_ids))
+        return instance
+
+
+class UserSessionSerializer(serializers.ModelSerializer):
+    username = serializers.CharField(source='user.username', read_only=True)
+    full_name = serializers.SerializerMethodField()
+    role = serializers.CharField(source='user.role', read_only=True)
+
+    class Meta:
+        model = UserSession
+        fields = ['id', 'user', 'username', 'full_name', 'role', 'ip_address', 'user_agent',
+                 'device_label', 'created_at', 'last_seen_at', 'is_active']
+        read_only_fields = fields
+
+    def get_full_name(self, obj):
+        return obj.user.get_full_name() or obj.user.username
+
+
 class UserPermissionsSerializer(serializers.Serializer):
     """Serializer to return user's complete permissions structure"""
     sections = serializers.SerializerMethodField()
     
     def get_sections(self, user):
+        # Role baseline — what everyone with this role gets, before any per-user grants
+        role_access = RolePermission.objects.filter(
+            role=user.role
+        ).select_related('section').prefetch_related('permissions')
+
         # Get permanent access
         permanent_access = UserSectionAccess.objects.filter(
-            user=user, 
+            user=user,
             is_active=True
         ).select_related('section').prefetch_related('permissions')
-        
+
         # Get active temporary access
         temp_access = TemporaryAccess.objects.filter(
             user=user,
             is_active=True,
             expires_at__gt=timezone.now()
         ).select_related('section').prefetch_related('permissions')
-        
+
         sections_data = {}
-        
-        # Process permanent access
-        for access in permanent_access:
+
+        # Process role baseline first
+        for access in role_access:
             section_name = access.section.name
             sections_data[section_name] = {
                 'name': section_name,
@@ -132,10 +215,29 @@ class UserPermissionsSerializer(serializers.Serializer):
                 'icon': access.section.icon,
                 'is_manager': access.is_manager,
                 'permissions': [p.codename for p in access.permissions.all()],
-                'access_type': 'permanent'
+                'access_type': 'role'
             }
-        
-        # Process temporary access (can override permanent)
+
+        # Process permanent per-user access — adds to / overrides the role baseline
+        for access in permanent_access:
+            section_name = access.section.name
+            user_permissions = [p.codename for p in access.permissions.all()]
+            existing = sections_data.get(section_name)
+            if existing:
+                existing['permissions'] = list(set(existing['permissions']).union(user_permissions))
+                existing['is_manager'] = existing['is_manager'] or access.is_manager
+                existing['access_type'] = 'permanent'
+            else:
+                sections_data[section_name] = {
+                    'name': section_name,
+                    'display_name': access.section.display_name,
+                    'icon': access.section.icon,
+                    'is_manager': access.is_manager,
+                    'permissions': user_permissions,
+                    'access_type': 'permanent'
+                }
+
+        # Process temporary access (can override role/permanent)
         for access in temp_access:
             section_name = access.section.name
             if section_name not in sections_data:
@@ -148,16 +250,16 @@ class UserPermissionsSerializer(serializers.Serializer):
                     'access_type': 'temporary',
                     'expires_at': access.expires_at
                 }
-            
+
             # Merge permissions from temporary access
             temp_permissions = [p.codename for p in access.permissions.all()]
             existing_permissions = set(sections_data[section_name]['permissions'])
             sections_data[section_name]['permissions'] = list(existing_permissions.union(set(temp_permissions)))
-            
-            if sections_data[section_name]['access_type'] == 'permanent':
+
+            if sections_data[section_name]['access_type'] in ('permanent', 'role'):
                 sections_data[section_name]['has_temporary'] = True
                 sections_data[section_name]['temp_expires_at'] = access.expires_at
-        
+
         return list(sections_data.values())
 
 
@@ -244,13 +346,19 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         
         # Get tokens
         refresh = self.get_token(user)
-        
+
+        # Track this login as a session (device/IP metadata for the Active Sessions screen)
+        request = self.context.get('request')
+        if request is not None:
+            from .utils import create_user_session
+            create_user_session(request, user, refresh)
+
         # Get user permissions
         permissions_serializer = UserPermissionsSerializer(user)
-        
+
         return {
             'refresh': str(refresh),
             'access': str(refresh.access_token),
-            'user': UserListSerializer(user).data,
+            'user': UserListSerializer(user, context=self.context).data,
             'permissions': permissions_serializer.data,
         }
