@@ -269,6 +269,33 @@ class FeederInterruption(UUIDModel, models.Model):
         ("tcn", "(tcn)"),
         ("fault", "Fault"),
         ("permit", "Permit"),
+        # Genuinely new — from TCN's own 33kV fault log, no existing DSO-side
+        # equivalent to force these into (transmission-level concepts DSO's
+        # own list never needed: line trips, under-frequency ops, specific
+        # transformer protection devices).
+        ("330KV L/T", "330 kV Line Trip (330KV L/T)"),
+        ("132KV L/T", "132 kV Line Trip (132KV L/T)"),
+        ("330KV T/T", "330 kV Transformer Trip (330KV T/T)"),
+        ("SYS/D", "System Disturbance (SYS/D)"),
+        ("33KV U/F", "33 kV Under-Frequency Operation (33KV U/F)"),
+        ("132KV U/F", "132 kV Under-Frequency Operation (132KV U/F)"),
+        ("BUCHHOLZ", "Transformer Buchholz Protection (BUCHHOLZ)"),
+        ("TRF/DIFF", "Transformer Differential Trip (TRF/DIFF)"),
+    ]
+
+    SOURCE_CHOICES = [
+        ('dso', 'DSO (DataNest)'),
+        ('tcn', 'TCN'),
+    ]
+    PARTY_RESPONSIBLE_CHOICES = [
+        ('DISCO', 'DISCO (KEDCO)'),
+        ('TCN', 'TCN'),
+        ('GENCO', 'GENCO'),
+    ]
+    OUTAGE_CLASS_CHOICES = [
+        ('FORCED', 'Forced'),
+        ('EMERGENCY', 'Emergency'),
+        ('PLANNED', 'Planned'),
     ]
 
     feeder = models.ForeignKey(Feeder, on_delete=models.CASCADE, related_name='interruptions')
@@ -276,6 +303,25 @@ class FeederInterruption(UUIDModel, models.Model):
     description = models.TextField(blank=True, null=True)
     occurred_at = models.DateTimeField(db_index=True)
     restored_at = models.DateTimeField(blank=True, null=True)
+
+    # Which upstream system actually reported this row — see the discussion
+    # this field came out of: DSO (DataNest) is 11kV-only, confirmed zero
+    # 33kV coverage; TCN's own fault log is the only 33kV source. Keeping
+    # this explicit means a future re-sync only ever touches its own rows,
+    # and nobody has to guess which system reported a given fault.
+    source = models.CharField(max_length=10, choices=SOURCE_CHOICES, default='dso', db_index=True)
+    party_responsible = models.CharField(
+        max_length=10, choices=PARTY_RESPONSIBLE_CHOICES, null=True, blank=True,
+        help_text="Which party the fault is attributed to — ties to penalty accountability."
+    )
+    outage_class = models.CharField(
+        max_length=10, choices=OUTAGE_CLASS_CHOICES, null=True, blank=True,
+        help_text="Forced / Emergency / Planned — kept as the real 3-way category, not collapsed to a boolean."
+    )
+    load_at_fault_mw = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True)
+    weather_condition = models.CharField(max_length=50, null=True, blank=True)
+    officer_confirming_interruption = models.CharField(max_length=255, null=True, blank=True)
+    officer_confirming_restoration = models.CharField(max_length=255, null=True, blank=True)
 
     class Meta:
         unique_together = ("feeder", "occurred_at", "interruption_type")
@@ -592,6 +638,7 @@ class DataSyncLog(models.Model):
         ('technical_hourly_load',    'Technical — Hourly Load'),
         ('technical_meter_readings', 'Technical — Meter Readings'),
         ('technical_interruptions',  'Technical — Interruptions'),
+        ('technical_tcn_interruptions', 'Technical — TCN 33kV Interruptions'),
         # Energy Account
         ('ea_nbet_rates',                 'EA — NBET Market Bilateral Rates'),
         ('ea_settings',                   'EA — Settings'),

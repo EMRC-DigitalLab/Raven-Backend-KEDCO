@@ -84,6 +84,12 @@ app.conf.update(
             'task': 'technical.tasks.sync_meter_readings_task',
             'schedule': crontab(minute='*/30'),
         },
+        # TCN 33kV fault-log Google Sheet: hourly. Human-maintained sheet,
+        # not a live DB table -- checks current + previous month's tab only.
+        'sync-tcn-interruptions': {
+            'task': 'technical.tasks.sync_tcn_interruptions_task',
+            'schedule': crontab(minute=55),
+        },
 
         # ── DataNest → Raven Energy Account Sync ─────────────────────────────
         # Rates + settings: once per hour (slow-changing)

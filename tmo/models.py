@@ -257,24 +257,36 @@ class TMODailyAllocation(models.Model):
 
 class GoogleSheetFeed(models.Model):
     """
-    Monthly Google Sheets URL registry for live data pipeline.
+    Google Sheets URL registry for live data pipelines.
 
-    Each month, ops team POSTs the new spreadsheet URL here.
-    The hourly Celery task reads the active feed and syncs any missing days.
+    Most feed types rotate MONTHLY — ops team POSTs a new spreadsheet URL
+    every month, and the hourly Celery task reads the active feed for the
+    current (year, month) and syncs any missing days.
+
+    'tcn_33kv_fault_log' is different: TCN publishes ONE spreadsheet per
+    YEAR (12 month-tabs inside it), not a new file every month. For that
+    feed_type, `month` is left null and rows are looked up by (feed_type,
+    year) only — see YEARLY_FEED_TYPES below.
 
     feed_type '33kv' → HourlyLoad + TMONetworkDispatch(Hourly)
     feed_type '11kv' → HourlyLoad (gap-fill only — DataNest takes priority)
+    feed_type 'tcn_33kv_fault_log' → FeederInterruption(source='tcn')
     """
     FEED_TYPE_CHOICES = [
         ('33kv_load_flow',          '33KV Load Flow'),
         ('33kv_energy_accounting',  '33KV Energy Accounting'),
         ('11kv_load_flow',          '11KV Load Flow'),
         ('11kv_energy_accounting',  '11KV Energy Accounting'),
+        ('tcn_33kv_fault_log',      'TCN 33KV Fault Log (yearly)'),
     ]
+
+    # feed types registered once per YEAR (month is null) rather than once
+    # per month — currently just the TCN fault log.
+    YEARLY_FEED_TYPES = ('tcn_33kv_fault_log',)
 
     feed_type       = models.CharField(max_length=30, choices=FEED_TYPE_CHOICES, db_index=True)
     year            = models.PositiveSmallIntegerField()
-    month           = models.PositiveSmallIntegerField()
+    month           = models.PositiveSmallIntegerField(null=True, blank=True)
     spreadsheet_id  = models.CharField(max_length=100, help_text='Google Sheets file ID')
     spreadsheet_url = models.URLField(max_length=600, help_text='Full Google Sheets URL')
     is_active       = models.BooleanField(default=True)
@@ -290,6 +302,8 @@ class GoogleSheetFeed(models.Model):
         ordering = ['-year', '-month', 'feed_type']
 
     def __str__(self):
+        if self.month is None:
+            return f"{self.get_feed_type_display()} {self.year}"
         return f"{self.get_feed_type_display()} {self.year}-{self.month:02d}"
 
     @staticmethod
