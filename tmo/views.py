@@ -1754,12 +1754,18 @@ class GoogleSheetFeedView(APIView):
     Requires technical module access.
 
     GET  /api/tmo/sheet-feeds/      — list all registered feeds
-    POST /api/tmo/sheet-feeds/      — register/update a monthly URL
+    POST /api/tmo/sheet-feeds/      — register/update a URL
                                       body: {feed_type, year, month, url}
+                                      (month omitted/null for yearly feed types — see
+                                      GoogleSheetFeed.YEARLY_FEED_TYPES, currently just
+                                      tcn_33kv_fault_log: one spreadsheet per year)
     POST /api/tmo/sheet-feeds/      — trigger manual sync
                                       body: {action:'sync', feed_type, year, month}
     """
-    VALID_FEED_TYPES = ('33kv_load_flow', '33kv_energy_accounting', '11kv_load_flow', '11kv_energy_accounting')
+    VALID_FEED_TYPES = (
+        '33kv_load_flow', '33kv_energy_accounting', '11kv_load_flow', '11kv_energy_accounting',
+        'tcn_33kv_fault_log',
+    )
 
     def get_permissions(self):
         from technical.permissions import HasTechnicalAccess
@@ -1792,19 +1798,25 @@ class GoogleSheetFeedView(APIView):
         if request.data.get('action') == 'sync':
             feed_type = request.data.get('feed_type', '33kv_load_flow')
             today     = _date.today()
-            year      = int(request.data.get('year',  today.year))
-            month_val = int(request.data.get('month', today.month))
+            year      = int(request.data.get('year', today.year))
+            is_yearly = feed_type in GoogleSheetFeed.YEARLY_FEED_TYPES
+            month_val = None if is_yearly else int(request.data.get('month', today.month))
 
             feed = GoogleSheetFeed.objects.filter(
                 feed_type=feed_type, year=year, month=month_val, is_active=True
             ).first()
             if not feed:
+                where = str(year) if is_yearly else f'{year}-{month_val:02d}'
                 return Response(
-                    {'error': f'No active {feed_type} feed for {year}-{month_val:02d}'},
+                    {'error': f'No active {feed_type} feed for {where}'},
                     status=404
                 )
-            from tmo.tasks import sync_33kv_sheet_task
-            sync_33kv_sheet_task.delay()
+            if feed_type == 'tcn_33kv_fault_log':
+                from technical.tasks import sync_tcn_interruptions_task
+                sync_tcn_interruptions_task.delay()
+            else:
+                from tmo.tasks import sync_33kv_sheet_task
+                sync_33kv_sheet_task.delay()
             return Response({'status': 'queued', 'feed': str(feed)})
 
         # ── Register / update feed URL ────────────────────────────────────────
@@ -1813,15 +1825,23 @@ class GoogleSheetFeedView(APIView):
         month_val = request.data.get('month')
         url       = request.data.get('url')
 
-        if not all([feed_type, year, month_val, url]):
-            return Response(
-                {'error': 'feed_type, year, month and url are required'},
-                status=400
-            )
         if feed_type not in self.VALID_FEED_TYPES:
             return Response({
                 'error': f'feed_type must be one of: {", ".join(self.VALID_FEED_TYPES)}'
             }, status=400)
+
+        is_yearly = feed_type in GoogleSheetFeed.YEARLY_FEED_TYPES
+        if is_yearly:
+            month_val = None  # one spreadsheet per year — month is not applicable
+            if not all([feed_type, year, url]):
+                return Response(
+                    {'error': 'feed_type, year and url are required'}, status=400
+                )
+        elif not all([feed_type, year, month_val, url]):
+            return Response(
+                {'error': 'feed_type, year, month and url are required'},
+                status=400
+            )
 
         spreadsheet_id = GoogleSheetFeed.extract_spreadsheet_id(url)
         if not spreadsheet_id:
@@ -1830,7 +1850,7 @@ class GoogleSheetFeedView(APIView):
             )
 
         feed, created = GoogleSheetFeed.objects.update_or_create(
-            feed_type=feed_type, year=int(year), month=int(month_val),
+            feed_type=feed_type, year=int(year), month=(None if is_yearly else int(month_val)),
             defaults={
                 'spreadsheet_id':  spreadsheet_id,
                 'spreadsheet_url': url,

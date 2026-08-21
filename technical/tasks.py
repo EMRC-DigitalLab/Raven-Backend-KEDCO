@@ -189,6 +189,21 @@ def sync_meter_readings_task(self):
 
 
 @shared_task(
+    name='technical.tasks.sync_tcn_interruptions_task',
+    bind=True,
+    max_retries=2,
+    default_retry_delay=120,
+)
+def sync_tcn_interruptions_task(self):
+    """Sync TCN's 33kV fault-log Google Sheet → FeederInterruption (source='tcn'). Runs hourly."""
+    from technical.sync.tcn_interruptions import run_sync
+    try:
+        _run_sync('technical_tcn_interruptions', run_sync, notify_on_success=False)
+    except Exception as exc:
+        raise self.retry(exc=exc)
+
+
+@shared_task(
     name='technical.tasks.backfill_technical_data_task',
     bind=True,
     max_retries=0,          # No automatic retry — caller decides

@@ -5,6 +5,7 @@ from .views import (
     AnnouncementListView,
     BandSubscriptionDetailView,
     BandSubscriptionListView,
+    FaultAlertAvailableFeedersView,
     FaultAlertFeederWatchDetailView,
     FaultAlertFeederWatchListView,
     FaultAlertRecipientDetailView,
@@ -47,6 +48,7 @@ urlpatterns = [
 
     # ── Fault alerts (admin-managed feeder watchlist + recipient list) ────────
     path('fault-alerts/feeders/', FaultAlertFeederWatchListView.as_view(), name='fault-alert-feeders'),
+    path('fault-alerts/feeders/available/', FaultAlertAvailableFeedersView.as_view(), name='fault-alert-feeders-available'),
     path('fault-alerts/feeders/<int:pk>/', FaultAlertFeederWatchDetailView.as_view(), name='fault-alert-feeder-detail'),
     path('fault-alerts/recipients/', FaultAlertRecipientListView.as_view(), name='fault-alert-recipients'),
     path('fault-alerts/recipients/<int:pk>/', FaultAlertRecipientDetailView.as_view(), name='fault-alert-recipient-detail'),
