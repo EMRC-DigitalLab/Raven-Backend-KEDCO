@@ -424,7 +424,11 @@ class FaultAlertAvailableFeedersView(APIView):
         from common.models import Feeder
 
         watched_ids = FaultAlertFeederWatch.objects.filter(is_active=True).values_list('feeder_id', flat=True)
-        qs = Feeder.objects.exclude(id__in=watched_ids)
+        # is_onboarded=True — same population TMO's own canonical feeder list
+        # uses (tmo/services.py _base_feeder_qs()). Without this, stale
+        # duplicate Feeder rows show up (e.g. a feeder onboarded under one
+        # substation with a leftover non-onboarded duplicate elsewhere).
+        qs = Feeder.objects.filter(is_onboarded=True).exclude(id__in=watched_ids)
 
         segment = request.query_params.get('segment')
         voltage_level = request.query_params.get('voltage_level')
