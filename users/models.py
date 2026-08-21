@@ -19,6 +19,7 @@ class User(AbstractUser):
     
     role = models.CharField(max_length=20, choices=USER_ROLES, default='staff')
     phone_number = models.CharField(max_length=20, blank=True, null=True)
+    profile_picture = models.ImageField(upload_to='profile_pictures/', blank=True, null=True)
     department = models.CharField(max_length=50, blank=True, null=True)
     employee_id = models.CharField(max_length=20, unique=True, blank=True, null=True)
     is_active = models.BooleanField(default=True)
@@ -115,6 +116,55 @@ class TemporaryAccess(models.Model):
     
     def __str__(self):
         return f"Temp: {self.user.username} - {self.section.display_name} (expires: {self.expires_at})"
+
+
+class RolePermission(models.Model):
+    """Role-level section access — the baseline every user of that role gets.
+
+    Distinct from UserSectionAccess (per-user grants/overrides layered on
+    top of this baseline in UserPermissionsSerializer.get_sections()).
+    """
+
+    role = models.CharField(max_length=20, choices=User.USER_ROLES)
+    section = models.ForeignKey(Section, on_delete=models.CASCADE, related_name='role_permissions')
+    permissions = models.ManyToManyField(Permission, blank=True)
+    is_manager = models.BooleanField(default=False, help_text="Users with this role can manage other users in this section")
+    updated_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='updated_role_permissions')
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ['role', 'section']
+
+    def __str__(self):
+        return f"{self.get_role_display()} - {self.section.display_name}"
+
+
+class UserSession(models.Model):
+    """Human-readable session metadata, keyed by the current refresh token's jti.
+
+    simplejwt's own OutstandingToken/BlacklistedToken (token_blacklist app)
+    is the source of truth for whether a token is actually still valid; this
+    model just adds the device/IP/label info needed to display and manage
+    sessions, and survives token rotation (jti is updated in place on refresh
+    so one login stays one row).
+    """
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='sessions')
+    jti = models.CharField(max_length=255, unique=True)
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    user_agent = models.CharField(max_length=500, blank=True)
+    device_label = models.CharField(max_length=100, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    last_seen_at = models.DateTimeField(auto_now_add=True)
+    is_active = models.BooleanField(default=True)
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    revoked_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='revoked_sessions')
+
+    class Meta:
+        ordering = ['-last_seen_at']
+
+    def __str__(self):
+        return f"{self.user.username} - {self.device_label or 'Unknown device'} ({'active' if self.is_active else 'revoked'})"
 
 
 class AccessLog(models.Model):

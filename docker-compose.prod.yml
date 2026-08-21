@@ -15,6 +15,7 @@ networks:
 
 volumes:
   static_prod:
+  media_prod:
   redis_prod:
   celerybeat_prod:
 
@@ -42,6 +43,7 @@ services:
       - REDIS_URL=redis://redis:6379/2
     volumes:
       - static_prod:/app/staticfiles
+      - media_prod:/app/media
     networks:
       - prod_net
     restart: always
@@ -124,6 +126,7 @@ services:
     volumes:
       - ./nginx/prod.conf:/etc/nginx/conf.d/default.conf:ro
       - static_prod:/static:ro
+      - media_prod:/media:ro
     depends_on:
       - raven
     networks:

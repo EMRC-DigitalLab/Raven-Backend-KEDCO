@@ -5,10 +5,12 @@ from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from .models import (
     AccessLog,
     Permission,
+    RolePermission,
     Section,
     TemporaryAccess,
     User,
     UserSectionAccess,
+    UserSession,
 )
 
 
@@ -72,3 +74,19 @@ class AccessLogAdmin(admin.ModelAdmin):
     list_filter = ['action', 'section', 'timestamp']
     search_fields = ['user__username', 'user__email', 'performed_by__username']
     readonly_fields = ['timestamp']
+
+
+@admin.register(RolePermission)
+class RolePermissionAdmin(admin.ModelAdmin):
+    list_display = ['role', 'section', 'is_manager', 'updated_by', 'updated_at']
+    list_filter = ['role', 'section', 'is_manager']
+    filter_horizontal = ['permissions']
+    readonly_fields = ['updated_at']
+
+
+@admin.register(UserSession)
+class UserSessionAdmin(admin.ModelAdmin):
+    list_display = ['user', 'device_label', 'ip_address', 'is_active', 'created_at', 'last_seen_at']
+    list_filter = ['is_active', 'created_at']
+    search_fields = ['user__username', 'user__email', 'ip_address']
+    readonly_fields = ['jti', 'created_at', 'last_seen_at']

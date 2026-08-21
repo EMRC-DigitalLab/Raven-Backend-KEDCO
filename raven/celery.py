@@ -29,6 +29,7 @@ app.conf.update(
         'energy_account.tasks.*':   {'queue': 'datanest_sync'},
         'commercial.tasks.*':       {'queue': 'datanest_sync'},
         'tmo.tasks.*':              {'queue': 'datanest_sync'},
+        'users.tasks.*':            {'queue': 'notifications'},
     },
     # Retry settings
     task_acks_late=True,
@@ -228,6 +229,18 @@ app.conf.update(
         'tmo-sync-billing-efficiency': {
             'task': 'commercial.tasks.sync_tmo_billing_efficiency_task',
             'schedule': crontab(minute='*/30'),
+        },
+
+        # ── User sessions cleanup ─────────────────────────────────────────────
+        # Off-peak daily housekeeping — mark UserSession rows inactive once
+        # their token has expired, then flush simplejwt's blacklist tables.
+        'purge-expired-user-sessions': {
+            'task': 'users.tasks.purge_expired_sessions',
+            'schedule': crontab(hour=2, minute=10),
+        },
+        'flush-expired-blacklist-tokens': {
+            'task': 'users.tasks.flush_expired_blacklist_tokens',
+            'schedule': crontab(hour=2, minute=20),
         },
     },
 )
