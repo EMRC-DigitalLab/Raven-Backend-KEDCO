@@ -8,6 +8,8 @@ from rest_framework.views import APIView
 from .models import (
     Announcement,
     BandSubscription,
+    FaultAlertFeederWatch,
+    FaultAlertRecipient,
     Notification,
     NotificationPreference,
     ReportRecipient,
@@ -15,6 +17,8 @@ from .models import (
 from .serializers import (
     AnnouncementSerializer,
     BandSubscriptionSerializer,
+    FaultAlertFeederWatchSerializer,
+    FaultAlertRecipientSerializer,
     NotificationPreferenceSerializer,
     NotificationSerializer,
     ReportRecipientSerializer,
@@ -357,4 +361,116 @@ class BandSubscriptionDetailView(APIView):
             return Response({'detail': 'Not found.'}, status=status.HTTP_404_NOT_FOUND)
         sub.is_active = False
         sub.save(update_fields=['is_active'])
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  FAULT ALERTS — admin-managed feeder watchlist + recipient list for
+#  real-time fault occurrence/restoration emails (hybrid DataNest + TMO sheet
+#  fault_code source — see technical/tasks.py and tmo/sheet_sync.py)
+# ══════════════════════════════════════════════════════════════════════════════
+
+class FaultAlertFeederWatchListView(APIView):
+    """
+    GET  /api/notifications/fault-alerts/feeders/  → list watched feeders
+         optional filters: ?segment=MDI|MDNI|Regions  ?voltage_level=11kv|33kv
+    POST /api/notifications/fault-alerts/feeders/  → add a feeder to the watchlist (admin only)
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        qs = FaultAlertFeederWatch.objects.filter(is_active=True).select_related('feeder', 'added_by')
+        segment = request.query_params.get('segment')
+        voltage_level = request.query_params.get('voltage_level')
+        if segment:
+            qs = qs.filter(feeder__pl_segment__iexact=segment)
+        if voltage_level:
+            qs = qs.filter(feeder__voltage_level__iexact=voltage_level)
+        return Response(FaultAlertFeederWatchSerializer(qs, many=True).data)
+
+    def post(self, request):
+        if not _is_admin_or_above(request.user):
+            return Response(
+                {'detail': 'Only admins can manage the fault alert watchlist.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        serializer = FaultAlertFeederWatchSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save(added_by=request.user)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class FaultAlertFeederWatchDetailView(APIView):
+    """
+    DELETE /api/notifications/fault-alerts/feeders/<id>/  → remove from watchlist (admin only)
+    """
+    permission_classes = [IsAuthenticated]
+
+    def delete(self, request, pk):
+        if not _is_admin_or_above(request.user):
+            return Response(
+                {'detail': 'Only admins can manage the fault alert watchlist.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        try:
+            watch = FaultAlertFeederWatch.objects.get(pk=pk)
+        except FaultAlertFeederWatch.DoesNotExist:
+            return Response({'detail': 'Not found.'}, status=status.HTTP_404_NOT_FOUND)
+        watch.is_active = False
+        watch.save(update_fields=['is_active'])
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class FaultAlertRecipientListView(APIView):
+    """
+    GET  /api/notifications/fault-alerts/recipients/  → list registered recipients
+    POST /api/notifications/fault-alerts/recipients/  → register a user for fault alerts (admin only)
+         body: {"user": <user_id>}
+         To register a brand-new person who has no account yet, create the
+         user first via POST /api/users/ (admin-only, existing endpoint),
+         then register the returned user id here.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        if not _is_admin_or_above(request.user):
+            return Response(
+                {'detail': 'Only admins can view the fault alert recipient list.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        qs = FaultAlertRecipient.objects.filter(is_active=True).select_related('user', 'added_by')
+        return Response(FaultAlertRecipientSerializer(qs, many=True).data)
+
+    def post(self, request):
+        if not _is_admin_or_above(request.user):
+            return Response(
+                {'detail': 'Only admins can manage fault alert recipients.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        serializer = FaultAlertRecipientSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save(added_by=request.user)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class FaultAlertRecipientDetailView(APIView):
+    """
+    DELETE /api/notifications/fault-alerts/recipients/<id>/  → remove recipient (admin only)
+    """
+    permission_classes = [IsAuthenticated]
+
+    def delete(self, request, pk):
+        if not _is_admin_or_above(request.user):
+            return Response(
+                {'detail': 'Only admins can manage fault alert recipients.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        try:
+            recipient = FaultAlertRecipient.objects.get(pk=pk)
+        except FaultAlertRecipient.DoesNotExist:
+            return Response({'detail': 'Not found.'}, status=status.HTTP_404_NOT_FOUND)
+        recipient.is_active = False
+        recipient.save(update_fields=['is_active'])
         return Response(status=status.HTTP_204_NO_CONTENT)

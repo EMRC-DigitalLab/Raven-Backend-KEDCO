@@ -5,6 +5,10 @@ from .views import (
     AnnouncementListView,
     BandSubscriptionDetailView,
     BandSubscriptionListView,
+    FaultAlertFeederWatchDetailView,
+    FaultAlertFeederWatchListView,
+    FaultAlertRecipientDetailView,
+    FaultAlertRecipientListView,
     NotificationDetailView,
     NotificationListView,
     NotificationMarkAllReadView,
@@ -40,4 +44,10 @@ urlpatterns = [
     # ── Band subscriptions ────────────────────────────────────────────────────
     path('band-subscriptions/', BandSubscriptionListView.as_view(), name='band-subscriptions'),
     path('band-subscriptions/<int:pk>/', BandSubscriptionDetailView.as_view(), name='band-subscription-detail'),
+
+    # ── Fault alerts (admin-managed feeder watchlist + recipient list) ────────
+    path('fault-alerts/feeders/', FaultAlertFeederWatchListView.as_view(), name='fault-alert-feeders'),
+    path('fault-alerts/feeders/<int:pk>/', FaultAlertFeederWatchDetailView.as_view(), name='fault-alert-feeder-detail'),
+    path('fault-alerts/recipients/', FaultAlertRecipientListView.as_view(), name='fault-alert-recipients'),
+    path('fault-alerts/recipients/<int:pk>/', FaultAlertRecipientDetailView.as_view(), name='fault-alert-recipient-detail'),
 ]

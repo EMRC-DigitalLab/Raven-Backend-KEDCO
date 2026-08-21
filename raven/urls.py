@@ -21,11 +21,15 @@ from django.conf.urls.static import static
 from django.contrib import admin
 from django.urls import include, path
 
+from analytics.views.recent_activity import RecentActivityAPIView
+
 urlpatterns = [
     path('admin/', admin.site.urls),
     # Authentication and user management
     path('api/auth/', include('users.urls')),
     path('api/users/', include('users.urls')),
+    # Executive Summary dashboard — Recent Activity (no existing app namespace for this)
+    path('api/activity/recent/', RecentActivityAPIView.as_view(), name='activity-recent'),
     # Existing app URLs
     path('api/analytics/', include('analytics.urls')),
     path('api/common/', include('common.urls')),
