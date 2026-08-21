@@ -17,12 +17,29 @@ def _month_range(year, month):
     return from_date, to_date
 
 
-def _pct_delta_text(current, previous, noun='gap'):
+def _gap_comparison(current, previous):
+    """
+    Compares this month's revenue gap to last month's. Returns a dict with
+    both a human-readable string AND explicit machine-readable fields, so
+    the frontend never has to parse "higher"/"lower" out of prose to decide
+    a color/tone — that was fragile and rightly flagged. A SMALLER gap is
+    an improvement (closer to/ahead of target); a LARGER gap is worsening,
+    regardless of whether the gap itself is positive (behind target) or
+    negative (ahead of target).
+    """
     if not previous:
-        return None
-    delta = ((current - previous) / abs(previous)) * 100
-    direction = 'higher' if delta >= 0 else 'lower'
-    return f"{abs(round(delta, 1))}% {direction} than last month"
+        return {'text': None, 'pct': None, 'trend': None}
+    delta_pct = ((current - previous) / abs(previous)) * 100
+    if abs(round(delta_pct, 1)) == 0:
+        trend = 'unchanged'
+    else:
+        trend = 'worsening' if delta_pct > 0 else 'improving'
+    direction_word = 'higher' if delta_pct >= 0 else 'lower'
+    return {
+        'text': f"{abs(round(delta_pct, 1))}% {direction_word} than last month",
+        'pct': round(delta_pct, 1),
+        'trend': trend,
+    }
 
 
 class ExecutiveSummaryAPIView(APIView):
@@ -67,13 +84,16 @@ class ExecutiveSummaryAPIView(APIView):
         projected_revenue_bn = round(gcr_total['mtd_bill_value'] / 1e9, 3)
         revenue_gap_bn = round(gcr_total['gap_bill_value'] / 1e9, 3)
         prev_gap_bn = round(prev_gcr_total['gap_bill_value'] / 1e9, 3)
+        gap_comparison = _gap_comparison(revenue_gap_bn, prev_gap_bn)
 
         return Response({
             'period': {'from': str(from_date), 'to': str(to_date)},
             'expectedRevenueMTD': expected_revenue_bn,
             'projectedRevenueMTD': projected_revenue_bn,
             'revenueGapMTD': revenue_gap_bn,
-            'revenueGapDeltaText': _pct_delta_text(revenue_gap_bn, prev_gap_bn),
+            'revenueGapDeltaText': gap_comparison['text'],
+            'revenueGapDeltaPct': gap_comparison['pct'],
+            'revenueGapTrend': gap_comparison['trend'],
             'energyDeliveredMTD': gcr_total['consumed_gwh'],
             'energyTargetMTD': gcr_total['target_gwh'],
             # supplyTarget is 100% by construction — compliance_pct >= 100 is what
