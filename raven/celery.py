@@ -22,7 +22,8 @@ app.conf.update(
     enable_utc=True,
     # Task routing
     task_routes={
-        'notifications.tasks.*':    {'queue': 'notifications'},
+        'notifications.tasks.*':             {'queue': 'notifications'},
+        'notifications.fault_alert_tasks.*': {'queue': 'notifications'},
         'analytics.tasks.*':        {'queue': 'analytics'},
         'technical.tasks.*':        {'queue': 'datanest_sync'},
         'energy_account.tasks.*':   {'queue': 'datanest_sync'},
@@ -43,6 +44,11 @@ app.conf.update(
         'daily-restoration-check': {
             'task': 'notifications.tasks.daily_restoration_check',
             'schedule': crontab(hour=23, minute=30),
+        },
+        # Raven Realtime Fault Alert System — every minute, admin watchlist only
+        'realtime-fault-alert-check': {
+            'task': 'notifications.fault_alert_tasks.check_fault_alerts',
+            'schedule': crontab(),
         },
         # DSO meter reading compliance — runs every day at 22:00 Africa/Lagos
         'daily-dso-meter-reading-check': {

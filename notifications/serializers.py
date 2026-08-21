@@ -5,6 +5,8 @@ from rest_framework import serializers
 from .models import (
     Announcement,
     BandSubscription,
+    FaultAlertFeederWatch,
+    FaultAlertRecipient,
     Notification,
     NotificationPreference,
     ReportRecipient,
@@ -157,3 +159,53 @@ class BandSubscriptionSerializer(serializers.ModelSerializer):
         if feeder_id and BandSubscription.objects.filter(user=user, feeder_id=feeder_id).exists():
             raise serializers.ValidationError("You are already subscribed to this feeder.")
         return attrs
+
+
+class FaultAlertFeederWatchSerializer(serializers.ModelSerializer):
+    feeder_name = serializers.CharField(source='feeder.name', read_only=True)
+    feeder_slug = serializers.CharField(source='feeder.slug', read_only=True)
+    voltage_level = serializers.CharField(source='feeder.voltage_level', read_only=True)
+    segment = serializers.CharField(source='feeder.pl_segment', read_only=True)
+    added_by_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = FaultAlertFeederWatch
+        fields = [
+            'id', 'feeder', 'feeder_name', 'feeder_slug', 'voltage_level',
+            'segment', 'is_active', 'added_by_name', 'created_at',
+        ]
+        read_only_fields = ['id', 'created_at']
+
+    def get_added_by_name(self, obj):
+        return obj.added_by.get_full_name() or obj.added_by.username if obj.added_by else None
+
+    def validate_feeder(self, feeder):
+        if FaultAlertFeederWatch.objects.filter(feeder=feeder).exists():
+            raise serializers.ValidationError("This feeder is already on the fault alert watchlist.")
+        return feeder
+
+
+class FaultAlertRecipientSerializer(serializers.ModelSerializer):
+    username = serializers.CharField(source='user.username', read_only=True)
+    email = serializers.CharField(source='user.email', read_only=True)
+    full_name = serializers.SerializerMethodField()
+    added_by_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = FaultAlertRecipient
+        fields = [
+            'id', 'user', 'username', 'email', 'full_name',
+            'is_active', 'added_by_name', 'created_at',
+        ]
+        read_only_fields = ['id', 'created_at']
+
+    def get_full_name(self, obj):
+        return obj.user.get_full_name() or obj.user.username
+
+    def get_added_by_name(self, obj):
+        return obj.added_by.get_full_name() or obj.added_by.username if obj.added_by else None
+
+    def validate_user(self, user):
+        if FaultAlertRecipient.objects.filter(user=user).exists():
+            raise serializers.ValidationError("This user is already registered for fault alerts.")
+        return user

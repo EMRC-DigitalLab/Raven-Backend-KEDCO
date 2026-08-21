@@ -274,3 +274,65 @@ class BandSubscription(models.Model):
 
     def __str__(self):
         return f"{self.user.username} → {self.feeder_name}"
+
+
+class FaultAlertFeederWatch(models.Model):
+    """
+    Admin-managed watchlist: feeders monitored for real-time fault-code alerts
+    (hybrid source — DataNest FeederInterruption for 11kV where the DSO
+    submits it, HourlyLoad.fault_code from the TMO sheet sync as the fallback/
+    only source for 33kV, since DSO does not currently submit 33kV faults).
+    Only feeders on this list trigger the real-time occurrence/restoration
+    emails — not a blanket "watch everything" system.
+    """
+    feeder = models.ForeignKey(
+        'common.Feeder', on_delete=models.CASCADE,
+        related_name='fault_alert_watches'
+    )
+    added_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='+'
+    )
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    # State tracking — lets the checker task fire exactly once per
+    # transition instead of re-alerting every time it runs while a fault
+    # is still ongoing. Never touched by anything except the checker task.
+    is_currently_faulted = models.BooleanField(default=False)
+    current_fault_category = models.CharField(max_length=64, null=True, blank=True)
+    current_fault_raw_code = models.CharField(max_length=32, null=True, blank=True)
+    fault_started_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        unique_together = ['feeder']
+        ordering = ['feeder__name']
+
+    def __str__(self):
+        return f"Fault watch: {self.feeder.name}"
+
+
+class FaultAlertRecipient(models.Model):
+    """
+    Admin-managed recipient list for real-time fault alert emails — separate
+    from role-based NotificationService.notify_role() recipients. Everyone
+    active on this list receives an email for every feeder on
+    FaultAlertFeederWatch, not a per-user-per-feeder subscription matrix.
+    """
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+        related_name='fault_alert_recipient'
+    )
+    added_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='+'
+    )
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ['user']
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"Fault alert recipient: {self.user.username}"

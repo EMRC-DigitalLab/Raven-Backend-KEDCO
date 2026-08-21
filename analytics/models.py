@@ -724,3 +724,40 @@ class DailyTechnicalSummary(UUIDModel, models.Model):
             'saidi': float(self.saidi),
         }
 
+
+class ActivityLog(UUIDModel, models.Model):
+    """
+    Generic cross-module activity feed for the Executive Summary dashboard's
+    "Recent Activity" panel. Deliberately minimal — a label, a type, who did
+    it, and when — not a full audit trail. Nothing writes to this yet; each
+    module that wants to surface an event here calls ActivityLog.record(...)
+    at the point the action happens (report generated, segment reclassified,
+    user added, etc.) as those call sites get wired up.
+    """
+    TYPE_CHOICES = [
+        ('report', 'Report'),
+        ('user', 'User'),
+        ('feeder', 'Feeder'),
+        ('classification', 'Classification'),
+        ('sync', 'Sync'),
+        ('other', 'Other'),
+    ]
+
+    label = models.CharField(max_length=255)
+    activity_type = models.CharField(max_length=20, choices=TYPE_CHOICES, default='other', db_index=True)
+    actor = models.ForeignKey(
+        'users.User', on_delete=models.SET_NULL, null=True, blank=True, related_name='+'
+    )
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return self.label
+
+    @classmethod
+    def record(cls, label, activity_type='other', actor=None):
+        """One-line helper for call sites elsewhere in the app to log an event."""
+        return cls.objects.create(label=label, activity_type=activity_type, actor=actor)
+
