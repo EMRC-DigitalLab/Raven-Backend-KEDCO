@@ -401,6 +401,53 @@ class FaultAlertFeederWatchListView(APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
+class FaultAlertAvailableFeedersView(APIView):
+    """
+    GET /api/notifications/fault-alerts/feeders/available/  → admin only
+    Feeder directory for the "Add Feeder" picker — every feeder NOT already
+    active on the watchlist, with its UUID id (the value the watchlist POST
+    body needs). None of the other feeder-listing endpoints in the app
+    expose the UUID (they're keyed by feeder_slug) or are appropriate here
+    (TMO/commercial/technical feeder endpoints are heavy analytics views
+    gated by unrelated permissions).
+
+    Optional filters: ?segment=MDI|MDNI|Regions  ?voltage_level=11kv|33kv  ?q=<name search>
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        if not _is_admin_or_above(request.user):
+            return Response(
+                {'detail': 'Only admins can manage the fault alert watchlist.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        from common.models import Feeder
+
+        watched_ids = FaultAlertFeederWatch.objects.filter(is_active=True).values_list('feeder_id', flat=True)
+        qs = Feeder.objects.exclude(id__in=watched_ids)
+
+        segment = request.query_params.get('segment')
+        voltage_level = request.query_params.get('voltage_level')
+        q = request.query_params.get('q')
+        if segment:
+            qs = qs.filter(pl_segment__iexact=segment)
+        if voltage_level:
+            qs = qs.filter(voltage_level__iexact=voltage_level)
+        if q:
+            qs = qs.filter(name__icontains=q)
+
+        return Response([
+            {
+                'id': str(f.id),
+                'feeder_name': f.name,
+                'feeder_slug': f.slug,
+                'voltage_level': f.voltage_level,
+                'segment': f.pl_segment,
+            }
+            for f in qs.order_by('name')
+        ])
+
+
 class FaultAlertFeederWatchDetailView(APIView):
     """
     DELETE /api/notifications/fault-alerts/feeders/<id>/  → remove from watchlist (admin only)

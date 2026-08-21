@@ -175,14 +175,30 @@ class FaultAlertFeederWatchSerializer(serializers.ModelSerializer):
             'segment', 'is_active', 'added_by_name', 'created_at',
         ]
         read_only_fields = ['id', 'created_at']
+        # Disable DRF's auto-generated UniqueTogetherValidator (from the
+        # model's unique_together = ['feeder']) -- it checks ALL rows
+        # regardless of is_active and would block reactivating a
+        # previously-removed feeder before validate_feeder()/create() below
+        # (which correctly only care about ACTIVE rows) ever run.
+        validators = []
 
     def get_added_by_name(self, obj):
         return obj.added_by.get_full_name() or obj.added_by.username if obj.added_by else None
 
     def validate_feeder(self, feeder):
-        if FaultAlertFeederWatch.objects.filter(feeder=feeder).exists():
+        if FaultAlertFeederWatch.objects.filter(feeder=feeder, is_active=True).exists():
             raise serializers.ValidationError("This feeder is already on the fault alert watchlist.")
         return feeder
+
+    def create(self, validated_data):
+        # feeder has a DB-level unique_together — a previously-removed
+        # (is_active=False) row for this feeder already occupies that slot,
+        # so a plain .create() would violate it. Reactivate instead.
+        feeder = validated_data['feeder']
+        return FaultAlertFeederWatch.objects.update_or_create(
+            feeder=feeder,
+            defaults={'is_active': True, 'added_by': validated_data.get('added_by')},
+        )[0]
 
 
 class FaultAlertRecipientSerializer(serializers.ModelSerializer):
@@ -198,6 +214,9 @@ class FaultAlertRecipientSerializer(serializers.ModelSerializer):
             'is_active', 'added_by_name', 'created_at',
         ]
         read_only_fields = ['id', 'created_at']
+        # Disable DRF's auto-generated UniqueTogetherValidator -- see the
+        # matching comment on FaultAlertFeederWatchSerializer.Meta above.
+        validators = []
 
     def get_full_name(self, obj):
         return obj.user.get_full_name() or obj.user.username
@@ -206,6 +225,16 @@ class FaultAlertRecipientSerializer(serializers.ModelSerializer):
         return obj.added_by.get_full_name() or obj.added_by.username if obj.added_by else None
 
     def validate_user(self, user):
-        if FaultAlertRecipient.objects.filter(user=user).exists():
+        if FaultAlertRecipient.objects.filter(user=user, is_active=True).exists():
             raise serializers.ValidationError("This user is already registered for fault alerts.")
         return user
+
+    def create(self, validated_data):
+        # user has a DB-level unique_together — a previously-removed
+        # (is_active=False) row for this user already occupies that slot,
+        # so a plain .create() would violate it. Reactivate instead.
+        user = validated_data['user']
+        return FaultAlertRecipient.objects.update_or_create(
+            user=user,
+            defaults={'is_active': True, 'added_by': validated_data.get('added_by')},
+        )[0]
