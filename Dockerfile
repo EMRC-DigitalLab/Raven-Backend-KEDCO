@@ -66,7 +66,9 @@ RUN chown -R appuser:appuser /home/appuser/.cache/ms-playwright
 COPY scripts/docker-entrypoint.sh /docker-entrypoint.sh
 RUN sed -i 's/\r//' /docker-entrypoint.sh && chmod +x /docker-entrypoint.sh
 
-USER appuser
+# Container starts as root — the entrypoint needs it to fix volume ownership
+# on every startup (see docker-entrypoint.sh), then drops to appuser itself
+# before running Daphne. The app process never actually runs as root.
 
 EXPOSE 8000
 
