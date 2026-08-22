@@ -197,10 +197,35 @@ def sync_meter_readings_task(self):
 def sync_tcn_interruptions_task(self):
     """Sync TCN's 33kV fault-log Google Sheet → FeederInterruption (source='tcn'). Runs hourly."""
     from technical.sync.tcn_interruptions import run_sync
+
+    stats_holder = {}
+
+    def _tracked_run_sync():
+        stats = run_sync()
+        stats_holder.update(stats)
+        return stats
+
     try:
-        _run_sync('technical_tcn_interruptions', run_sync, notify_on_success=False)
+        _run_sync('technical_tcn_interruptions', _tracked_run_sync, notify_on_success=False)
     except Exception as exc:
         raise self.retry(exc=exc)
+    finally:
+        # DataSyncLog (above) is the technical-module sync history; the
+        # Google Sheet Feed Management page reads a DIFFERENT field
+        # (GoogleSheetFeed.last_synced_at/last_sync_log) -- tmo/tasks.py's
+        # sheet-sync tasks update that directly, this one never did, which
+        # is why the UI showed "Last Synced: Never" despite real successful
+        # runs. TCN is a YEARLY feed (month=None), unlike the monthly ones.
+        from django.utils import timezone as _tz
+        from tmo.models import GoogleSheetFeed
+
+        feed = GoogleSheetFeed.objects.filter(
+            feed_type='tcn_33kv_fault_log', year=_tz.now().year, month=None, is_active=True
+        ).first()
+        if feed and stats_holder:
+            feed.last_synced_at = _tz.now()
+            feed.last_sync_log = str(stats_holder)
+            feed.save(update_fields=['last_synced_at', 'last_sync_log'])
 
 
 @shared_task(

@@ -174,18 +174,29 @@ def check_fault_alerts_task():
     )
     checked = 0
     fired = 0
+    errored = 0
     for watch in watches:
         checked += 1
-        is_faulted, category, raw_code, onset_at = _current_fault_state(watch.feeder)
-        if is_faulted and not watch.is_currently_faulted:
-            _fire_occurred(watch, category, raw_code, onset_at)
-            fired += 1
-        elif not is_faulted and watch.is_currently_faulted:
-            _fire_restored(watch)
-            fired += 1
-    if fired:
-        logger.info(f"[FaultAlert] check complete: {checked} watched, {fired} transition(s) fired")
-    return {'checked': checked, 'fired': fired}
+        # One feeder's failure (a Resend hiccup, anything) must not stop
+        # every other watched feeder from being checked this minute -- the
+        # original unguarded loop meant a single bad watch, once hit, would
+        # silently block ALL feeders after it in iteration order on EVERY
+        # run, forever, since the task has no retry and this ran every
+        # minute regardless.
+        try:
+            is_faulted, category, raw_code, onset_at = _current_fault_state(watch.feeder)
+            if is_faulted and not watch.is_currently_faulted:
+                _fire_occurred(watch, category, raw_code, onset_at)
+                fired += 1
+            elif not is_faulted and watch.is_currently_faulted:
+                _fire_restored(watch)
+                fired += 1
+        except Exception:
+            errored += 1
+            logger.exception(f"[FaultAlert] check failed for {watch.feeder.name} — continuing with remaining watches")
+    if fired or errored:
+        logger.info(f"[FaultAlert] check complete: {checked} watched, {fired} transition(s) fired, {errored} errored")
+    return {'checked': checked, 'fired': fired, 'errored': errored}
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=60,
