@@ -20,7 +20,9 @@ from middleware.sso_authenticate import _decode_token, _map_role
 
 from .models import (
     AccessLog,
+    Department,
     Permission,
+    Role,
     RolePermission,
     Section,
     TemporaryAccess,
@@ -31,10 +33,12 @@ from .models import (
 from .pagination import UserPagination
 from .serializers import (
     CustomTokenObtainPairSerializer,
+    DepartmentSerializer,
     LoginSerializer,
     MyProfileSerializer,
     PermissionSerializer,
     RolePermissionSerializer,
+    RoleSerializer,
     SectionSerializer,
     TemporaryAccessSerializer,
     UserListSerializer,
@@ -389,6 +393,49 @@ class RolePermissionViewSet(viewsets.ModelViewSet):
         if errors:
             response_data['error_details'] = errors
         return Response(response_data, status=status.HTTP_200_OK)
+
+
+class RoleViewSet(viewsets.ModelViewSet):
+    """Assignable-role catalog. Reads open to any authenticated user (needed
+    for the Add User role picker + Access Control matrix); writes admin-only.
+    `name` is immutable after creation — sidesteps having to cascade a rename
+    across every User.role/RolePermission.role string. is_system roles
+    (super_admin/admin/manager — hardcoded by literal string in permission
+    checks across several other apps) can't be deleted; any role is blocked
+    from deletion while a user currently holds it."""
+    queryset = Role.objects.all()
+    serializer_class = RoleSerializer
+
+    def get_permissions(self):
+        if self.request.method in permissions.SAFE_METHODS:
+            return [permissions.IsAuthenticated()]
+        return [IsAdminOnly()]
+
+    def perform_create(self, serializer):
+        serializer.save(created_by=self.request.user)
+
+    def perform_destroy(self, instance):
+        if instance.is_system:
+            raise serializers.ValidationError(f"'{instance.name}' is a system role and cannot be deleted.")
+        if User.objects.filter(role=instance.name).exists():
+            raise serializers.ValidationError(f"Cannot delete '{instance.name}' — still assigned to one or more users.")
+        instance.delete()
+
+
+class DepartmentViewSet(viewsets.ModelViewSet):
+    """Assignable-department catalog, replacing the frontend's hardcoded dropdown."""
+    queryset = Department.objects.all()
+    serializer_class = DepartmentSerializer
+
+    def get_permissions(self):
+        if self.request.method in permissions.SAFE_METHODS:
+            return [permissions.IsAuthenticated()]
+        return [IsAdminOnly()]
+
+    def perform_destroy(self, instance):
+        if User.objects.filter(department=instance.name).exists():
+            raise serializers.ValidationError(f"Cannot delete '{instance.name}' — still assigned to one or more users.")
+        instance.delete()
 
 
 class SectionListView(generics.ListAPIView):

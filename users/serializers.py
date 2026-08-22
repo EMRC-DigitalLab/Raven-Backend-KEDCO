@@ -6,7 +6,9 @@ from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
 from .models import (
     AccessLog,
+    Department,
     Permission,
+    Role,
     RolePermission,
     Section,
     TemporaryAccess,
@@ -16,6 +18,20 @@ from .models import (
 )
 
 
+def _validate_role_value(value):
+    if not Role.objects.filter(name=value).exists():
+        raise serializers.ValidationError(f"'{value}' is not a recognized role. See GET /roles/ for valid values.")
+    return value
+
+
+def _validate_department_value(value):
+    if not value:
+        return None
+    if not Department.objects.filter(name=value).exists():
+        raise serializers.ValidationError(f"'{value}' is not a recognized department. See GET /departments/ for valid values.")
+    return value
+
+
 class UserSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, min_length=8)
     # Declared explicitly (rather than left to ModelSerializer's auto-generated
@@ -23,6 +39,13 @@ class UserSerializer(serializers.ModelSerializer):
     # uniqueness check runs — otherwise a second user submitted with '' hits
     # a UNIQUE violation on the empty string.
     employee_id = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    # Plain CharField override: User.role keeps its model-level choices=
+    # (the original 5, for get_role_display()/backward compat), but valid
+    # *input* now comes from the Role catalog — the auto-generated
+    # ChoiceField DRF would otherwise build from those choices= would reject
+    # any newer role (tmo, cto, ...).
+    role = serializers.CharField()
+    department = serializers.CharField(required=False, allow_blank=True, allow_null=True)
 
     class Meta:
         model = User
@@ -42,12 +65,15 @@ class UserSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError('A user with this employee ID already exists.')
         return value
 
+    def validate_department(self, value):
+        return _validate_department_value(value)
+
     def validate_role(self, value):
         request = self.context.get('request')
         requester = getattr(request, 'user', None) if request else None
         if value == 'super_admin' and (requester is None or requester.role != 'super_admin'):
             raise serializers.ValidationError('Only a super admin can assign the super_admin role.')
-        return value
+        return _validate_role_value(value)
 
     def create(self, validated_data):
         password = validated_data.pop('password')
@@ -56,6 +82,8 @@ class UserSerializer(serializers.ModelSerializer):
 
 class UserListSerializer(serializers.ModelSerializer):
     """Serializer for listing users without sensitive data"""
+
+    role = serializers.CharField()
 
     class Meta:
         model = User
@@ -73,6 +101,26 @@ class MyProfileSerializer(serializers.ModelSerializer):
         fields = ['id', 'username', 'email', 'first_name', 'last_name', 'phone_number',
                  'department', 'employee_id', 'role', 'profile_picture', 'created_at']
         read_only_fields = ['id', 'username', 'email', 'department', 'employee_id', 'role', 'created_at']
+
+
+class RoleSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Role
+        fields = ['id', 'name', 'display_name', 'description', 'is_system', 'created_by', 'created_at']
+        read_only_fields = ['is_system', 'created_by', 'created_at']
+
+    def validate_name(self, value):
+        value = value.strip().lower().replace(' ', '_')
+        if self.instance and self.instance.name != value:
+            raise serializers.ValidationError('name cannot be changed after creation — create a new role instead.')
+        return value
+
+
+class DepartmentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Department
+        fields = ['id', 'name', 'description', 'created_at']
+        read_only_fields = ['created_at']
 
 
 class SectionSerializer(serializers.ModelSerializer):
@@ -137,7 +185,12 @@ class TemporaryAccessSerializer(serializers.ModelSerializer):
 
 
 class RolePermissionSerializer(serializers.ModelSerializer):
-    role_display = serializers.CharField(source='get_role_display', read_only=True)
+    # SerializerMethodField rather than source='get_role_display' — RolePermission.role
+    # keeps its own choices=User.USER_ROLES for the original 5, but this looks
+    # the value up in the Role catalog first so custom roles (tmo, cto, ...)
+    # also get a proper display_name instead of falling through to the raw slug.
+    role_display = serializers.SerializerMethodField()
+    role = serializers.CharField()
     section_name = serializers.CharField(source='section.name', read_only=True)
     section_display_name = serializers.CharField(source='section.display_name', read_only=True)
     permissions = PermissionSerializer(many=True, read_only=True)
@@ -148,6 +201,13 @@ class RolePermissionSerializer(serializers.ModelSerializer):
         fields = ['id', 'role', 'role_display', 'section', 'section_name', 'section_display_name',
                  'permissions', 'permission_ids', 'is_manager', 'updated_by', 'updated_at']
         read_only_fields = ['updated_by', 'updated_at']
+
+    def get_role_display(self, obj):
+        role = Role.objects.filter(name=obj.role).first()
+        return role.display_name if role else obj.get_role_display()
+
+    def validate_role(self, value):
+        return _validate_role_value(value)
 
     def create(self, validated_data):
         permission_ids = validated_data.pop('permission_ids', [])

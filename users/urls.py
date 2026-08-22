@@ -8,6 +8,8 @@ router = DefaultRouter()
 router.register(r'users', views.UserViewSet, basename='users')
 router.register(r'sessions', views.UserSessionViewSet, basename='sessions')
 router.register(r'role-permissions', views.RolePermissionViewSet, basename='role-permissions')
+router.register(r'roles', views.RoleViewSet, basename='roles')
+router.register(r'departments', views.DepartmentViewSet, basename='departments')
 
 urlpatterns = [
     # JWT Authentication

@@ -4,7 +4,9 @@ from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 
 from .models import (
     AccessLog,
+    Department,
     Permission,
+    Role,
     RolePermission,
     Section,
     TemporaryAccess,
@@ -74,6 +76,21 @@ class AccessLogAdmin(admin.ModelAdmin):
     list_filter = ['action', 'section', 'timestamp']
     search_fields = ['user__username', 'user__email', 'performed_by__username']
     readonly_fields = ['timestamp']
+
+
+@admin.register(Role)
+class RoleAdmin(admin.ModelAdmin):
+    list_display = ['name', 'display_name', 'is_system', 'created_by', 'created_at']
+    list_filter = ['is_system']
+    search_fields = ['name', 'display_name']
+    readonly_fields = ['created_at']
+
+
+@admin.register(Department)
+class DepartmentAdmin(admin.ModelAdmin):
+    list_display = ['name', 'created_at']
+    search_fields = ['name']
+    readonly_fields = ['created_at']
 
 
 @admin.register(RolePermission)
