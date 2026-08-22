@@ -27,6 +27,7 @@ from .views.fault_analytics import (
     CTOPenaltyDriversView,
     CTOChronicFaultFeedersView,
     CTOMonthlySummaryView,
+    FaultFinancialExposureView,
 )
 
 router = DefaultRouter()
@@ -75,4 +76,7 @@ urlpatterns = [
     path('cto/penalty-drivers/', CTOPenaltyDriversView.as_view(), name='cto-penalty-drivers'),
     path('cto/chronic-fault-feeders/', CTOChronicFaultFeedersView.as_view(), name='cto-chronic-fault-feeders'),
     path('cto/monthly-summary/', CTOMonthlySummaryView.as_view(), name='cto-monthly-summary'),
+
+    # Open (not CTO-gated) — fault financial exposure estimate, relevant beyond just the CTO dashboard
+    path('fault-financial-exposure/', FaultFinancialExposureView.as_view(), name='fault-financial-exposure'),
 ]
