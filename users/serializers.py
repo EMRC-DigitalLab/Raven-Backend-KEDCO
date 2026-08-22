@@ -155,6 +155,22 @@ class UserSectionAccessSerializer(serializers.ModelSerializer):
         if permission_ids:
             permissions = Permission.objects.filter(id__in=permission_ids)
             access.permissions.set(permissions)
+
+        # CTO dashboard pulls TMO's own endpoints directly (KPI strip, feeder
+        # list, supply compliance) rather than duplicating them behind
+        # HasCTOAccess -- so granting 'cto' without 'tmo' would 403 half the
+        # page. One-directional only: TMO staff granted 'tmo' do NOT
+        # automatically get the CTO view, only the reverse.
+        if access.section.name == 'cto' and access.is_active:
+            tmo_section = Section.objects.filter(name='tmo').first()
+            if tmo_section and not UserSectionAccess.objects.filter(
+                user=access.user, section=tmo_section, is_active=True
+            ).exists():
+                UserSectionAccess.objects.create(
+                    user=access.user, section=tmo_section,
+                    granted_by=access.granted_by, is_active=True,
+                )
+
         return access
 
 

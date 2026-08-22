@@ -15,6 +15,7 @@ own explicit grant, not implied by any other module permission.
 """
 from datetime import date
 
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -76,6 +77,27 @@ class CTOPenaltyDriversView(APIView):
     def get(self, request):
         from_date, to_date = resolve_date_params(request)
         return Response(svc.compute_penalty_drivers(from_date, to_date))
+
+
+class FaultFinancialExposureView(APIView):
+    """
+    GET /api/technical/fault-financial-exposure/ -- total faults split by
+    responsible party (DISCO/TCN/GENCO) plus an ESTIMATED monetary exposure
+    per party for the period ("what KEDCO would be paying", "what TCN would
+    be paying"). Open to any authenticated user, not CTO-gated -- this is a
+    general fault-accountability figure relevant beyond just the CTO
+    dashboard (commercial/finance teams too), unlike the rest of this file.
+
+    NOT an official penalty figure -- no TCN/NERC penalty formula exists to
+    verify against yet, this is Raven's own first-pass estimate from
+    existing segment tariffs. See compute_fault_financial_exposure()'s
+    docstring for the exact methodology.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from_date, to_date = resolve_date_params(request)
+        return Response(svc.compute_fault_financial_exposure(from_date, to_date))
 
 
 class CTOChronicFaultFeedersView(APIView):

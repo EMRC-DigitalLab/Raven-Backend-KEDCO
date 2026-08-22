@@ -63,6 +63,17 @@ def _risk_category(fri):
     return MINIMAL
 
 
+def _feeder_identity(feeder):
+    """Common id/name/band/segment fields, so every endpoint in this file returns the same shape."""
+    return {
+        'feeder_id': str(feeder.id),
+        'feeder_name': feeder.name,
+        'feeder_slug': feeder.slug,
+        'band': feeder.band.name if feeder.band else None,
+        'segment': feeder.pl_segment,
+    }
+
+
 def _feeder_raw_metrics(from_date, to_date):
     """
     Per-33kV-feeder raw metrics for [from_date, to_date] (inclusive), from
@@ -71,7 +82,10 @@ def _feeder_raw_metrics(from_date, to_date):
     month are in the low thousands, not worth the cross-backend duration
     handling complexity for this volume.
     """
-    feeders = {f.id: f for f in Feeder.objects.filter(voltage_level='33kv', is_onboarded=True)}
+    feeders = {
+        f.id: f for f in
+        Feeder.objects.filter(voltage_level='33kv', is_onboarded=True).select_related('band')
+    }
 
     rows = FeederInterruption.objects.filter(
         source='tcn',
@@ -139,9 +153,7 @@ def compute_fri_rankings(from_date, to_date):
         fri = (frequency_risk * 0.3) + (duration_risk * 0.3) + (severity_risk * 0.3) + (impact_risk * 0.1)
 
         results.append({
-            'feeder_id': str(m['feeder'].id),
-            'feeder_name': m['feeder'].name,
-            'feeder_slug': m['feeder'].slug,
+            **_feeder_identity(m['feeder']),
             'outage_frequency': m['outage_frequency'],
             'total_duration_hrs': round(m['total_duration_hrs'], 2),
             'max_load_mw': round(m['max_load_mw'], 2),
@@ -276,6 +288,8 @@ def compute_chronic_fault_feeders(year, up_to_month=None):
                 'feeder_id': fid,
                 'feeder_name': r['feeder_name'],
                 'feeder_slug': r['feeder_slug'],
+                'band': r['band'],
+                'segment': r['segment'],
                 'months_critical': 0,
                 'months_high': 0,
                 'months_critical_or_high': 0,
@@ -322,8 +336,7 @@ def compute_tcn_interruptions_by_feeder(from_date, to_date):
         if m['outage_frequency'] == 0:
             continue
         out.append({
-            'feeder_name': m['feeder'].name,
-            'feeder_slug': m['feeder'].slug,
+            **_feeder_identity(m['feeder']),
             'total_interruptions': m['outage_frequency'],
             'tcn_forced_outage': m['party_counts'].get('TCN', 0),
             'kedco_responsibility': m['party_counts'].get('DISCO', 0),
@@ -338,14 +351,100 @@ def compute_feeder_compliance(from_date, to_date):
     metrics = _feeder_raw_metrics(from_date, to_date)
     out = [
         {
-            'feeder_name': m['feeder'].name,
-            'feeder_slug': m['feeder'].slug,
+            **_feeder_identity(m['feeder']),
             'total_interruptions': m['outage_frequency'],
         }
         for m in metrics.values() if m['outage_frequency'] > 0
     ]
     out.sort(key=lambda r: r['total_interruptions'], reverse=True)
     return out
+
+
+def _segment_tariffs(year, month):
+    """
+    ₦/kWh per P&L segment for (year, month), same source and same
+    current-month-missing fallback as TMOService.get_gcr() (most recent
+    available month if the target for this exact month isn't set yet).
+    """
+    from tmo.models import TMOMonthlySegmentTarget
+
+    targets = {t.segment: float(t.average_tariff_per_kwh)
+               for t in TMOMonthlySegmentTarget.objects.filter(year=year, month=month)}
+    if not targets:
+        latest = (
+            TMOMonthlySegmentTarget.objects
+            .order_by('-year', '-month')
+            .values_list('year', 'month')
+            .first()
+        )
+        if latest:
+            targets = {t.segment: float(t.average_tariff_per_kwh)
+                       for t in TMOMonthlySegmentTarget.objects.filter(year=latest[0], month=latest[1])}
+    return targets
+
+
+def compute_fault_financial_exposure(from_date, to_date):
+    """
+    First-pass estimate of monetary exposure per responsible party for the
+    period -- "what KEDCO would be paying" / "what TCN would be paying" for
+    that month's faults. NOT an official penalty figure (no TCN/NERC penalty
+    formula exists anywhere in this codebase to verify against) -- this is
+    Raven's own estimate built from data already trusted elsewhere:
+
+        exposure = (load_at_fault_mw x duration_hrs) x 1000 x segment_tariff_per_kwh
+
+    i.e. true energy not supplied for that specific outage (not TCN's
+    SUM(load) quirk used in the FRI engine -- that's the right basis for
+    matching TCN's own risk scores, but the wrong basis for a real Naira
+    estimate) x that feeder's P&L segment tariff, attributed to whichever
+    party (DISCO/TCN/GENCO) the sheet's own Party Responsible column names
+    for that event.
+
+    Rows missing either restored_at or load_at_fault_mw can't be priced
+    (no duration or no load reading) and are counted separately, not
+    silently dropped or guessed at.
+    """
+    tariffs = _segment_tariffs(from_date.year, from_date.month)
+
+    rows = FeederInterruption.objects.filter(
+        source='tcn',
+        feeder__voltage_level='33kv',
+        occurred_at__date__gte=from_date,
+        occurred_at__date__lte=to_date,
+    ).values('occurred_at', 'restored_at', 'load_at_fault_mw', 'party_responsible', 'feeder__pl_segment')
+
+    faults_by_party = {'DISCO': 0, 'TCN': 0, 'GENCO': 0, 'UNSPECIFIED': 0}
+    exposure_by_party = {'DISCO': 0.0, 'TCN': 0.0, 'GENCO': 0.0, 'UNSPECIFIED': 0.0}
+    total_faults = 0
+    unpriceable_faults = 0
+
+    for row in rows:
+        total_faults += 1
+        party = row['party_responsible'] or 'UNSPECIFIED'
+        if party not in faults_by_party:
+            party = 'UNSPECIFIED'
+        faults_by_party[party] += 1
+
+        if not row['restored_at'] or row['load_at_fault_mw'] is None:
+            unpriceable_faults += 1
+            continue
+
+        duration_hrs = (row['restored_at'] - row['occurred_at']).total_seconds() / 3600.0
+        energy_mwh = float(row['load_at_fault_mw']) * duration_hrs
+        tariff = tariffs.get(row['feeder__pl_segment'], 0.0)
+        exposure_by_party[party] += energy_mwh * 1000 * tariff
+
+    return {
+        'period': {'from': str(from_date), 'to': str(to_date)},
+        'tariffs_used': tariffs,
+        'total_faults': total_faults,
+        'unpriceable_faults': unpriceable_faults,
+        'faults_by_party': faults_by_party,
+        'estimated_exposure_naira_by_party': {k: round(v, 2) for k, v in exposure_by_party.items()},
+        'kedco_estimated_exposure_naira': round(exposure_by_party['DISCO'], 2),
+        'tcn_estimated_exposure_naira': round(exposure_by_party['TCN'], 2),
+        'genco_estimated_exposure_naira': round(exposure_by_party['GENCO'], 2),
+    }
 
 
 def compute_peak_load_ranking(from_date, to_date):
@@ -357,14 +456,17 @@ def compute_peak_load_ranking(from_date, to_date):
     peaks = (
         HourlyLoad.objects
         .filter(feeder__voltage_level='33kv', feeder__is_onboarded=True, date__gte=from_date, date__lte=to_date)
-        .values('feeder_id', 'feeder__name', 'feeder__slug')
+        .values('feeder_id', 'feeder__name', 'feeder__slug', 'feeder__band__name', 'feeder__pl_segment')
         .annotate(highest_peak_load_mw=Max('load_mw'))
         .order_by('feeder__name')
     )
     return [
         {
+            'feeder_id': str(p['feeder_id']),
             'feeder_name': p['feeder__name'],
             'feeder_slug': p['feeder__slug'],
+            'band': p['feeder__band__name'],
+            'segment': p['feeder__pl_segment'],
             'highest_peak_load_mw': float(p['highest_peak_load_mw']) if p['highest_peak_load_mw'] is not None else 0.0,
         }
         for p in peaks
