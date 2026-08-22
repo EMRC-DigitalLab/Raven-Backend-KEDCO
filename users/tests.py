@@ -3,7 +3,7 @@ from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
 
-from .models import Permission, RolePermission, Section, User, UserSession
+from .models import Department, Permission, Role, RolePermission, Section, User, UserSession
 
 
 class UserManagementTests(APITestCase):
@@ -87,6 +87,99 @@ class UserManagementTests(APITestCase):
         second = self.client.post('/api/users/users/', payload('empidtwo'), format='json')
         self.assertEqual(first.status_code, status.HTTP_201_CREATED)
         self.assertEqual(second.status_code, status.HTTP_201_CREATED)
+
+
+class RoleDepartmentCatalogTests(APITestCase):
+    def setUp(self):
+        self.admin = User.objects.create_user(
+            username='admin1', email='admin1@example.com', password='password123', role='admin'
+        )
+        self.staff = User.objects.create_user(
+            username='staff1', email='staff1@example.com', password='password123', role='staff'
+        )
+
+    def test_seed_migration_ran(self):
+        self.assertTrue(Role.objects.filter(name='super_admin', is_system=True).exists())
+        self.assertTrue(Role.objects.filter(name='staff', is_system=False).exists())
+        self.assertTrue(Department.objects.filter(name='TMO').exists())
+
+    def test_admin_can_create_custom_role(self):
+        self.client.force_authenticate(self.admin)
+        response = self.client.post('/api/users/roles/', {
+            'name': 'tmo', 'display_name': 'TMO', 'description': 'TMO team lead',
+        }, format='json')
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertTrue(Role.objects.filter(name='tmo').exists())
+
+    def test_non_admin_cannot_create_role(self):
+        self.client.force_authenticate(self.staff)
+        response = self.client.post('/api/users/roles/', {
+            'name': 'cto', 'display_name': 'Chief Technical Officer',
+        }, format='json')
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_system_role_cannot_be_deleted(self):
+        self.client.force_authenticate(self.admin)
+        role = Role.objects.get(name='super_admin')
+        response = self.client.delete(f'/api/users/roles/{role.id}/')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertTrue(Role.objects.filter(name='super_admin').exists())
+
+    def test_role_in_use_cannot_be_deleted(self):
+        self.client.force_authenticate(self.admin)
+        role = Role.objects.get(name='staff')  # self.staff holds this role
+        response = self.client.delete(f'/api/users/roles/{role.id}/')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_unused_custom_role_can_be_deleted(self):
+        self.client.force_authenticate(self.admin)
+        role = Role.objects.create(name='cco', display_name='Chief Commercial Officer')
+        response = self.client.delete(f'/api/users/roles/{role.id}/')
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(Role.objects.filter(name='cco').exists())
+
+    def test_role_name_immutable_after_creation(self):
+        self.client.force_authenticate(self.admin)
+        role = Role.objects.create(name='cto', display_name='Chief Technical Officer')
+        response = self.client.patch(f'/api/users/roles/{role.id}/', {'name': 'cco'}, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_assigning_unknown_role_is_rejected(self):
+        self.client.force_authenticate(self.admin)
+        response = self.client.post('/api/users/users/', {
+            'username': 'ghost', 'email': 'ghost@example.com',
+            'password': 'password123', 'role': 'not_a_real_role',
+        }, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_assigning_custom_role_works_and_displays_nicely(self):
+        Role.objects.create(name='cto', display_name='Chief Technical Officer')
+        self.client.force_authenticate(self.admin)
+        response = self.client.post('/api/users/users/', {
+            'username': 'newcto', 'email': 'newcto@example.com',
+            'password': 'password123', 'role': 'cto',
+        }, format='json')
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        user = User.objects.get(username='newcto')
+        self.assertEqual(user.role, 'cto')
+        self.assertEqual(user.get_role_display(), 'Chief Technical Officer')
+        self.assertIn('Chief Technical Officer', str(user))
+
+    def test_assigning_unknown_department_is_rejected(self):
+        self.client.force_authenticate(self.admin)
+        response = self.client.post('/api/users/users/', {
+            'username': 'nodept', 'email': 'nodept@example.com',
+            'password': 'password123', 'role': 'staff', 'department': 'Not A Real Dept',
+        }, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_department_in_use_cannot_be_deleted(self):
+        self.client.force_authenticate(self.admin)
+        self.staff.department = 'TMO'
+        self.staff.save(update_fields=['department'])
+        dept = Department.objects.get(name='TMO')
+        response = self.client.delete(f'/api/users/departments/{dept.id}/')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
 
 class MyProfileTests(APITestCase):

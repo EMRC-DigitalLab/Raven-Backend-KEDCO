@@ -52,7 +52,7 @@ COPY . .
 
 # Create non-root user
 RUN adduser --disabled-password --gecos '' appuser \
-    && mkdir -p /app/staticfiles \
+    && mkdir -p /app/staticfiles /app/media \
     && chown -R appuser:appuser /app
 
 # Download Playwright's Chromium browser binary + its OS dependencies

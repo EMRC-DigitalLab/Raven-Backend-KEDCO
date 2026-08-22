@@ -272,7 +272,8 @@
       "Bash(timeout 40 python manage.py test users -v 2)",
       "Bash(python manage.py test users -v 2)",
       "Bash(python manage.py test users --keepdb -v 2)",
-      "Bash(python manage.py test users.tests.MyProfileTests --keepdb -v 2)"
+      "Bash(python manage.py test users.tests.MyProfileTests --keepdb -v 2)",
+      "Bash(gh auth *)"
     ],
     "additionalDirectories": [
       "c:\\c\\Users\\TriumphAdeniran\\OneDrive - Market and Regulatory Consultants Ltd\\Desktop\\Raven Code Base\\Raven-Backend-KEDCO",

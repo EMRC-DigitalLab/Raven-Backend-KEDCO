@@ -27,8 +27,54 @@ class User(AbstractUser):
     updated_at = models.DateTimeField(auto_now=True)
     created_by = models.ForeignKey('self', on_delete=models.SET_NULL, null=True, blank=True, related_name='created_users')
     
+    def get_role_display(self):
+        """Catalog-first: shows the Role model's display_name for custom
+        roles (e.g. 'tmo' -> 'TMO'), falling back to Django's own
+        choices-based lookup for the original 5 built-in roles."""
+        role = Role.objects.filter(name=self.role).first()
+        return role.display_name if role else super().get_role_display()
+
     def __str__(self):
         return f"{self.username} - {self.get_role_display()}"
+
+
+class Role(models.Model):
+    """Catalog of assignable roles. The original 5 (super_admin/admin/manager/
+    staff/viewer) stay as User.role's model-level choices= for backward
+    compatibility (get_role_display() fallback, RolePermission.role's own
+    choices=) — this table is what actually governs which role strings are
+    valid to assign going forward, including new ones (tmo, cto, cco, ...).
+    """
+
+    name = models.CharField(max_length=20, unique=True)
+    display_name = models.CharField(max_length=100)
+    description = models.TextField(blank=True)
+    is_system = models.BooleanField(
+        default=False,
+        help_text="super_admin/admin/manager — depended on by permission checks across the codebase; cannot be renamed or deleted",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='created_roles')
+
+    class Meta:
+        ordering = ['name']
+
+    def __str__(self):
+        return self.display_name
+
+
+class Department(models.Model):
+    """Catalog of assignable departments — replaces the frontend's hardcoded dropdown."""
+
+    name = models.CharField(max_length=50, unique=True)
+    description = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['name']
+
+    def __str__(self):
+        return self.name
 
 
 class Section(models.Model):

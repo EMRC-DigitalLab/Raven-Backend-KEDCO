@@ -11,8 +11,9 @@
 3. [My Profile (self-service)](#3-my-profile-self-service)
 4. [Active Sessions](#4-active-sessions)
 5. [Access Control — Role Permission Matrix](#5-access-control--role-permission-matrix)
-6. [Auth changes (login/refresh/logout)](#6-auth-changes)
-7. [Scope notes](#7-scope-notes)
+6. [Roles & Departments (catalogs)](#6-roles--departments-catalogs)
+7. [Auth changes (login/refresh/logout)](#7-auth-changes)
+8. [Scope notes](#8-scope-notes)
 
 ---
 
@@ -31,6 +32,11 @@
 - **Profile pictures are new** — `profile_picture` now appears on every user
   object (absolute URL, or `null`), and there's a new self-service `/me/`
   endpoint for a user to edit their own name/phone/picture.
+- **Roles and departments are no longer fixed lists** — both now come from
+  real backend catalogs (`GET /roles/`, `GET /departments/`). **Stop
+  hardcoding the Department dropdown and the role list on the frontend** —
+  fetch them instead. See section 6. This also means the "Create Role"
+  button in Access Control can now actually do something (`POST /roles/`).
 
 ---
 
@@ -225,7 +231,59 @@ Permissions from all applicable layers are unioned.
 
 ---
 
-## 6. Auth changes
+## 6. Roles & Departments (catalogs)
+
+Both replace what used to be hardcoded frontend arrays. Same shape/pattern for both.
+
+### Roles
+```
+GET /roles/
+```
+Reads open to any authenticated user. Response (paginated):
+```json
+{
+  "id": 3, "name": "tmo", "display_name": "TMO", "description": "",
+  "is_system": false, "created_by": 1, "created_at": "2026-08-22T10:00:00Z"
+}
+```
+Seeded roles: `super_admin`, `admin`, `manager`, `staff`, `viewer` — the
+first three have `is_system: true`.
+
+```
+POST   /roles/     { "name": "cto", "display_name": "Chief Technical Officer", "description": "..." }
+PATCH  /roles/{id}/    (display_name/description only — see below)
+DELETE /roles/{id}/
+```
+Admin-only. Rules to build UI around:
+- `name` is **immutable after creation** — normalized to lowercase/underscores
+  on create (e.g. `"Chief Technical Officer"` → you should send a short slug
+  like `"cto"` as `name`, with the full title as `display_name`). Attempting
+  to change `name` on PATCH returns `400`.
+- `is_system: true` roles (`super_admin`/`admin`/`manager`) **cannot be
+  deleted** — `400` if you try. These are depended on by permission checks
+  elsewhere in the backend.
+- Any role — system or custom — **cannot be deleted while a user currently
+  has it** — `400` if you try. Reassign/remove the users first.
+- Once created, use the new role's `name` as the `role` value anywhere a user
+  is created/updated (`POST/PATCH /users/`), and as the `role` value in the
+  Access Control matrix (`PUT /role-permissions/matrix/`).
+
+### Departments
+```
+GET    /departments/
+POST   /departments/    { "name": "IT Support", "description": "..." }
+PATCH  /departments/{id}/
+DELETE /departments/{id}/
+```
+Same admin-write/open-read pattern. No `is_system` concept — any department
+can be renamed freely, but deletion is blocked (`400`) while a user currently
+has it. Seeded with what's already in use today plus what the old frontend
+dropdown offered: `Commercial, Financial, Technical, Human Resources,
+Regulatory, IT Support, Management, Operations, TMO`.
+
+---
+
+## 7. Auth changes
 
 No URL or request/response shape changes to `/login/`, `/token/`,
 `/token/refresh/`, `/logout/` — but two behavioral fixes:
@@ -238,13 +296,18 @@ No URL or request/response shape changes to `/login/`, `/token/`,
 
 ---
 
-## 7. Scope notes
+## 8. Scope notes
 
-- **Roles are still the fixed 5** (`super_admin/admin/manager/staff/viewer`) —
-  there is no "create a custom role" capability. The matrix configures what
-  each of those 5 roles can access; it does not let anyone invent a new role
-  name. If the UI has a "Create Role" button, it should stay out until/unless
-  this becomes a real backend feature.
+- **Correction from the previous version of this doc:** it previously said
+  roles were fixed to 5 with no custom-role capability. That's reversed —
+  roles are now a real catalog (section 6), and the "Create Role" button
+  should be wired up.
+- **Role *names* are still not renameable** once created (immutable `name`,
+  editable `display_name`) — this is deliberate, not a gap: it avoids having
+  to hunt down and rewrite every `User.role`/`RolePermission.role` string
+  elsewhere. If a role's title changes, edit `display_name`; if the org
+  structure changes enough to need a different role entirely, create a new
+  one and migrate users over via bulk update.
 - **"Role Templates"** (apply a canned permission preset to a role) can stay
   frontend-only — a named preset that just calls `PUT /role-permissions/matrix/`
   with the right `changes` payload. No backend storage was added for these.
