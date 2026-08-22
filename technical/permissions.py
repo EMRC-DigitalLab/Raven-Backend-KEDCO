@@ -38,6 +38,44 @@ class HasTechnicalAccess(BasePermission):
         return False
 
 
+class HasCTOAccess(BasePermission):
+    """
+    Grants access to the CTO dashboard (TMO + fault-analytics combined view).
+
+    Deliberately its own permission, not a reuse of HasTMOAccess/
+    HasTechnicalAccess -- a user with TMO or Technical module access does
+    NOT automatically see the CTO dashboard; access is a separate explicit
+    assignment (section='cto').
+
+    Passes if:
+      - User is super_admin or admin
+      - User has an active UserSectionAccess for 'cto'
+      - User has a non-expired TemporaryAccess for 'cto'
+    """
+    message = (
+        'You do not have access to the CTO dashboard. '
+        'Contact your administrator to request access.'
+    )
+
+    def has_permission(self, request, view):
+        user = request.user
+        if not user or not user.is_authenticated:
+            return False
+        if getattr(user, 'role', None) in ADMIN_ROLES:
+            return True
+        now = timezone.now()
+        if UserSectionAccess.objects.filter(
+            user=user, section__name='cto', is_active=True
+        ).exists():
+            return True
+        if TemporaryAccess.objects.filter(
+            user=user, section__name='cto',
+            is_active=True, expires_at__gt=now,
+        ).exists():
+            return True
+        return False
+
+
 class HasTechnicalAdminAccess(BasePermission):
     """
     Stricter permission for technical write operations.

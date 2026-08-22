@@ -18,6 +18,16 @@ from .views.states.single_state import state_technical_summary
 from .views.transformers.transformer_views import TransformerAvailabilityOverview
 from .views.sync_status import technical_sync_status
 from .views.sync_backfill import trigger_backfill, backfill_status
+from .views.fault_analytics import (
+    CTOTCNInterruptionsView,
+    CTOFeederComplianceView,
+    CTOPeakLoadView,
+    CTOFRIRankingsView,
+    CTORiskDistributionView,
+    CTOPenaltyDriversView,
+    CTOChronicFaultFeedersView,
+    CTOMonthlySummaryView,
+)
 
 router = DefaultRouter()
 
@@ -55,4 +65,14 @@ urlpatterns = [
     # DataNest Backfill (trigger from frontend)
     path('sync/backfill/', trigger_backfill, name='technical-sync-backfill-trigger'),
     path('sync/backfill/<str:job_id>/', backfill_status, name='technical-sync-backfill-status'),
+
+    # CTO Dashboard — fault analytics (FRI engine + TCN interruption breakdowns)
+    path('cto/tcn-interruptions/', CTOTCNInterruptionsView.as_view(), name='cto-tcn-interruptions'),
+    path('cto/feeder-compliance/', CTOFeederComplianceView.as_view(), name='cto-feeder-compliance'),
+    path('cto/peak-load/', CTOPeakLoadView.as_view(), name='cto-peak-load'),
+    path('cto/fri-rankings/', CTOFRIRankingsView.as_view(), name='cto-fri-rankings'),
+    path('cto/risk-distribution/', CTORiskDistributionView.as_view(), name='cto-risk-distribution'),
+    path('cto/penalty-drivers/', CTOPenaltyDriversView.as_view(), name='cto-penalty-drivers'),
+    path('cto/chronic-fault-feeders/', CTOChronicFaultFeedersView.as_view(), name='cto-chronic-fault-feeders'),
+    path('cto/monthly-summary/', CTOMonthlySummaryView.as_view(), name='cto-monthly-summary'),
 ]

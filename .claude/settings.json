@@ -273,7 +273,12 @@
       "Bash(python manage.py test users -v 2)",
       "Bash(python manage.py test users --keepdb -v 2)",
       "Bash(python manage.py test users.tests.MyProfileTests --keepdb -v 2)",
-      "Bash(gh auth *)"
+      "Bash(gh auth *)",
+      "Bash(env)",
+      "Bash(docker --version)",
+      "Bash(docker info *)",
+      "Bash(tasklist //FI \"IMAGENAME eq Docker Desktop.exe\")",
+      "Bash(bash -n \"c:/Users/TriumphAdeniran/OneDrive - Market and Regulatory Consultants Ltd/Desktop/Raven Code Base/Raven-Backend-KEDCO/scripts/docker-entrypoint.sh\")"
     ],
     "additionalDirectories": [
       "c:\\c\\Users\\TriumphAdeniran\\OneDrive - Market and Regulatory Consultants Ltd\\Desktop\\Raven Code Base\\Raven-Backend-KEDCO",
