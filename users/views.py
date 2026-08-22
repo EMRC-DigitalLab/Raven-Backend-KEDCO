@@ -279,6 +279,7 @@ class UserSessionViewSet(viewsets.ReadOnlyModelViewSet):
     """
     serializer_class = UserSessionSerializer
     permission_classes = [IsAdminOrManager]
+    pagination_class = UserPagination
 
     def get_queryset(self):
         queryset = UserSession.objects.filter(is_active=True).select_related('user').order_by('-last_seen_at')
@@ -339,6 +340,7 @@ class RolePermissionViewSet(viewsets.ModelViewSet):
     here applies to every user with that role at once."""
     queryset = RolePermission.objects.select_related('section').prefetch_related('permissions')
     serializer_class = RolePermissionSerializer
+    pagination_class = UserPagination
 
     def get_permissions(self):
         if self.request.method in permissions.SAFE_METHODS:

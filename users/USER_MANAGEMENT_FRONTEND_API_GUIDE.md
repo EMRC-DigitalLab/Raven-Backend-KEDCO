@@ -197,7 +197,10 @@ resolution used at login, alongside any per-user overrides).
 ```
 GET /role-permissions/?role=manager   (role filter optional)
 ```
-Open to any authenticated user. Each row:
+Open to any authenticated user. **Paginated** — `{count, next, previous, results}`,
+same envelope as `/users/`/`/sessions/`. In practice the matrix is small
+(roles × sections), so either page through it or just pass a large
+`page_size` (max `100`) to get it in one call. Each item in `results`:
 ```json
 {
   "id": 3, "role": "manager", "role_display": "Manager",
@@ -239,12 +242,17 @@ Both replace what used to be hardcoded frontend arrays. Same shape/pattern for b
 ```
 GET /roles/
 ```
-Reads open to any authenticated user. Response (paginated):
+Reads open to any authenticated user. **Not paginated** — deliberately
+returns a plain array (`[{...}, {...}]`), not a `{results: [...]}` envelope,
+since this list exists to populate a dropdown/picker and callers want the
+whole thing in one shot:
 ```json
-{
-  "id": 3, "name": "tmo", "display_name": "TMO", "description": "",
-  "is_system": false, "created_by": 1, "created_at": "2026-08-22T10:00:00Z"
-}
+[
+  {
+    "id": 3, "name": "tmo", "display_name": "TMO", "description": "",
+    "is_system": false, "created_by": 1, "created_at": "2026-08-22T10:00:00Z"
+  }
+]
 ```
 Seeded roles: `super_admin`, `admin`, `manager`, `staff`, `viewer` — the
 first three have `is_system: true`.
@@ -275,7 +283,8 @@ POST   /departments/    { "name": "IT Support", "description": "..." }
 PATCH  /departments/{id}/
 DELETE /departments/{id}/
 ```
-Same admin-write/open-read pattern. No `is_system` concept — any department
+Same admin-write/open-read pattern — and same as Roles, `GET /departments/`
+is **not paginated**, plain array. No `is_system` concept — any department
 can be renamed freely, but deletion is blocked (`400`) while a user currently
 has it. Seeded with what's already in use today plus what the old frontend
 dropdown offered: `Commercial, Financial, Technical, Human Resources,
