@@ -181,6 +181,7 @@ class RolePermission(models.Model):
 
     class Meta:
         unique_together = ['role', 'section']
+        ordering = ['role', 'section__name']
 
     def __str__(self):
         return f"{self.get_role_display()} - {self.section.display_name}"

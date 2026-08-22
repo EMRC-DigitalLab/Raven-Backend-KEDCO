@@ -30,7 +30,7 @@ from .models import (
     UserSectionAccess,
     UserSession,
 )
-from .pagination import UserPagination
+from .pagination import RolePermissionPagination, UserPagination
 from .serializers import (
     CustomTokenObtainPairSerializer,
     DepartmentSerializer,
@@ -340,7 +340,7 @@ class RolePermissionViewSet(viewsets.ModelViewSet):
     here applies to every user with that role at once."""
     queryset = RolePermission.objects.select_related('section').prefetch_related('permissions')
     serializer_class = RolePermissionSerializer
-    pagination_class = UserPagination
+    pagination_class = RolePermissionPagination
 
     def get_permissions(self):
         if self.request.method in permissions.SAFE_METHODS:
